@@ -22,9 +22,10 @@ input string Watchlist          = "EURUSD,GBPUSD,USDJPY,USDCHF,AUDUSD,NZDUSD,USD
 input double RiskPercent        = 1.0;     // fallback risk% if tier engine cannot resolve a tier
 input double MinAccountUSD      = 2.0;
 input int    MagicBase          = 20260614;
-input bool   TradeAsian         = false;
+input bool   TradeAsian         = true;
 input bool   TradeLondon        = true;
 input bool   TradeNewYork       = true;
+input bool   TradeOffHours      = true;  // 17:00-00:00 UTC - thinner liquidity, gated by a stricter NN threshold
 input double SpreadMultiplier   = 3.0;
 input bool   EnableSQLite       = true;
 input bool   EnablePartialClose = true;
@@ -91,6 +92,7 @@ input double PyramidL2Mult      = 0.25;
 #define THRESH_LONDON               0.91
 #define THRESH_NY                   0.91
 #define THRESH_OVERLAP               0.89
+#define THRESH_OFFHOURS              0.95  // stricter than London/NY - thin post-NY/pre-Asian liquidity
 
 //======================================================================
 // SECTION 2 — VOLATILITY RANK STRUCT
@@ -710,7 +712,7 @@ double GetSignalThreshold(ENUM_SESSION s)
       case SESSION_LONDON:  return THRESH_LONDON;
       case SESSION_NY:      return THRESH_NY;
       case SESSION_OVERLAP: return THRESH_OVERLAP;
-      default:              return 1.1; // unreachable threshold -> effectively no trading
+      default:              return THRESH_OFFHOURS; // SESSION_OFFHOURS
    }
 }
 
@@ -722,7 +724,7 @@ bool IsSessionTradingAllowed(ENUM_SESSION s)
       case SESSION_LONDON:  return TradeLondon;
       case SESSION_OVERLAP: return (TradeLondon || TradeNewYork);
       case SESSION_NY:      return TradeNewYork;
-      default:              return false; // off-hours never trades
+      default:              return TradeOffHours; // SESSION_OFFHOURS
    }
 }
 
