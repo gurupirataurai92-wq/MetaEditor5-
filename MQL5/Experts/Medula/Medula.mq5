@@ -10,7 +10,6 @@
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
 #property version   "1.00"
-#property strict
 
 #include "MedulaTypes.mqh"
 #include "MedulaIndicators.mqh"

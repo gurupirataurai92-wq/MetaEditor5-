@@ -3,6 +3,13 @@
 Modular, event-driven Expert Advisor implementing the engines defined in
 [`MEDULA_FORMULAS.md`](../../../MEDULA_FORMULAS.md) (repo root).
 
+> **Prefer a single file?** [`../Medula_Single.mq5`](../Medula_Single.mq5) is
+> the same EA consolidated into one `.mq5` with **zero dependencies** — no
+> `.mqh` files, no standard-library includes (raw `OrderSend` instead of
+> `CTrade`). Copy that one file into `MQL5/Experts/` and compile. The modular
+> version in this folder is easier to maintain and extend; the single-file
+> version is easier to distribute. Both trade identically.
+
 ## Files
 
 | File | Engines |
