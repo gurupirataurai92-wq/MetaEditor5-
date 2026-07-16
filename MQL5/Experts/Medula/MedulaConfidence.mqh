@@ -16,7 +16,9 @@ double ComputeConfidence(SMarketSnapshot &snap,const double execQuality,const SM
              +cfg.w4*(snap.liquidityScore/100.0)
              +cfg.w5*snap.mtfAlignment;
 
-   snap.confidenceDir=100.0*MTanh(raw);
+   // gain (§8): weights sum to 1, so |raw| <= 1 and tanh alone could never
+   // exceed 76 — the gain maps strong agreement onto the usable 0-100 scale
+   snap.confidenceDir=100.0*MTanh(cfg.confGain*raw);
    double mag=MathAbs(snap.confidenceDir);
 
    double pVol   =snap.volSuitability/100.0;

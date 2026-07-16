@@ -106,6 +106,7 @@ struct SMedulaConfig
    int               rocLen;
    // confidence / decision (§8-§9)
    double            w1,w2,w3,w4,w5;
+   double            confGain;
    double            maxSpreadPoints;
    double            confThreshold;
    double            hysteresis;

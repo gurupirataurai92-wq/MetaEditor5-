@@ -45,6 +45,7 @@ input double InpW2 = 0.25;              // Weight: trend
 input double InpW3 = 0.20;              // Weight: momentum
 input double InpW4 = 0.15;              // Weight: liquidity
 input double InpW5 = 0.15;              // Weight: MTF alignment
+input double InpConfGain          = 2.5;  // Confidence tanh gain (§8)
 input double InpMaxSpreadPoints   = 30.0; // Max acceptable spread (points)
 input double InpConfThreshold     = 60.0; // Initial confidence threshold
 input double InpHysteresis        = 8.0;  // Exit hysteresis band
@@ -673,7 +674,9 @@ void ComputeConfidence(const double execQuality)
              +g_w4*(g_snap.liquidityScore/100.0)
              +g_w5*g_snap.mtfAlignment;
 
-   g_snap.confidenceDir=100.0*MTanh(raw);
+   // gain (§8): weights sum to 1, so |raw| <= 1 and tanh alone could never
+   // exceed 76 — the gain maps strong agreement onto the usable 0-100 scale
+   g_snap.confidenceDir=100.0*MTanh(InpConfGain*raw);
    double mag=MathAbs(g_snap.confidenceDir);
 
    double pVol   =g_snap.volSuitability/100.0;

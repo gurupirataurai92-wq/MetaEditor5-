@@ -51,6 +51,7 @@ input double InpW2 = 0.25;              // Weight: trend
 input double InpW3 = 0.20;              // Weight: momentum
 input double InpW4 = 0.15;              // Weight: liquidity
 input double InpW5 = 0.15;              // Weight: MTF alignment
+input double InpConfGain          = 2.5;  // Confidence tanh gain (§8)
 input double InpMaxSpreadPoints   = 30.0; // Max acceptable spread (points)
 input double InpConfThreshold     = 60.0; // Initial confidence threshold
 input double InpHysteresis        = 8.0;  // Exit hysteresis band
@@ -162,6 +163,7 @@ void FillConfig(void)
    g_cfg.w1=InpW1/ws; g_cfg.w2=InpW2/ws; g_cfg.w3=InpW3/ws;
    g_cfg.w4=InpW4/ws; g_cfg.w5=InpW5/ws;
 
+   g_cfg.confGain=InpConfGain;
    g_cfg.maxSpreadPoints=InpMaxSpreadPoints;
    g_cfg.confThreshold=InpConfThreshold;
    g_cfg.hysteresis=InpHysteresis;

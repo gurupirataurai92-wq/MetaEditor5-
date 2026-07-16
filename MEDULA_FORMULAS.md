@@ -199,8 +199,15 @@ Confidence_raw =
 
 Default weights: w1=0.25, w2=0.25, w3=0.20, w4=0.15, w5=0.15  (Σw = 1)
 
-Confidence_dir  = 100 * tanh(Confidence_raw)            // -100..+100, sign = direction
+Confidence_dir  = 100 * tanh(G * Confidence_raw)        // -100..+100, sign = direction
 Confidence_mag  = |Confidence_dir|                       // 0..100, magnitude only
+
+Gain G (default 2.5): because the weights sum to 1 and every component is
+capped at ±1, |Confidence_raw| <= 1, and tanh(1) = 0.76 — without the gain the
+score could never exceed 76 (and, after penalties, never reach a 60 threshold).
+G = 2.5 maps strong multi-engine agreement (raw ≈ 0.44, i.e. ~44% of the
+theoretical maximum) onto the ~80 confidence region, making the 50-85
+threshold band meaningful and reachable.
 ```
 
 **Penalties** (multiplicative dampeners applied to `Confidence_mag`):
