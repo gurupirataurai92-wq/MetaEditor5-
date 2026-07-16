@@ -3,6 +3,9 @@
 //|  Converts a stop-loss distance into a position size that risks  |
 //|  a fixed percentage of current equity, clamped to broker limits.|
 //+------------------------------------------------------------------+
+#ifndef V75EA_RISK_MANAGER_MQH
+#define V75EA_RISK_MANAGER_MQH
+
 #property strict
 
 class CRiskManager
@@ -55,3 +58,5 @@ public:
 
    double            RiskPercent(void) const { return m_riskPercent; }
   };
+
+#endif // V75EA_RISK_MANAGER_MQH

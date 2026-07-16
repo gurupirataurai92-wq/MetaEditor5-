@@ -3,9 +3,12 @@
 //|  Order execution and open-position management: entry with       |
 //|  retry-on-requote, breakeven stop, and partial profit-taking.    |
 //+------------------------------------------------------------------+
+#ifndef V75EA_TRADE_MANAGER_MQH
+#define V75EA_TRADE_MANAGER_MQH
+
 #property strict
 #include <Trade\Trade.mqh>
-#include <V75EA\SignalEngine.mqh>
+#include <V75EA\Types.mqh>
 
 class CTradeManager
   {
@@ -122,3 +125,5 @@ public:
         }
      }
   };
+
+#endif // V75EA_TRADE_MANAGER_MQH

@@ -1,2 +1,74 @@
 # MetaEditor5-
-Creating a meta editor code for a risk taking bot that is able to executes trades even from low account balance 
+
+A modular MQL5 Expert Advisor for the **Deriv Volatility 75 Index (V75)**, built
+around a confluence-based decision engine and layered risk management. Designed to
+run from a low account balance, so capital-preservation controls are first-class.
+
+> **Not financial advice, and not yet validated.** The code compiles as a
+> structure but has **not** been backtested or forward-tested. Compile it in
+> MetaEditor, run it through the MT5 Strategy Tester on real V75 tick data, and
+> forward-test on a demo account before risking any capital. Synthetic indices are
+> RNG-generated — past behavior is a weak guide to future results, and overfitting
+> is a real risk.
+
+## Architecture
+
+The EA is split into single-responsibility modules so strategy logic and risk
+logic can evolve independently.
+
+```
+MQL5/
+  Experts/V75EA/V75EA.mq5            Main EA: wires modules, OnTick pipeline
+  Include/V75EA/
+    Types.mqh                        Shared enums/structs (ENUM_SIGNAL, result)
+    RegimeDetector.mqh               7-way market regime classification
+    MultiTimeframe.mqh               Higher-timeframe directional bias (M15 + H1)
+    MarketStructure.mqh              Swing points, HH/HL vs LH/LL, BOS / CHoCH, S&R
+    TrendStrength.mqh                Trend quality score (ADX + slope + distance)
+    MomentumEngine.mqh               Body size / candle runs / rate-of-change
+    ConfluenceEngine.mqh             Scores all of the above into one decision
+    RiskManager.mqh                  ATR + %-equity position sizing
+    SafetyGuard.mqh                  Daily loss, drawdown, streak, spread/margin caps
+    TradeManager.mqh                 Execution, breakeven, partial close
+    PerformanceTracker.mqh           Win rate, profit factor, drawdown, per-regime
+```
+
+## Per-bar decision pipeline
+
+1. **RegimeDetector** — trending / ranging / breakout / compression.
+2. **MultiTimeframe** — only trade in agreement with the higher-timeframe bias.
+3. **MarketStructure** — structural bias plus BOS (continuation) / CHoCH (reversal).
+4. **TrendStrength** — is the trend strong enough to be worth trading?
+5. **MomentumEngine** — is price action confirming the direction?
+6. **ConfluenceEngine** — combines the above into a weighted confidence score; a
+   trade fires only when confidence ≥ `InpMinConfidence`. A CHoCH against the
+   candidate direction vetoes the trade.
+7. **RiskManager** — sizes the position from ATR-based stop distance and a fixed
+   percentage of equity (optionally scaled by confidence).
+8. **SafetyGuard** — blocks new trades on daily-loss, drawdown, consecutive-loss,
+   wide-spread, or thin-margin conditions.
+9. **TradeManager** — executes with requote retries, then manages breakeven and
+   partial profit-taking on every tick.
+10. **PerformanceTracker** — records realized results, including a per-regime
+    breakdown, and prints a summary on deinit.
+
+## Key inputs
+
+| Input | Meaning | Default |
+|---|---|---|
+| `InpMinConfidence` | Confluence threshold to trade (0–1) | 0.60 |
+| `InpRiskPercent` / `InpMaxRiskPercent` | Base / hard-cap risk per trade | 1% / 2% |
+| `InpAtrStopMultiplier` / `InpAtrTakeProfitMult` | Stop / target in ATRs | 1.5 / 3.0 |
+| `InpMaxDailyLossPercent` | Daily loss halt | 5% |
+| `InpMaxDrawdownPercent` | Overall drawdown kill-switch | 15% |
+| `InpMaxConsecutiveLoss` | Losing streak halt | 4 |
+
+Defaults are conservative starting points, **not** tuned values — optimize them
+against your own backtests.
+
+## Not included (yet)
+
+- **Machine learning** (blueprint item 12): the confluence score is the natural
+  extension point — e.g. learn the confirmation weights or a regime classifier.
+- **Martingale / grid recovery**: intentionally omitted for a low-balance account,
+  where position-doubling is the fastest path to a blown account.

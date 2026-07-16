@@ -3,6 +3,9 @@
 //|  Circuit breakers: daily loss limit, overall drawdown kill      |
 //|  switch, consecutive-loss halt, spread and margin-buffer guard. |
 //+------------------------------------------------------------------+
+#ifndef V75EA_SAFETY_GUARD_MQH
+#define V75EA_SAFETY_GUARD_MQH
+
 #property strict
 
 class CSafetyGuard
@@ -112,3 +115,5 @@ public:
 
    bool              IsHalted(void) const { return m_tradingHalted; }
   };
+
+#endif // V75EA_SAFETY_GUARD_MQH
