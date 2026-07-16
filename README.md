@@ -29,9 +29,32 @@ MQL5/
     ConfluenceEngine.mqh             Scores all of the above into one decision
     RiskManager.mqh                  ATR + %-equity position sizing
     SafetyGuard.mqh                  Daily loss, drawdown, streak, spread/margin caps
-    TradeManager.mqh                 Execution, breakeven, partial close
+    OodaEngine.mqh                   OODA cycle + adaptive God-mode feedback loop
+    TradeManager.mqh                 Execution, breakeven, partial close, ATR trailing
     PerformanceTracker.mqh           Win rate, profit factor, drawdown, per-regime
 ```
+
+## God mode (OODA loop)
+
+With `InpGodMode` enabled the EA runs an explicit **Observe → Orient → Decide →
+Act → Feedback** cycle (`OodaEngine.mqh`):
+
+- **Observe** — ATR, regime, and spread snapshot each cycle.
+- **Orient** — the confluence score is evaluated under an *adaptive* threshold.
+- **Decide** — signal, risk request, SL/TP (targets stretch 1.5× in strong-trend
+  or breakout regimes), and trailing on/off.
+- **Act** — same-direction pyramiding up to `InpMaxPositions`, plus an ATR
+  trailing stop that only ever tightens.
+- **Feedback** — a rolling 32-trade win/loss buffer adapts the loop: a win rate
+  ≥ 55% slowly eases the threshold (floor `InpGodMinConfidence`) and boosts risk
+  (ceiling `InpGodRiskBoostMax`); a win rate ≤ 45% tightens the threshold and cuts
+  risk *faster* than it ever loosens (defensive asymmetry).
+
+**God mode is adaptive-aggressive, not risk-free.** Every adaptive risk request is
+still clamped by `RiskManager`'s hard cap (`InpMaxRiskPercent`), and every entry is
+still gated by `SafetyGuard`'s daily-loss, drawdown, losing-streak, spread, and
+margin circuit breakers. Worst-case simultaneous exposure is
+`InpMaxPositions × InpMaxRiskPercent` — size those two inputs together.
 
 ## Per-bar decision pipeline
 

@@ -103,6 +103,10 @@ public:
       return buf[0];
      }
 
+   //--- adaptive callers (e.g. the OODA feedback loop) may move the threshold
+   void              SetMinConfidence(const double c) { m_minConfidence = MathMax(0.0, MathMin(1.0, c)); }
+   double            MinConfidence(void) const        { return m_minConfidence; }
+
    //--- the full confluence decision
    SConfluenceResult Evaluate(void)
      {

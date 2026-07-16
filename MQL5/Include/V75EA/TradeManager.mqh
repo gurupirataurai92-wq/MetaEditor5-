@@ -19,9 +19,18 @@ private:
    double m_breakevenTriggerAtr;
    double m_partialCloseAtr;
    double m_partialClosePercent;
+   bool   m_useTrailing;
+   double m_trailAtrMult;
 
 public:
-                     CTradeManager(void) : m_maxRetries(3) {}
+                     CTradeManager(void) : m_maxRetries(3), m_useTrailing(false), m_trailAtrMult(2.0) {}
+
+   //--- ATR trailing stop; only ever tightens, never widens
+   void              SetTrailing(const bool useTrailing, const double trailAtrMult)
+     {
+      m_useTrailing  = useTrailing;
+      m_trailAtrMult = MathMax(0.5, trailAtrMult);
+     }
 
    void              Init(const string symbol, const ulong magicNumber, const int slippagePoints,
                            const double breakevenTriggerAtr, const double partialCloseAtr,
@@ -39,14 +48,39 @@ public:
 
    bool              HasOpenPosition(void)
      {
+      return (CountOpenPositions() > 0);
+     }
+
+   int               CountOpenPositions(void)
+     {
+      int count = 0;
       for(int i = PositionsTotal() - 1; i >= 0; i--)
         {
          ulong ticket = PositionGetTicket(i);
          if(ticket == 0) continue;
          if(PositionGetString(POSITION_SYMBOL) == m_symbol)
-            return true;
+            count++;
         }
-      return false;
+      return count;
+     }
+
+   //--- +1 when all open positions are long, -1 all short, 0 flat or mixed
+   int               OpenDirection(void)
+     {
+      int dir = 0;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+         if(PositionGetString(POSITION_SYMBOL) != m_symbol) continue;
+
+         int d = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+         if(dir == 0)
+            dir = d;
+         else if(dir != d)
+            return 0;
+        }
+      return dir;
      }
 
    bool              OpenTrade(const ENUM_SIGNAL signal, const double lots,
@@ -121,6 +155,19 @@ public:
             double closeVolume = NormalizeDouble(volume * m_partialClosePercent / 100.0, 2);
             if(closeVolume >= minLot && closeVolume < volume)
                m_trade.PositionClosePartial(ticket, closeVolume);
+           }
+
+         //--- ATR trailing stop: follows price at trailAtrMult ATRs, tighten-only
+         if(m_useTrailing && favorableMove >= m_trailAtrMult * currentAtr)
+           {
+            double trailSl = (type == POSITION_TYPE_BUY)
+                              ? price - m_trailAtrMult * currentAtr
+                              : price + m_trailAtrMult * currentAtr;
+            bool tighter = (type == POSITION_TYPE_BUY)
+                            ? (trailSl > currentSl)
+                            : (trailSl < currentSl || currentSl == 0.0);
+            if(tighter)
+               m_trade.PositionModify(ticket, trailSl, currentTp);
            }
         }
      }

@@ -1,24 +1,24 @@
 //+------------------------------------------------------------------+
 //|                                                        V75EA.mq5 |
-//|  Confluence-based EA for Deriv Volatility 75 Index.             |
+//|  Confluence-based EA for Deriv Volatility 75 Index, driven by an |
+//|  OODA decision cycle with an optional adaptive "God mode".      |
 //|                                                                  |
-//|  Pipeline per bar:                                               |
-//|    RegimeDetector  -> what kind of market are we in?             |
-//|    MultiTimeframe  -> higher-timeframe directional bias          |
-//|    MarketStructure -> HH/HL vs LH/LL, BOS / CHoCH, S&R           |
-//|    TrendStrength   -> is the trend worth trading?                |
-//|    MomentumEngine  -> is price action confirming?                |
-//|    ConfluenceEngine-> scores the above into one decision         |
-//|    RiskManager     -> ATR/%-equity position sizing               |
-//|    SafetyGuard     -> daily loss, drawdown, streak, spread caps  |
-//|    TradeManager    -> execution, breakeven, partial close        |
-//|    PerformanceTracker -> realized stats, incl. per-regime        |
+//|  OBSERVE   RegimeDetector + ATR/spread snapshot                  |
+//|  ORIENT    MultiTimeframe, MarketStructure, TrendStrength,       |
+//|            MomentumEngine -> ConfluenceEngine score under an      |
+//|            adaptive threshold                                     |
+//|  DECIDE    OodaEngine -> signal, risk %, SL/TP, trailing          |
+//|  ACT       RiskManager sizing -> TradeManager execution,          |
+//|            breakeven, partial close, ATR trailing                 |
+//|  FEEDBACK  realized results adapt threshold/risk (bounded) and    |
+//|            feed SafetyGuard + PerformanceTracker                  |
 //|                                                                  |
-//|  ML (blueprint item 12) is intentionally out of scope for this  |
-//|  baseline; the confluence score is the extension point for it.   |
+//|  God mode = adaptive-aggressive, NOT risk-free: every adaptive   |
+//|  request is still clamped by RiskManager's hard cap and gated    |
+//|  by SafetyGuard's circuit breakers.                              |
 //+------------------------------------------------------------------+
 #property copyright "V75EA"
-#property version   "2.00"
+#property version   "3.00"
 #property strict
 
 #include <V75EA\Types.mqh>
@@ -28,6 +28,7 @@
 #include <V75EA\TrendStrength.mqh>
 #include <V75EA\MultiTimeframe.mqh>
 #include <V75EA\ConfluenceEngine.mqh>
+#include <V75EA\OodaEngine.mqh>
 #include <V75EA\RiskManager.mqh>
 #include <V75EA\SafetyGuard.mqh>
 #include <V75EA\TradeManager.mqh>
@@ -63,19 +64,26 @@ input int    InpStructureLookback  = 120;
 
 //--- Momentum / trend strength
 input int    InpRocPeriod          = 10;
-input int    InpMomentumMaxRun      = 5;
-input double InpAdxNormalizer       = 50.0;
-input int    InpSlopeLookback       = 5;
+input int    InpMomentumMaxRun     = 5;
+input double InpAdxNormalizer      = 50.0;
+input int    InpSlopeLookback      = 5;
 
 //--- Confluence
-input double InpMinConfidence       = 0.60;  // 0..1; higher => fewer, higher-quality trades
+input double InpMinConfidence      = 0.60;  // base threshold; OODA adapts around it
+
+//--- God mode (adaptive-aggressive OODA loop)
+input bool   InpGodMode            = true;
+input double InpGodMinConfidence   = 0.50;  // most aggressive adaptive threshold
+input double InpGodMaxConfidence   = 0.75;  // most defensive adaptive threshold
+input double InpGodRiskBoostMax    = 1.5;   // risk multiplier ceiling on hot streaks
+input int    InpMaxPositions       = 3;     // pyramiding cap, same-direction only (1 = off)
+input double InpTrailAtrMult       = 2.0;   // ATR trailing distance (god mode)
 
 //--- Risk management
-input double InpRiskPercent         = 1.0;   // base risk per trade, % equity
-input double InpMaxRiskPercent      = 2.0;   // hard cap
-input bool   InpScaleRiskByConf     = true;  // scale risk with confidence
-input double InpAtrStopMultiplier   = 1.5;
-input double InpAtrTakeProfitMult   = 3.0;
+input double InpRiskPercent        = 1.0;   // base risk per trade, % equity
+input double InpMaxRiskPercent     = 2.0;   // hard cap, adaptive requests cannot exceed
+input double InpAtrStopMultiplier  = 1.5;
+input double InpAtrTakeProfitMult  = 3.0;
 
 //--- Safety guard
 input double InpMaxDailyLossPercent = 5.0;
@@ -95,12 +103,13 @@ CMomentumEngine     g_momentum;
 CTrendStrength      g_trend;
 CMultiTimeframe     g_mtf;
 CConfluenceEngine   g_confluence;
+COodaEngine         g_ooda;
 CRiskManager        g_risk;
 CSafetyGuard        g_safety;
 CTradeManager       g_trades;
 CPerformanceTracker g_perf;
 
-datetime    g_lastBarTime = 0;
+datetime    g_lastBarTime   = 0;
 ENUM_REGIME g_regimeAtEntry = REGIME_RANGE;
 
 //+------------------------------------------------------------------+
@@ -131,14 +140,22 @@ int OnInit()
                          InpBandsPeriod, InpBandsDeviation, InpMinConfidence))
       return INIT_FAILED;
 
+   if(!g_ooda.Init(_Symbol, GetPointer(g_regime), GetPointer(g_confluence),
+                   InpGodMode, InpMinConfidence,
+                   InpGodMinConfidence, InpGodMaxConfidence, InpGodRiskBoostMax))
+      return INIT_FAILED;
+
    g_risk.Init(_Symbol, InpRiskPercent, InpMaxRiskPercent);
    g_safety.Init(_Symbol, InpMaxDailyLossPercent, InpMaxDrawdownPercent,
                  InpMaxConsecutiveLoss, InpMaxSpreadPoints);
    g_trades.Init(_Symbol, InpMagicNumber, InpSlippagePoints,
                  InpBreakevenAtrMult, InpPartialCloseAtrMult, InpPartialClosePercent);
+   g_trades.SetTrailing(InpGodMode, InpTrailAtrMult);
    g_perf.Reset();
 
-   Print("V75EA v2 initialized on ", _Symbol, " setup TF=", EnumToString(InpTimeframe));
+   Print("V75EA v3 initialized on ", _Symbol,
+         " setup TF=", EnumToString(InpTimeframe),
+         " godMode=", (InpGodMode ? "ON" : "OFF"));
    return INIT_SUCCEEDED;
   }
 
@@ -159,51 +176,58 @@ void OnTick()
    g_safety.OnNewTick();
    g_perf.UpdateDrawdown();
 
-   double atr = g_confluence.GetAtr();
-   if(atr <= 0.0)
+   //--- OBSERVE
+   SObservation obs;
+   if(!g_ooda.Observe(obs))
       return;
 
-   //--- manage open positions on every tick (fast reaction on V75)
-   g_trades.ManageOpenPositions(atr);
+   //--- ACT (management): breakeven / partial / trailing on every tick
+   g_trades.ManageOpenPositions(obs.atr);
 
-   //--- heavier analysis only once per new bar unless configured otherwise
    bool newBar = IsNewBar();
    if(InpTradeOnNewBarOnly && !newBar)
       return;
-
    if(newBar)
       g_structure.Update();
 
    if(!g_safety.IsTradingAllowed())
       return;
 
-   if(g_trades.HasOpenPosition())
+   int maxPositions = MathMax(1, InpMaxPositions);
+   int openCount    = g_trades.CountOpenPositions();
+   if(openCount >= maxPositions)
       return;
 
-   SConfluenceResult decision = g_confluence.Evaluate();
-   if(decision.signal == SIGNAL_NONE)
+   //--- ORIENT + DECIDE
+   SDecision decision;
+   if(!g_ooda.Decide(obs, decision, InpAtrStopMultiplier, InpAtrTakeProfitMult, InpRiskPercent))
       return;
 
-   double slDistance = decision.atr * InpAtrStopMultiplier;
-   double tpDistance = decision.atr * InpAtrTakeProfitMult;
-
-   //--- optionally scale risk by confidence (0.5x at threshold -> 1x at full confidence)
-   double effRisk = InpRiskPercent;
-   if(InpScaleRiskByConf)
-      effRisk = InpRiskPercent * (0.5 + 0.5 * decision.confidence);
-   g_risk.Init(_Symbol, effRisk, InpMaxRiskPercent);
-
-   double lots = g_risk.CalculateLotSize(slDistance);
-
-   if(g_trades.OpenTrade(decision.signal, lots, slDistance, tpDistance))
+   //--- pyramiding: additional entries only in the direction of existing exposure
+   if(openCount > 0)
      {
-      g_regimeAtEntry = g_regime.Classify();
+      int haveDir = g_trades.OpenDirection();
+      int wantDir = (decision.signal == SIGNAL_BUY) ? 1 : -1;
+      if(haveDir == 0 || haveDir != wantDir)
+         return;
+     }
+
+   //--- ACT (entry)
+   g_risk.SetRiskPercent(decision.riskPercent); // hard-capped inside RiskManager
+   double lots = g_risk.CalculateLotSize(decision.slDistance);
+
+   if(g_trades.OpenTrade(decision.signal, lots, decision.slDistance, decision.tpDistance))
+     {
+      g_regimeAtEntry = obs.regime;
       PrintFormat("V75EA entry: %s lots=%.2f conf=%.2f | %s",
                   (decision.signal == SIGNAL_BUY ? "BUY" : "SELL"),
                   lots, decision.confidence, decision.reason);
      }
   }
 
+//+------------------------------------------------------------------+
+//| FEEDBACK: realized results close the OODA loop and feed the      |
+//| safety and performance modules                                   |
 //+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                          const MqlTradeRequest &request,
@@ -220,7 +244,9 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       double profit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT)
                     + HistoryDealGetDouble(trans.deal, DEAL_SWAP)
                     + HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
-      g_safety.RegisterTradeResult(profit >= 0.0);
+      bool win = (profit >= 0.0);
+      g_safety.RegisterTradeResult(win);
+      g_ooda.RegisterTradeResult(win);
       g_perf.RecordClosedTrade(profit, g_regimeAtEntry);
      }
   }
