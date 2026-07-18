@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Chart tokens (dataviz reference palette) — charts read these by role so
+   light/dark swap in one place. */
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --page: #f9f9f7;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --baseline: #c3c2b7;
+  --series-1: #2a78d6;
+  --series-1-soft: #9ec5f4;
+  --delta-good: #006300;
+  --status-critical: #d03b3b;
+  --status-warning: #fab219;
+}
+:root.dark {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --page: #0d0d0d;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --baseline: #383835;
+  --series-1: #3987e5;
+  --series-1-soft: #1c5cab;
+  --delta-good: #0ca30c;
+  --status-critical: #d03b3b;
+  --status-warning: #fab219;
+}
+
+body {
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+.card {
+  @apply rounded-xl border border-black/10 dark:border-white/10 shadow-sm;
+  background: var(--surface-1);
+}

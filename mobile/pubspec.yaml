@@ -1,0 +1,32 @@
+name: sims_ai_mobile
+description: >-
+  SIMS AI mobile app — offline-first POS and inventory for Zimbabwean SMEs.
+  Android + PWA from one Flutter codebase.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Local, transactional store — the device is the primary copy (offline-first).
+  sqflite: ^2.3.0
+  path_provider: ^2.1.0
+  # HTTP client for the sync engine and API.
+  http: ^1.2.0
+  # Barcode scanning via the device camera.
+  mobile_scanner: ^5.0.0
+  # Connectivity signal to trigger opportunistic sync.
+  connectivity_plus: ^6.0.0
+  uuid: ^4.4.0
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

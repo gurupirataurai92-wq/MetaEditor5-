@@ -1,0 +1,8 @@
+# Optional heavy models for comparison + ONNX serving path
+prophet>=1.1
+xgboost>=2.0
+scikit-learn>=1.4
+onnx>=1.16
+onnxruntime>=1.18
+skl2onnx>=1.16
+pandas>=2.0
