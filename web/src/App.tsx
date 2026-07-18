@@ -4,13 +4,17 @@ import Assistant from './components/Assistant'
 import Dashboard from './components/Dashboard'
 import Inventory from './components/Inventory'
 import Login from './components/Login'
+import { LogoWordmark } from './components/Logo'
 import Pos from './components/Pos'
+import Sales from './components/Sales'
+import Toasts from './components/Toasts'
 
-type Page = 'dashboard' | 'pos' | 'inventory' | 'assistant'
+type Page = 'dashboard' | 'pos' | 'sales' | 'inventory' | 'assistant'
 
 const NAV: { id: Page; label: string; icon: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: '📊' },
   { id: 'pos', label: 'Point of Sale', icon: '🛒' },
+  { id: 'sales', label: 'Sales', icon: '🧾' },
   { id: 'inventory', label: 'Inventory', icon: '📦' },
   { id: 'assistant', label: 'AI Assistant', icon: '✨' },
 ]
@@ -35,12 +39,8 @@ export default function App() {
     <div className="min-h-screen flex">
       <aside className="w-60 shrink-0 border-r border-black/10 dark:border-white/10 p-4 flex flex-col gap-1"
              style={{ background: 'var(--surface-1)' }}>
-        <div className="flex items-center gap-2 px-2 py-3 mb-2">
-          <div className="w-9 h-9 rounded-lg bg-brand dark:bg-brand-dark text-white grid place-items-center font-bold">S</div>
-          <div>
-            <div className="font-semibold leading-tight">SIMS AI</div>
-            <div className="text-xs" style={{ color: 'var(--muted)' }}>Business Ecosystem</div>
-          </div>
+        <div className="px-2 py-3 mb-2">
+          <LogoWordmark />
         </div>
         {NAV.map((item) => (
           <button key={item.id} onClick={() => setPage(item.id)}
@@ -65,11 +65,15 @@ export default function App() {
         </div>
       </aside>
       <main className="flex-1 p-6 overflow-x-hidden">
-        {page === 'dashboard' && <Dashboard />}
-        {page === 'pos' && <Pos />}
-        {page === 'inventory' && <Inventory />}
-        {page === 'assistant' && <Assistant />}
+        <div key={page} className="fade-in">
+          {page === 'dashboard' && <Dashboard onGoToPos={() => setPage('pos')} />}
+          {page === 'pos' && <Pos />}
+          {page === 'sales' && <Sales />}
+          {page === 'inventory' && <Inventory />}
+          {page === 'assistant' && <Assistant />}
+        </div>
       </main>
+      <Toasts />
     </div>
   )
 }

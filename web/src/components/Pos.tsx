@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, Product } from '../api'
+import { toast } from '../toast'
 
 interface CartLine {
   product: Product
@@ -57,8 +58,10 @@ export default function Pos() {
       })
       setReceipt(sale)
       setCart([])
+      toast(`Sale completed — $${sale.total}`)
     } catch (e) {
       setError((e as Error).message)
+      toast((e as Error).message, 'error')
     }
   }
 
@@ -73,13 +76,21 @@ export default function Pos() {
           onChange={(e) => setSearch(e.target.value)}
         />
         {error && <p className="mb-2 text-sm" style={{ color: 'var(--status-critical)' }}>{error}</p>}
+        {products.length === 0 && (
+          <div className="card p-10 text-center">
+            <div className="text-4xl mb-2">📦</div>
+            <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+              No products yet — add stock on the Inventory page first.
+            </p>
+          </div>
+        )}
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           {visible.map((p) => (
             <button key={p.id} onClick={() => add(p)}
                     className="card p-4 text-left hover:border-brand dark:hover:border-brand-dark transition-colors">
               <div className="font-medium text-sm">{p.name}</div>
               <div className="text-xs mt-1" style={{ color: 'var(--muted)' }}>{p.sku}</div>
-              <div className="mt-2 font-semibold">${p.sell_price}</div>
+              <div className="mt-2 font-semibold">${Number(p.sell_price).toFixed(2)}</div>
             </button>
           ))}
         </div>
@@ -117,7 +128,7 @@ export default function Pos() {
             <div className="text-sm mt-2">
               <p style={{ color: 'var(--delta-good)' }}>✓ Sale completed</p>
               <p style={{ color: 'var(--text-secondary)' }}>
-                Total ${receipt.total} (VAT ${receipt.tax_amount})
+                Total ${Number(receipt.total).toFixed(2)} (VAT ${Number(receipt.tax_amount).toFixed(2)})
               </p>
               <a className="underline"
                  href={`/api/v1/sales/${receipt.id}/receipt.pdf`}

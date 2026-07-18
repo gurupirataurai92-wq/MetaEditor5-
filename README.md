@@ -1,5 +1,7 @@
 # SIMS AI — Smart Informal Business Management Ecosystem
 
+[![CI](https://github.com/gurupirataurai92-wq/MetaEditor5-/actions/workflows/ci.yml/badge.svg)](https://github.com/gurupirataurai92-wq/MetaEditor5-/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 **An offline-first, AI-augmented, multi-currency business-management platform engineered for Zimbabwean informal and small-to-medium enterprises.**
 
 ![Dashboard](docs/screenshots/dashboard-light.png)
@@ -19,6 +21,8 @@ payments (EcoCash, OneMoney, ZIPIT, PayNow).
 | `ml/` | Forecast training + rolling-origin backtest harness (MAPE/RMSE/MAE) | ✅ Runnable, zero-dep baseline |
 | `infra/` | Docker Compose (Postgres + Redis + API + NGINX), row-level-security SQL | ✅ Deployment-ready |
 | `docs/research/` | **Full university dissertation** — Chapters 1–7 + IEEE references + Mermaid diagrams | ✅ Complete draft |
+| `docs/manuals/` | User Manual, Administrator Manual, Installation Guide | ✅ Complete |
+| `scripts/` | `seed_demo.py` — one command to populate a rich demo business | ✅ Runnable |
 
 ## The three engineering contributions
 
@@ -53,6 +57,13 @@ npm install && npm run dev
 python3 ml/train_forecast.py
 ```
 
+With the backend running, seed a fully-populated demo business (six weeks of
+sales, rates, expenses, anomalies) and log in with the printed credentials:
+
+```bash
+python3 scripts/seed_demo.py
+```
+
 ## Production deployment
 
 ```bash
@@ -82,6 +93,8 @@ abstract, Chapters 1–7 (introduction, literature review, methodology, design
 with full UML/ER/DFD diagrams, implementation, testing & evaluation,
 conclusions) and 43 IEEE references. Diagrams are Mermaid and render on GitHub.
 
-| Dark mode | Point of Sale |
+| Login | Dark mode |
 |---|---|
-| ![Dark](docs/screenshots/dashboard-dark.png) | ![POS](docs/screenshots/pos-dark.png) |
+| ![Login](docs/screenshots/login.png) | ![Dark](docs/screenshots/dashboard-dark.png) |
+| Sales history | Point of Sale |
+| ![Sales](docs/screenshots/sales-dark.png) | ![POS](docs/screenshots/pos-dark.png) |

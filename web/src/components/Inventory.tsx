@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { api, StockLevel } from '../api'
+import { toast } from '../toast'
 
 interface ReorderSuggestion {
   name: string
@@ -36,6 +37,7 @@ export default function Inventory() {
         })
       }
       setName(''); setSell(''); setCost(''); setQty('')
+      toast('Product added with auto-generated barcode')
       refresh()
     } catch (err) {
       setError((err as Error).message)
