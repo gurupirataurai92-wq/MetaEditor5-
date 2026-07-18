@@ -43,8 +43,8 @@ public:
       ArrayResize(m_slips,w);
       ArrayInitialize(m_fills,0);
       ArrayInitialize(m_slips,0.0);
-      m_trade.SetExpertMagicNumber(cfg.magic);
-      m_trade.SetDeviationInPoints(cfg.deviationPts);
+      m_trade.SetExpertMagicNumber((ulong)cfg.magic);
+      m_trade.SetDeviationInPoints((ulong)cfg.deviationPts);
       m_trade.SetTypeFillingBySymbol(m_sym);
       return true;
      }

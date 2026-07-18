@@ -1063,8 +1063,8 @@ bool OpenMarket(const int dir,const double lots,const double atr,const double co
    req.price       =price;
    req.sl          =sl;
    req.tp          =tp;
-   req.deviation   =InpDeviationPts;
-   req.magic       =InpMagic;
+   req.deviation   =(ulong)InpDeviationPts;
+   req.magic       =(ulong)InpMagic;
    req.comment     =StringFormat("MDL|%d|%.0f",basketCount,conf);
    req.type_filling=FillingMode();
 
@@ -1113,8 +1113,8 @@ bool ClosePositionByTicket(const ulong ticket)
    req.position    =ticket;
    req.type        =(ptype==POSITION_TYPE_BUY ? ORDER_TYPE_SELL : ORDER_TYPE_BUY);
    req.price       =(ptype==POSITION_TYPE_BUY ? t.bid : t.ask);
-   req.deviation   =InpDeviationPts;
-   req.magic       =InpMagic;
+   req.deviation   =(ulong)InpDeviationPts;
+   req.magic       =(ulong)InpMagic;
    req.type_filling=FillingMode();
    return SendRequest(req,res);
   }
