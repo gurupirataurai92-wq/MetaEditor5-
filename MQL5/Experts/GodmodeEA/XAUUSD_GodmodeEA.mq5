@@ -1,7 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                          XAUUSD_GodmodeEA.mq5    |
-//|         XAUUSD Adaptive Scalper -- GODMODE build                |
+//|         XAUUSD Adaptive Scalper -- GODMODE+ build                |
 //|         M5 execution | multi-timeframe context | thesis-driven  |
+//|         Control loop restructured as an explicit OODA cycle:    |
+//|         Observe -> Orient -> Decide -> Act (see OODA_* functions|
+//|         below OnDeinit). Same behavior as the original build,   |
+//|         just named so each phase reads and extends on its own.  |
 //|                                                                    |
 //|  No EA guarantees profit on any given trade. Win rate is an     |
 //|  output, not a setting -- the only meaningful metric is          |
@@ -9,8 +13,8 @@
 //|  average down, or trade without a hard stop. If it does not     |
 //|  trade, the Journal states exactly which component blocked it.  |
 //+------------------------------------------------------------------+
-#property copyright "GODMODE build"
-#property version   "1.00"
+#property copyright "GODMODE+ build"
+#property version   "1.10"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -192,7 +196,7 @@ int OnInit()
       return INIT_FAILED;
      }
 
-   PrintFormat("GODMODE EA initialized. Symbol=%s ShadowMode=%s Magic=%I64u",
+   PrintFormat("GODMODE+ EA initialized (OODA loop). Symbol=%s ShadowMode=%s Magic=%I64u",
                g_broker.Symbol(), InpShadowMode?"ON":"off", InpMagic);
    return INIT_SUCCEEDED;
   }
@@ -209,52 +213,139 @@ void OnDeinit(const int reason)
   }
 
 //+------------------------------------------------------------------+
-//| Evaluate all thesis candidates, arm the best one if it clears    |
-//| every gate. Called once per new M5 bar close, only when flat.   |
+//| OODA CONTROL LOOP                                                 |
+//| GODMODE+ restructures OnTick into explicit Observe / Orient /    |
+//| Decide / Act phases. Behavior is unchanged from the prior build  |
+//| -- this is the same pipeline, just named so each phase can be    |
+//| read, tested, and extended in isolation:                         |
+//|                                                                    |
+//|   Observe -- refresh every module's read of the world (new-bar   |
+//|              detection, spread sample, regime update, calendar). |
+//|              No interpretation, no decisions, just sensing.      |
+//|   Orient  -- turn that raw state into a ranked, scored candidate |
+//|              (ThesisEngine + ConfidenceEngine). Only meaningful  |
+//|              once per fresh M5 bar, and only while flat.         |
+//|   Decide  -- apply every gate in order and arrive at exactly one |
+//|              of "act" or the specific machine-readable reason we |
+//|              didn't. No orders touched here, judgment only.      |
+//|   Act     -- the only phase allowed to touch the market: arm a   |
+//|              new entry, or run the tick-driven management loop   |
+//|              (WatchTick / Manage) that watches whatever is       |
+//|              already armed or open. That management loop is its  |
+//|              own tight, fused Observe-Decide-Act cycle kept      |
+//|              inside ExecutionEngine/PositionManager on purpose:  |
+//|              the spec calls for event-driven, not polled, exits, |
+//|              and splitting that fast loop across slow-cadence    |
+//|              phase functions would add latency for no benefit.   |
 //+------------------------------------------------------------------+
-void EvaluateAndMaybeArm()
+struct OodaContext
   {
-   double m15ema = g_marketState.M15EmaValue();
-   ThesisSignal signals[];
-   int n = g_thesisEngine.Evaluate(g_marketState.Regime(), g_marketState.RegimeDirection(), m15ema, signals);
+   bool           newM5;
+   bool           newM1;
+   datetime       barTime;
+   double         atrPts;
+   double         currentSpreadPts;
+   double         costRatio;
+   int            candidateCount;
+   ThesisSignal   candidates[];
+   bool           haveChosen;
+   ThesisSignal   chosen;
+   ENUM_REJECT_REASON decision;
+   double         sizeMult;
+   double         lots;
+   double         sl;
+  };
 
-   datetime barTime = iTime(g_broker.Symbol(), PERIOD_M5, 0);
-   double atrPts = g_marketState.LastATR() / g_broker.Point();
-   double currentSpreadPts = (double)SymbolInfoInteger(g_broker.Symbol(), SYMBOL_SPREAD);
+//--- Observe: sensor layer. Refresh account/market state, detect new
+//--- bars, sample everything downstream phases will read. Never
+//--- interprets, never decides, never sends an order.
+void OODA_Observe(OodaContext &ctx)
+  {
+   g_riskGovernor.RefreshPnL(); // keep the Dashboard's P&L numbers live every tick
 
-   if(n == 0)
+   datetime m5Time = iTime(g_broker.Symbol(), PERIOD_M5, 0);
+   datetime m1Time = iTime(g_broker.Symbol(), PERIOD_M1, 0);
+   ctx.newM5 = (m5Time != g_lastM5BarTime);
+   ctx.newM1 = (m1Time != g_lastM1BarTime);
+
+   if(ctx.newM1)
+      g_lastM1BarTime = m1Time;
+
+   if(ctx.newM5)
      {
-      ENUM_REJECT_REASON r = (g_marketState.Regime() != REGIME_TREND) ? REJECT_REGIME_STANDDOWN : REJECT_NO_SETUP;
-      g_lastBlockReason = RejectReasonToString(r);
-      g_journal.LogRejection(barTime, g_marketState.Regime(), ARCH_NONE, 0.0, InpScoreHalfSize,
-                              currentSpreadPts, atrPts, r);
-      return;
+      g_lastM5BarTime = m5Time;
+      g_costGate.SampleSpread();
+      g_marketState.Update();
+      g_thesisEngine.UpdateOpeningRange();
+      g_positionManager.OnNewM5Bar();
+      g_riskGovernor.RefreshCalendar();
      }
 
-   double costRatio = g_costGate.CurrentCostRatio(atrPts);
-   double spreadAtSignal = currentSpreadPts;
+   ctx.barTime = m5Time;
+   ctx.atrPts = g_marketState.LastATR() / g_broker.Point();
+   ctx.currentSpreadPts = (double)SymbolInfoInteger(g_broker.Symbol(), SYMBOL_SPREAD);
+   ctx.costRatio = g_costGate.CurrentCostRatio(ctx.atrPts);
+  }
+
+//--- Orient: sense-making layer. Turn this bar's observed state into
+//--- a ranked, scored candidate thesis. Only re-orients on a fresh M5
+//--- bar while flat -- there is nothing new to interpret mid-bar.
+void OODA_Orient(OodaContext &ctx)
+  {
+   ctx.haveChosen = false;
+   ctx.candidateCount = 0;
+   if(!ctx.newM5) return;
+   if(g_positionManager.HasPosition() || g_executionEngine.IsArmed()) return;
+
+   double m15ema = g_marketState.M15EmaValue();
+   ctx.candidateCount = g_thesisEngine.Evaluate(g_marketState.Regime(), g_marketState.RegimeDirection(),
+                                                 m15ema, ctx.candidates);
+   if(ctx.candidateCount == 0) return;
 
    int bestIdx = -1;
    double bestConf = -1.0;
-   for(int i=0; i<n; i++)
+   for(int i=0; i<ctx.candidateCount; i++)
      {
-      signals[i].spread_at_signal = spreadAtSignal;
-      signals[i].comp_liquidity_sweep = g_thesisEngine.CheckSweepConfluence(signals[i].direction) ? 1.0 : 0.0;
-      double conf = g_confidenceEngine.Score(signals[i], g_marketState.H1Dir(), g_marketState.M15Dir(),
-                                              g_marketState.IsATRExpanding(), costRatio, g_costGate.GateRatio());
+      ctx.candidates[i].spread_at_signal = ctx.currentSpreadPts;
+      ctx.candidates[i].comp_liquidity_sweep = g_thesisEngine.CheckSweepConfluence(ctx.candidates[i].direction) ? 1.0 : 0.0;
+      double conf = g_confidenceEngine.Score(ctx.candidates[i], g_marketState.H1Dir(), g_marketState.M15Dir(),
+                                              g_marketState.IsATRExpanding(), ctx.costRatio, g_costGate.GateRatio());
       if(conf > bestConf) { bestConf = conf; bestIdx = i; }
      }
 
-   ThesisSignal chosen = signals[bestIdx];
-   g_lastCandidateArchetype = chosen.archetype;
-   g_lastCandidateConfidence = chosen.confidence;
+   ctx.chosen = ctx.candidates[bestIdx];
+   ctx.haveChosen = true;
+   g_lastCandidateArchetype = ctx.chosen.archetype;
+   g_lastCandidateConfidence = ctx.chosen.confidence;
+  }
 
-   double tier = g_confidenceEngine.TierSizeMultiplier(chosen.confidence);
+//--- Decide: judgment layer. Apply every gate in the spec's stated
+//--- order. Never touches the market -- only produces a decision plus
+//--- (if clear to act) the sizing Act will need. Every rejection is
+//--- logged here with its specific reason ("no silent blocking").
+void OODA_Decide(OodaContext &ctx)
+  {
+   ctx.decision = REJECT_NONE;
+   ctx.lots = 0.0;
+   if(!ctx.newM5) return;
+   if(g_positionManager.HasPosition() || g_executionEngine.IsArmed()) return;
+
+   if(!ctx.haveChosen)
+     {
+      ENUM_REJECT_REASON r = (g_marketState.Regime() != REGIME_TREND) ? REJECT_REGIME_STANDDOWN : REJECT_NO_SETUP;
+      ctx.decision = r;
+      g_lastBlockReason = RejectReasonToString(r);
+      g_journal.LogRejection(ctx.barTime, g_marketState.Regime(), ARCH_NONE, 0.0, InpScoreHalfSize,
+                              ctx.currentSpreadPts, ctx.atrPts, r);
+      return;
+     }
+
+   double tier = g_confidenceEngine.TierSizeMultiplier(ctx.chosen.confidence);
    ENUM_REJECT_REASON reason = REJECT_NONE;
 
-   if(tier <= 0.0)                                   reason = REJECT_SCORE_BELOW_THRESHOLD;
-   else if(costRatio > g_costGate.GateRatio())        reason = REJECT_COST_GATE;
-   else if(g_costGate.IsSpreadSpiking())              reason = REJECT_SPREAD_SPIKE;
+   if(tier <= 0.0)                                        reason = REJECT_SCORE_BELOW_THRESHOLD;
+   else if(ctx.costRatio > g_costGate.GateRatio())         reason = REJECT_COST_GATE;
+   else if(g_costGate.IsSpreadSpiking())                   reason = REJECT_SPREAD_SPIKE;
    else
      {
       ENUM_REJECT_REASON b = g_blackouts.CheckAll();
@@ -270,82 +361,66 @@ void EvaluateAndMaybeArm()
 
    if(reason != REJECT_NONE)
      {
+      ctx.decision = reason;
       g_lastBlockReason = RejectReasonToString(reason);
-      g_journal.LogRejection(barTime, g_marketState.Regime(), chosen.archetype, chosen.confidence,
-                              InpScoreHalfSize, costRatio*atrPts, atrPts, reason);
+      g_journal.LogRejection(ctx.barTime, g_marketState.Regime(), ctx.chosen.archetype, ctx.chosen.confidence,
+                              InpScoreHalfSize, ctx.costRatio*ctx.atrPts, ctx.atrPts, reason);
       return;
      }
 
-   // passed every gate -- size it and (unless shadow mode) arm the pending order
-   double spreadPriceDist = currentSpreadPts * g_broker.Point();
-   double sl = g_positionManager.CalcStructuralSL(chosen.direction, chosen.invalidation_price, g_marketState.LastATR(),
-                                                   g_broker.StopsLevelPoints(), spreadPriceDist,
-                                                   g_broker.Point(), g_broker.Digits());
-   chosen.structural_sl = sl;
+   // cleared every gate -- compute the SL and size now; Act decides whether to send it
+   double spreadPriceDist = ctx.currentSpreadPts * g_broker.Point();
+   double sl = g_positionManager.CalcStructuralSL(ctx.chosen.direction, ctx.chosen.invalidation_price,
+                                                   g_marketState.LastATR(), g_broker.StopsLevelPoints(),
+                                                   spreadPriceDist, g_broker.Point(), g_broker.Digits());
+   ctx.chosen.structural_sl = sl;
+   ctx.sl = sl;
 
-   double entryRef = (chosen.direction==DIR_BUY) ? SymbolInfoDouble(g_broker.Symbol(), SYMBOL_ASK)
-                                                   : SymbolInfoDouble(g_broker.Symbol(), SYMBOL_BID);
+   double entryRef = (ctx.chosen.direction==DIR_BUY) ? SymbolInfoDouble(g_broker.Symbol(), SYMBOL_ASK)
+                                                       : SymbolInfoDouble(g_broker.Symbol(), SYMBOL_BID);
    double slDist = MathAbs(entryRef - sl);
 
    double sizeMult = tier * g_riskGovernor.SizeMultiplier();
    if(g_degradationMonitor.ShouldHalveSize()) sizeMult *= 0.5;
    if(g_eqm.IsDegraded()) sizeMult *= 0.5;
+   ctx.sizeMult = sizeMult;
 
-   double lots = g_riskGovernor.LotsForRisk(slDist, g_broker.TickSize(), g_broker.TickValue(),
-                                             g_broker.VolMin(), g_broker.VolMax(), g_broker.VolStep(), sizeMult);
+   ctx.lots = g_riskGovernor.LotsForRisk(slDist, g_broker.TickSize(), g_broker.TickValue(),
+                                          g_broker.VolMin(), g_broker.VolMax(), g_broker.VolStep(), sizeMult);
 
-   if(lots < g_broker.VolMin())
+   if(ctx.lots < g_broker.VolMin())
      {
+      ctx.decision = REJECT_ACCOUNT_TOO_SMALL;
       g_lastBlockReason = RejectReasonToString(REJECT_ACCOUNT_TOO_SMALL);
-      g_journal.LogRejection(barTime, g_marketState.Regime(), chosen.archetype, chosen.confidence,
-                              InpScoreHalfSize, costRatio*atrPts, atrPts, REJECT_ACCOUNT_TOO_SMALL);
-      return;
+      g_journal.LogRejection(ctx.barTime, g_marketState.Regime(), ctx.chosen.archetype, ctx.chosen.confidence,
+                              InpScoreHalfSize, ctx.costRatio*ctx.atrPts, ctx.atrPts, REJECT_ACCOUNT_TOO_SMALL);
      }
-
-   if(InpShadowMode)
-     {
-      PrintFormat("SHADOW: would ARM %s %s conf=%.3f lots=%.2f entry~%.2f sl=%.2f invalidation=%.2f",
-                  ArchetypeToString(chosen.archetype), chosen.direction==DIR_BUY?"BUY":"SELL",
-                  chosen.confidence, lots, chosen.trigger_price, sl, chosen.invalidation_price);
-      g_lastBlockReason = "shadow_mode_would_trade";
-      return;
-     }
-
-   string comment = StringFormat("GM_%s", ArchetypeToString(chosen.archetype));
-   g_executionEngine.Arm(chosen, lots, comment);
   }
 
-//+------------------------------------------------------------------+
-void OnTick()
+//--- Act: effector layer. The only phase allowed to touch the market
+//--- or the account: arms a cleared new entry, then runs the fast
+//--- tick-driven management loop for whatever is already armed/open.
+void OODA_Act(OodaContext &ctx)
   {
-   if(!g_broker.IsReady()) return;
-
-   g_riskGovernor.RefreshPnL(); // keep the Dashboard's P&L numbers live every tick,
-                                 // not just when a trade signal happens to be evaluated
-
-   datetime m5Time = iTime(g_broker.Symbol(), PERIOD_M5, 0);
-   datetime m1Time = iTime(g_broker.Symbol(), PERIOD_M1, 0);
-   bool newM5 = (m5Time != g_lastM5BarTime);
-   bool newM1 = (m1Time != g_lastM1BarTime);
-
-   if(newM1)
+   if(ctx.newM5 && ctx.haveChosen && ctx.decision == REJECT_NONE && ctx.lots > 0.0 &&
+      !g_positionManager.HasPosition() && !g_executionEngine.IsArmed())
      {
-      g_lastM1BarTime = m1Time;
+      if(InpShadowMode)
+        {
+         PrintFormat("SHADOW: would ARM %s %s conf=%.3f lots=%.2f entry~%.2f sl=%.2f invalidation=%.2f",
+                     ArchetypeToString(ctx.chosen.archetype), ctx.chosen.direction==DIR_BUY?"BUY":"SELL",
+                     ctx.chosen.confidence, ctx.lots, ctx.chosen.trigger_price, ctx.sl, ctx.chosen.invalidation_price);
+         g_lastBlockReason = "shadow_mode_would_trade";
+        }
+      else
+        {
+         string comment = StringFormat("GM_%s", ArchetypeToString(ctx.chosen.archetype));
+         g_executionEngine.Arm(ctx.chosen, ctx.lots, comment);
+        }
+     }
+
+   if(ctx.newM1)
       g_executionEngine.OnNewM1Bar();
-     }
-
-   if(newM5)
-     {
-      g_lastM5BarTime = m5Time;
-      g_costGate.SampleSpread();
-      g_marketState.Update();
-      g_thesisEngine.UpdateOpeningRange();
-      g_positionManager.OnNewM5Bar();
-      g_riskGovernor.RefreshCalendar();
-
-      if(!g_positionManager.HasPosition() && !g_executionEngine.IsArmed())
-         EvaluateAndMaybeArm();
-     }
 
    if(g_executionEngine.IsArmed())
      {
@@ -362,13 +437,23 @@ void OnTick()
      }
 
    g_dashboard.Render(InpShadowMode, g_marketState.Regime(), g_lastCandidateArchetype, g_lastCandidateConfidence,
-                       InpScoreHalfSize, (double)SymbolInfoInteger(g_broker.Symbol(),SYMBOL_SPREAD),
-                       g_costGate.CurrentCostRatio(g_marketState.LastATR()/MathMax(g_broker.Point(),0.00001)),
-                       g_costGate.GateRatio(), g_riskGovernor.TradesToday(),
-                       g_riskGovernor.GetState().daily_pnl_pct, g_riskGovernor.GetState().weekly_pnl_pct,
-                       g_riskGovernor.GetState().consecutive_losses, g_riskGovernor.GetState().daily_halted,
-                       g_riskGovernor.GetState().weekly_halted, g_degradationMonitor.IsHalted(),
-                       g_degradationMonitor.RollingExpectancy50(), g_lastBlockReason);
+                       InpScoreHalfSize, ctx.currentSpreadPts, ctx.costRatio, g_costGate.GateRatio(),
+                       g_riskGovernor.TradesToday(), g_riskGovernor.GetState().daily_pnl_pct,
+                       g_riskGovernor.GetState().weekly_pnl_pct, g_riskGovernor.GetState().consecutive_losses,
+                       g_riskGovernor.GetState().daily_halted, g_riskGovernor.GetState().weekly_halted,
+                       g_degradationMonitor.IsHalted(), g_degradationMonitor.RollingExpectancy50(), g_lastBlockReason);
+  }
+
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+   if(!g_broker.IsReady()) return;
+
+   OodaContext ctx;
+   OODA_Observe(ctx);
+   OODA_Orient(ctx);
+   OODA_Decide(ctx);
+   OODA_Act(ctx);
   }
 
 //+------------------------------------------------------------------+

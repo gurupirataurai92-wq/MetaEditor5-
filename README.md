@@ -1,4 +1,4 @@
-# XAUUSD GODMODE EA
+# XAUUSD GODMODE+ EA
 
 An MQL5 Expert Advisor for MetaTrader 5: an adaptive M5 scalper for XAUUSD (gold),
 built from `XAUUSD_GODMODE_EA_SPEC.md` — a thesis-driven, cost-aware, risk-governed
@@ -7,6 +7,28 @@ architecture that refuses to trade rather than trade badly.
 No martingale, no grid, no averaging down, no basket recovery. Every position carries
 a server-side stop. Every rejected setup is logged with a machine-readable reason —
 if the EA isn't trading, the Journal says exactly which module blocked it.
+
+**GODMODE+** restructures the main `OnTick()` loop into an explicit OODA cycle
+(Observe → Orient → Decide → Act, see the `OODA_*` functions in
+`XAUUSD_GodmodeEA.mq5`). Behavior is identical to the original build — this is
+the same pipeline, just named so each phase reads and extends on its own:
+
+- **Observe** — refresh every module's read of the world (new-bar detection,
+  spread sample, regime update, calendar). No interpretation, no decisions.
+- **Orient** — turn that raw state into a ranked, scored candidate thesis
+  (ThesisEngine + ConfidenceEngine). Only meaningful once per fresh M5 bar,
+  and only while flat.
+- **Decide** — apply every gate in the spec's stated order and arrive at
+  exactly one of "act" or the specific machine-readable rejection reason.
+  Judgment only — nothing here touches the market.
+- **Act** — the only phase allowed to touch the market: arms a cleared new
+  entry, or runs the tick-driven management loop (`WatchTick`/`Manage`) for
+  whatever is already armed or open. That management loop is deliberately
+  *not* split across the slow-cadence phases above — it's its own tight,
+  fused Observe-Decide-Act cycle kept inside `ExecutionEngine`/
+  `PositionManager`, because the spec calls for event-driven exits, and
+  routing that through per-tick phase functions would add latency for no
+  benefit.
 
 ## Layout
 
