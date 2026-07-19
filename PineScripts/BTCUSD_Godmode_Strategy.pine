@@ -1,0 +1,174 @@
+// This Pine Script code is subject to the terms of the Mozilla Public License 2.0
+//@version=6
+strategy("BTCUSD Godmode Strategy", shorttitle = "BTC Godmode", overlay = true,
+     initial_capital = 1000, currency = currency.USD,
+     default_qty_type = strategy.cash, default_qty_value = 0,
+     pyramiding = 0, calc_on_order_fills = false, calc_on_every_tick = false,
+     process_orders_on_close = true, commission_type = strategy.commission.percent,
+     commission_value = 0.05, slippage = 2)
+
+// =====================================================================
+// GROUP: TREND ENGINE
+// =====================================================================
+gTrend   = "Trend Engine"
+emaFastLen = input.int(21,  "Fast EMA",  minval = 2, group = gTrend)
+emaSlowLen = input.int(55,  "Slow EMA",  minval = 2, group = gTrend)
+emaMacroLen = input.int(200, "Macro EMA (bias filter)", minval = 50, group = gTrend)
+
+emaFast  = ta.ema(close, emaFastLen)
+emaSlow  = ta.ema(close, emaSlowLen)
+emaMacro = ta.ema(close, emaMacroLen)
+
+bullBias = close > emaMacro and emaFast > emaSlow
+bearBias = close < emaMacro and emaFast < emaSlow
+
+// =====================================================================
+// GROUP: MOMENTUM ENGINE
+// =====================================================================
+gMom = "Momentum Engine"
+rsiLen   = input.int(14, "RSI Length", minval = 2, group = gMom)
+rsiOB    = input.int(70, "RSI Overbought", group = gMom)
+rsiOS    = input.int(30, "RSI Oversold", group = gMom)
+macdFast = input.int(12, "MACD Fast", group = gMom)
+macdSlow = input.int(26, "MACD Slow", group = gMom)
+macdSig  = input.int(9,  "MACD Signal", group = gMom)
+
+rsiVal = ta.rsi(close, rsiLen)
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+
+momBull = rsiVal > 50 and rsiVal < rsiOB and macdHist > 0
+momBear = rsiVal < 50 and rsiVal > rsiOS and macdHist < 0
+
+rsiRecoveredFromOversold = ta.crossover(rsiVal, rsiOS)
+rsiDroppedFromOverbought = ta.crossunder(rsiVal, rsiOB)
+
+// =====================================================================
+// GROUP: VOLATILITY / VOLUME FILTER
+// =====================================================================
+gVol = "Volatility & Volume"
+atrLen        = input.int(14, "ATR Length", minval = 2, group = gVol)
+atrStopMult   = input.float(2.0, "ATR Stop Multiple", minval = 0.5, step = 0.1, group = gVol)
+atrTPMult     = input.float(3.5, "ATR Take-Profit Multiple", minval = 0.5, step = 0.1, group = gVol)
+volFilterOn   = input.bool(true, "Require Above-Average Volume", group = gVol)
+volLen        = input.int(20, "Volume MA Length", minval = 2, group = gVol)
+
+atrVal   = ta.atr(atrLen)
+volMA    = ta.sma(volume, volLen)
+volOK    = not volFilterOn or volume > volMA
+
+// =====================================================================
+// GROUP: RISK MANAGEMENT (low-balance aware)
+// =====================================================================
+gRisk = "Risk Management"
+riskPct       = input.float(1.0, "Risk % of Equity per Trade", minval = 0.1, maxval = 25.0, step = 0.1, group = gRisk)
+maxDailyLossPct = input.float(5.0, "Max Daily Loss % (kill switch)", minval = 1.0, group = gRisk)
+useTrailingStop = input.bool(true, "Use ATR Trailing Stop", group = gRisk)
+allowLongs  = input.bool(true, "Allow Longs", group = gRisk)
+allowShorts = input.bool(true, "Allow Shorts", group = gRisk)
+
+var float dayStartEquity = na
+newDay = ta.change(time("D")) != 0
+if newDay or na(dayStartEquity)
+    dayStartEquity := strategy.equity
+
+dailyLossPct = (dayStartEquity - strategy.equity) / dayStartEquity * 100
+killSwitch = dailyLossPct >= maxDailyLossPct
+
+// Position sizing: risk a fixed % of equity against the ATR-based stop distance,
+// so even small accounts trade a mathematically consistent size instead of a flat lot.
+stopDistance = atrVal * atrStopMult
+riskCash     = strategy.equity * (riskPct / 100)
+qtyBTC       = stopDistance > 0 ? riskCash / stopDistance : 0.0
+
+// =====================================================================
+// SIGNAL LOGIC
+// =====================================================================
+longSignal  = allowLongs  and not killSwitch and bullBias and momBull and volOK and (rsiRecoveredFromOversold or ta.crossover(macdLine, macdSignal))
+shortSignal = allowShorts and not killSwitch and bearBias and momBear and volOK and (rsiDroppedFromOverbought or ta.crossunder(macdLine, macdSignal))
+
+exitLongSignal  = ta.crossunder(emaFast, emaSlow) or close < emaMacro
+exitShortSignal = ta.crossover(emaFast, emaSlow) or close > emaMacro
+
+longStopPrice  = close - stopDistance
+longTPPrice    = close + atrVal * atrTPMult
+shortStopPrice = close + stopDistance
+shortTPPrice   = close - atrVal * atrTPMult
+
+trailTicks = atrVal * atrStopMult / syminfo.mintick
+
+if longSignal and strategy.position_size <= 0 and qtyBTC > 0
+    strategy.entry("Godmode Long", strategy.long, qty = qtyBTC)
+    if useTrailingStop
+        strategy.exit("Long Exit", "Godmode Long", trail_points = trailTicks, trail_offset = trailTicks, limit = longTPPrice)
+    else
+        strategy.exit("Long Exit", "Godmode Long", stop = longStopPrice, limit = longTPPrice)
+
+if shortSignal and strategy.position_size >= 0 and qtyBTC > 0
+    strategy.entry("Godmode Short", strategy.short, qty = qtyBTC)
+    if useTrailingStop
+        strategy.exit("Short Exit", "Godmode Short", trail_points = trailTicks, trail_offset = trailTicks, limit = shortTPPrice)
+    else
+        strategy.exit("Short Exit", "Godmode Short", stop = shortStopPrice, limit = shortTPPrice)
+
+if strategy.position_size > 0 and exitLongSignal
+    strategy.close("Godmode Long", comment = "Trend Flip")
+
+if strategy.position_size < 0 and exitShortSignal
+    strategy.close("Godmode Short", comment = "Trend Flip")
+
+if killSwitch
+    strategy.close_all(comment = "Daily Loss Limit Hit")
+
+// =====================================================================
+// PLOTTING
+// =====================================================================
+plot(emaFast,  "Fast EMA",  color = color.new(color.aqua, 0),   linewidth = 1)
+plot(emaSlow,  "Slow EMA",  color = color.new(color.orange, 0), linewidth = 1)
+plot(emaMacro, "Macro EMA", color = color.new(color.purple, 0), linewidth = 2)
+
+bgcolor(bullBias ? color.new(color.green, 92) : bearBias ? color.new(color.red, 92) : na, title = "Bias Background")
+
+plotshape(longSignal,  title = "Long Signal",  style = shape.triangleup,   location = location.belowbar, color = color.lime,   size = size.small)
+plotshape(shortSignal, title = "Short Signal", style = shape.triangledown, location = location.abovebar, color = color.red,    size = size.small)
+plotshape(killSwitch and (newDay[1] == false), title = "Kill Switch", style = shape.xcross, location = location.abovebar, color = color.fuchsia, size = size.tiny)
+
+// =====================================================================
+// GODMODE DASHBOARD
+// =====================================================================
+showDash = input.bool(true, "Show Dashboard", group = "Display")
+var table dash = table.new(position.top_right, 2, 7, border_width = 1)
+
+f_cell(_table, _col, _row, _txt, _bg) =>
+    table.cell(_table, _col, _row, _txt, bgcolor = _bg, text_color = color.white, text_size = size.small)
+
+if showDash and barstate.islast
+    trendTxt = bullBias ? "BULLISH" : bearBias ? "BEARISH" : "NEUTRAL"
+    trendBg  = bullBias ? color.new(color.green, 20) : bearBias ? color.new(color.red, 20) : color.new(color.gray, 20)
+
+    f_cell(dash, 0, 0, "BTCUSD Godmode", color.new(color.navy, 0))
+    f_cell(dash, 1, 0, "STATUS", color.new(color.navy, 0))
+
+    f_cell(dash, 0, 1, "Trend Bias", color.new(color.gray, 40))
+    f_cell(dash, 1, 1, trendTxt, trendBg)
+
+    f_cell(dash, 0, 2, "RSI(" + str.tostring(rsiLen) + ")", color.new(color.gray, 40))
+    f_cell(dash, 1, 2, str.tostring(rsiVal, "#.##"), color.new(color.gray, 60))
+
+    f_cell(dash, 0, 3, "MACD Hist", color.new(color.gray, 40))
+    f_cell(dash, 1, 3, str.tostring(macdHist, "#.####"), color.new(color.gray, 60))
+
+    f_cell(dash, 0, 4, "ATR(" + str.tostring(atrLen) + ")", color.new(color.gray, 40))
+    f_cell(dash, 1, 4, str.tostring(atrVal, "#.##"), color.new(color.gray, 60))
+
+    f_cell(dash, 0, 5, "Risk Qty (BTC)", color.new(color.gray, 40))
+    f_cell(dash, 1, 5, str.tostring(qtyBTC, "#.######"), color.new(color.gray, 60))
+
+    f_cell(dash, 0, 6, "Daily P/L %", color.new(color.gray, 40))
+    f_cell(dash, 1, 6, str.tostring(-dailyLossPct, "#.##") + "%", killSwitch ? color.new(color.red, 0) : color.new(color.gray, 60))
+
+// =====================================================================
+// ALERTS (for webhook-driven live execution, e.g. MT5/exchange bots)
+// =====================================================================
+alertcondition(longSignal,  title = "Godmode Long Entry",  message = '{"symbol":"BTCUSD","side":"buy","reason":"godmode_long"}')
+alertcondition(shortSignal, title = "Godmode Short Entry", message = '{"symbol":"BTCUSD","side":"sell","reason":"godmode_short"}')
+alertcondition(killSwitch,  title = "Godmode Kill Switch", message = '{"symbol":"BTCUSD","side":"flat","reason":"daily_loss_limit"}')
