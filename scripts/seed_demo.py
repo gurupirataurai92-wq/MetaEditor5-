@@ -23,6 +23,8 @@ from datetime import datetime, timedelta
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000") + "/api/v1"
 EMAIL = "demo@simsai.co.zw"
 PASSWORD = "demo-password-123"
+MANAGER_EMAIL = "manager@simsai.co.zw"
+MANAGER_PASSWORD = "manager-password-123"
 TILL_EMAIL = "till@simsai.co.zw"
 TILL_PASSWORD = "till-password-123"
 
@@ -138,11 +140,33 @@ def main() -> None:
                              ("utilities", "32.50"), ("wages", "140.00")]:
         call("/expenses", {"category": category, "amount": amount})
 
-    # Till operator (cashier role) with some sales *today*, so the manager's
-    # Live Monitor has per-till activity to show.
-    call("/users", {"email": TILL_EMAIL, "password": TILL_PASSWORD,
-                    "full_name": "Tatenda (Till 1)", "role": "cashier"})
+    # Owner opens a second branch and appoints the manager.
+    shops = call("/shops")
+    main_shop = shops[0]
+    branch = call("/shops", {"name": "Mbare Branch",
+                             "address": "Stall 14, Mbare Musika, Harare"})
+    call("/users", {"email": MANAGER_EMAIL, "password": MANAGER_PASSWORD,
+                    "full_name": "Nyasha Chikafu", "role": "manager"})
     owner_token = _token
+
+    # The manager hires the team; each employee's password is their own.
+    _token = call("/auth/login", {"email": MANAGER_EMAIL,
+                                  "password": MANAGER_PASSWORD})["access_token"]
+    till_emp = call("/staff", {
+        "full_name": "Tatenda (Till 1)", "position": "Till Operator",
+        "shop_id": main_shop["id"], "role": "cashier",
+        "email": TILL_EMAIL, "password": TILL_PASSWORD, "salary": "180.00",
+    })
+    call(f"/employees/{till_emp['id']}", {"on_duty": True}, method="PATCH")
+    rumbi = call("/staff", {
+        "full_name": "Rumbi K.", "position": "Storekeeper",
+        "shop_id": branch["id"], "role": "storekeeper",
+        "email": f"rumbi-{uuid.uuid4().hex[:6]}@simsai.co.zw",
+        "password": "rumbi-own-secret-1", "salary": "160.00",
+    })
+    assert rumbi["on_duty"] is False  # off duty until she clocks in
+
+    # The till operator serves customers *today* → Live Monitor has activity.
     _token = call("/auth/login",
                   {"email": TILL_EMAIL, "password": TILL_PASSWORD})["access_token"]
     for _ in range(5):
@@ -155,9 +179,10 @@ def main() -> None:
     _token = owner_token
 
     print(f"Seeded {sales_created + 2} sales, {len(catalogue)} products, "
-          "4 expense categories, rates, anomalies and a till operator.")
+          "2 branches, a manager, 2 staff, expenses, rates and anomalies.")
     print(f"\n  URL:            {BASE.removesuffix('/api/v1')}\n"
           f"  Owner login:    {EMAIL} / {PASSWORD}\n"
+          f"  Manager login:  {MANAGER_EMAIL} / {MANAGER_PASSWORD}\n"
           f"  Till login:     {TILL_EMAIL} / {TILL_PASSWORD}")
 
 

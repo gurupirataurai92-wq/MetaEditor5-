@@ -58,13 +58,19 @@ def test_2fa_enable_and_login_flow(client, biz):
     assert with_code.status_code == 200
 
 
-def test_rbac_cashier_cannot_create_products_or_read_reports(client, biz):
+def test_rbac_cashier_boundaries(client, biz):
     cashier = make_user(client, biz, "cashier")
-    denied = client.post(f"{API}/products", headers=cashier["headers"],
-                         json={"name": "X", "sell_price": "1.00"})
-    assert denied.status_code == 403
-    denied = client.get(f"{API}/reports/pnl", headers=cashier["headers"])
-    assert denied.status_code == 403
-    # But cashiers can read products.
-    allowed = client.get(f"{API}/products", headers=cashier["headers"])
-    assert allowed.status_code == 200
+    # Till operators may add/retire products (serving the counter) …
+    created = client.post(f"{API}/products", headers=cashier["headers"],
+                          json={"name": "Freezit", "sell_price": "0.50"})
+    assert created.status_code == 201
+    retired = client.patch(f"{API}/products/{created.json()['id']}",
+                           headers=cashier["headers"], json={"is_active": False})
+    assert retired.status_code == 200
+    # … but never see finance, staffing or monitoring.
+    assert client.get(f"{API}/reports/pnl",
+                      headers=cashier["headers"]).status_code == 403
+    assert client.get(f"{API}/employees",
+                      headers=cashier["headers"]).status_code == 403
+    assert client.get(f"{API}/reports/cashier-performance",
+                      headers=cashier["headers"]).status_code == 403

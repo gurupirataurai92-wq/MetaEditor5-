@@ -26,10 +26,15 @@ DEFAULT_ROLES: dict[str, list[str]] = {
         "products.*", "categories.*", "stock.*", "suppliers.*", "sales.*",
         "customers.*", "expenses.*", "rates.*", "reports.*", "analytics.*",
         "employees.*", "sync.*", "audit.read", "shops.read", "users.read",
+        # Managers hire staff (creating each employee's own login).
+        "users.create",
     ],
     "cashier": [
         "sales.create", "sales.read", "customers.read", "customers.create",
-        "products.read", "stock.read", "sync.*",
+        # Till operators serve customers and may add/retire products
+        # and receive stock — but never see finance or reports.
+        "products.read", "products.create", "products.update",
+        "stock.read", "stock.create", "sync.*",
     ],
     "storekeeper": [
         "products.*", "categories.*", "stock.*", "suppliers.*", "sync.*",

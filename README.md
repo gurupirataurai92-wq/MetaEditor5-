@@ -64,9 +64,8 @@ sales, rates, expenses, anomalies) and log in with the printed credentials:
 python3 scripts/seed_demo.py
 ```
 
-The seed prints two logins: the **owner** (full dashboard + Live Monitor)
-and a **till operator** (POS-only view) — sign in with each to see the
-role-adaptive UI.
+The seed prints three logins — **owner**, **manager** and **till operator** —
+sign in with each to see the three role-adaptive workspaces.
 
 ## Production deployment
 
@@ -79,22 +78,29 @@ One VPS runs the whole stack: NGINX serves the dashboard and proxies the API;
 PostgreSQL enforces tenant isolation with row-level security on top of the
 application-layer RBAC.
 
-## Two dashboards, one system (role-adaptive UI)
+## Three workspaces, one login (role-adaptive UI)
 
-The same app renders a different workspace per signed-in role, driven by the
+The same login screen routes each role to its own dashboard, driven by the
 permission grants inside the JWT (and enforced again server-side + by
 row-level security):
 
-- **Till operator (cashier)** — lands straight in a focused Point-of-Sale
-  workspace: sell, take payments, print receipts. No reports, no prices to
-  edit, no void button.
-- **Manager / owner ("god mode")** — the full cockpit plus a **Live Monitor**:
-  auto-refreshing revenue/transactions/voids for today, a live sales feed,
-  per-till operator performance (sales, revenue, voids), low-stock warnings
-  and fraud alerts.
+- **Owner — full access.** Lands on the financial Dashboard; additionally
+  gets **Branches** (open new shops, see staffing per branch), the **Live
+  Monitor** (god-mode till surveillance), and everything the manager sees —
+  with the power to change it.
+- **Manager — staff & stock.** Lands on **Staff & Duty**: hire employees
+  (each types their *own confidential password* at hiring — stored as an
+  Argon2 hash, unreadable to anyone), assign them to branches, clock them
+  on/off duty; plus Inventory and the Live Monitor. No branch creation,
+  no owner financials.
+- **Till operator — serve customers.** Lands on the Point of Sale: sell,
+  take payments, print receipts, and add/retire products. No reports, no
+  staffing, no void button.
 
-| Till operator view | Manager live monitor |
+| Manager: Staff & Duty | Owner: Branches |
 |---|---|
+| ![Staff](docs/screenshots/manager-staff.png) | ![Branches](docs/screenshots/owner-branches.png) |
+| Till operator: POS | Live Monitor (god mode) |
 | ![Till](docs/screenshots/till-pos.png) | ![Monitor](docs/screenshots/monitor-dark.png) |
 
 ## Feature highlights
