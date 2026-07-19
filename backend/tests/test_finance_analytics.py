@@ -111,6 +111,35 @@ def test_assistant_isolation_between_tenants(client, biz, other_biz):
     assert Decimal(grounding["pnl_this_month"]["revenue_gross"]) == Decimal("0.00")
 
 
+def test_cashier_performance_report(client, biz):
+    from tests.conftest import make_user
+
+    product = make_product(client, biz, sell="10.00", stock=30)
+    cashier = make_user(client, biz, "cashier")
+    # Owner sells twice; cashier sells once; owner voids one sale.
+    client.post(f"{API}/sales", headers=biz["headers"], json={
+        "lines": [{"product_id": product["id"], "qty": 1}]})
+    voided = client.post(f"{API}/sales", headers=biz["headers"], json={
+        "lines": [{"product_id": product["id"], "qty": 1}]}).json()
+    client.post(f"{API}/sales/{voided['id']}/void", headers=biz["headers"])
+    client.post(f"{API}/sales", headers=cashier["headers"], json={
+        "lines": [{"product_id": product["id"], "qty": 2}]})
+
+    rows = client.get(f"{API}/reports/cashier-performance",
+                      headers=biz["headers"]).json()
+    by_name = {r["name"]: r for r in rows}
+    owner_row = by_name["Test Owner"]
+    cashier_row = by_name["Test cashier"]
+    assert owner_row["sales_count"] == 1 and owner_row["voids"] == 1
+    assert cashier_row["sales_count"] == 1
+    assert Decimal(cashier_row["revenue"]) == Decimal("20.00")
+
+    # The till operator cannot see the monitoring report.
+    denied = client.get(f"{API}/reports/cashier-performance",
+                        headers=cashier["headers"])
+    assert denied.status_code == 403
+
+
 def test_employee_crud(client, biz):
     resp = client.post(f"{API}/employees", headers=biz["headers"], json={
         "full_name": "Tino M.", "position": "Sales Assistant",

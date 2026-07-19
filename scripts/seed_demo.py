@@ -23,6 +23,8 @@ from datetime import datetime, timedelta
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000") + "/api/v1"
 EMAIL = "demo@simsai.co.zw"
 PASSWORD = "demo-password-123"
+TILL_EMAIL = "till@simsai.co.zw"
+TILL_PASSWORD = "till-password-123"
 
 _token: str | None = None
 
@@ -136,10 +138,27 @@ def main() -> None:
                              ("utilities", "32.50"), ("wages", "140.00")]:
         call("/expenses", {"category": category, "amount": amount})
 
+    # Till operator (cashier role) with some sales *today*, so the manager's
+    # Live Monitor has per-till activity to show.
+    call("/users", {"email": TILL_EMAIL, "password": TILL_PASSWORD,
+                    "full_name": "Tatenda (Till 1)", "role": "cashier"})
+    owner_token = _token
+    _token = call("/auth/login",
+                  {"email": TILL_EMAIL, "password": TILL_PASSWORD})["access_token"]
+    for _ in range(5):
+        p = random.choice(products)
+        call("/sales", {
+            "id": str(uuid.uuid4()), "currency": "USD",
+            "lines": [{"product_id": p["id"], "qty": random.randint(1, 3)}],
+        })
+        sales_created += 1
+    _token = owner_token
+
     print(f"Seeded {sales_created + 2} sales, {len(catalogue)} products, "
-          "4 expense categories, rates and anomalies.")
-    print(f"\n  URL:      {BASE.removesuffix('/api/v1')}\n"
-          f"  Email:    {EMAIL}\n  Password: {PASSWORD}")
+          "4 expense categories, rates, anomalies and a till operator.")
+    print(f"\n  URL:            {BASE.removesuffix('/api/v1')}\n"
+          f"  Owner login:    {EMAIL} / {PASSWORD}\n"
+          f"  Till login:     {TILL_EMAIL} / {TILL_PASSWORD}")
 
 
 if __name__ == "__main__":

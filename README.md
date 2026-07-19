@@ -64,6 +64,10 @@ sales, rates, expenses, anomalies) and log in with the printed credentials:
 python3 scripts/seed_demo.py
 ```
 
+The seed prints two logins: the **owner** (full dashboard + Live Monitor)
+and a **till operator** (POS-only view) — sign in with each to see the
+role-adaptive UI.
+
 ## Production deployment
 
 ```bash
@@ -74,6 +78,24 @@ SIMS_JWT_SECRET=$(openssl rand -hex 32) POSTGRES_PASSWORD=... docker compose up 
 One VPS runs the whole stack: NGINX serves the dashboard and proxies the API;
 PostgreSQL enforces tenant isolation with row-level security on top of the
 application-layer RBAC.
+
+## Two dashboards, one system (role-adaptive UI)
+
+The same app renders a different workspace per signed-in role, driven by the
+permission grants inside the JWT (and enforced again server-side + by
+row-level security):
+
+- **Till operator (cashier)** — lands straight in a focused Point-of-Sale
+  workspace: sell, take payments, print receipts. No reports, no prices to
+  edit, no void button.
+- **Manager / owner ("god mode")** — the full cockpit plus a **Live Monitor**:
+  auto-refreshing revenue/transactions/voids for today, a live sales feed,
+  per-till operator performance (sales, revenue, voids), low-stock warnings
+  and fraud alerts.
+
+| Till operator view | Manager live monitor |
+|---|---|
+| ![Till](docs/screenshots/till-pos.png) | ![Monitor](docs/screenshots/monitor-dark.png) |
 
 ## Feature highlights
 

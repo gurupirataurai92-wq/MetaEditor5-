@@ -1,27 +1,33 @@
-import { useEffect, useState } from 'react'
-import { hasToken, setToken } from './api'
+import { useEffect, useMemo, useState } from 'react'
+import { can, getClaims, hasToken, setToken } from './api'
 import Assistant from './components/Assistant'
 import Dashboard from './components/Dashboard'
 import Inventory from './components/Inventory'
 import Login from './components/Login'
 import { LogoWordmark } from './components/Logo'
+import Monitor from './components/Monitor'
 import Pos from './components/Pos'
 import Sales from './components/Sales'
 import Toasts from './components/Toasts'
 
-type Page = 'dashboard' | 'pos' | 'sales' | 'inventory' | 'assistant'
+type Page = 'dashboard' | 'monitor' | 'pos' | 'sales' | 'inventory' | 'assistant'
 
-const NAV: { id: Page; label: string; icon: string }[] = [
-  { id: 'dashboard', label: 'Dashboard', icon: '📊' },
-  { id: 'pos', label: 'Point of Sale', icon: '🛒' },
-  { id: 'sales', label: 'Sales', icon: '🧾' },
-  { id: 'inventory', label: 'Inventory', icon: '📦' },
-  { id: 'assistant', label: 'AI Assistant', icon: '✨' },
+// Each surface is gated by the permission that its data actually requires —
+// the same grants the API enforces. A till operator (cashier) therefore sees
+// only POS + Sales; owner/manager get the full cockpit incl. the Live Monitor.
+const NAV: { id: Page; label: string; icon: string; perm: string }[] = [
+  { id: 'dashboard', label: 'Dashboard', icon: '📊', perm: 'reports.read' },
+  { id: 'monitor', label: 'Live Monitor', icon: '📡', perm: 'users.read' },
+  { id: 'pos', label: 'Point of Sale', icon: '🛒', perm: 'sales.create' },
+  { id: 'sales', label: 'Sales', icon: '🧾', perm: 'sales.read' },
+  { id: 'inventory', label: 'Inventory', icon: '📦', perm: 'stock.create' },
+  { id: 'assistant', label: 'AI Assistant', icon: '✨', perm: 'analytics.read' },
 ]
 
 export default function App() {
   const [authed, setAuthed] = useState(hasToken())
-  const [page, setPage] = useState<Page>('dashboard')
+  const visibleNav = useMemo(() => NAV.filter((item) => can(item.perm)), [authed])
+  const [page, setPage] = useState<Page>(visibleNav[0]?.id ?? 'pos')
   const [dark, setDark] = useState(
     () => localStorage.getItem('sims_theme') === 'dark' ||
       (localStorage.getItem('sims_theme') === null &&
@@ -33,16 +39,30 @@ export default function App() {
     localStorage.setItem('sims_theme', dark ? 'dark' : 'light')
   }, [dark])
 
+  // On (re)auth, land on the first surface the role can see:
+  // owner/manager → Dashboard, till operator → Point of Sale.
+  useEffect(() => {
+    if (authed && visibleNav.length) setPage(visibleNav[0].id)
+  }, [authed, visibleNav])
+
   if (!authed) return <Login onLogin={() => setAuthed(true)} />
+
+  const role = getClaims()?.role ?? ''
 
   return (
     <div className="min-h-screen flex">
       <aside className="w-60 shrink-0 border-r border-black/10 dark:border-white/10 p-4 flex flex-col gap-1"
              style={{ background: 'var(--surface-1)' }}>
-        <div className="px-2 py-3 mb-2">
+        <div className="px-2 py-3 mb-1">
           <LogoWordmark />
         </div>
-        {NAV.map((item) => (
+        {role && (
+          <div className="mx-2 mb-2 px-2.5 py-1 rounded-full text-xs self-start capitalize"
+               style={{ background: 'var(--grid)', color: 'var(--text-secondary)' }}>
+            {role === 'owner' || role === 'manager' ? `${role} · full access` : `${role} mode`}
+          </div>
+        )}
+        {visibleNav.map((item) => (
           <button key={item.id} onClick={() => setPage(item.id)}
             className={`text-left px-3 py-2 rounded-lg text-sm transition-colors ${
               page === item.id
@@ -66,7 +86,9 @@ export default function App() {
       </aside>
       <main className="flex-1 p-6 overflow-x-hidden">
         <div key={page} className="fade-in">
-          {page === 'dashboard' && <Dashboard onGoToPos={() => setPage('pos')} />}
+          {page === 'dashboard' && <Dashboard onGoToPos={
+            can('sales.create') ? () => setPage('pos') : undefined} />}
+          {page === 'monitor' && <Monitor />}
           {page === 'pos' && <Pos />}
           {page === 'sales' && <Sales />}
           {page === 'inventory' && <Inventory />}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api } from '../api'
+import { api, can } from '../api'
 import { toast } from '../toast'
 
 interface SaleRow {
@@ -91,7 +91,7 @@ export default function Sales() {
                        target="_blank" rel="noreferrer">
                       Receipt
                     </a>
-                    {s.status === 'committed' && (
+                    {s.status === 'committed' && can('sales.void') && (
                       confirming === s.id ? (
                         <>
                           <button onClick={() => voidSale(s.id)} className="mr-2 font-medium"

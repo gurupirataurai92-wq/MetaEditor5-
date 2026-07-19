@@ -141,6 +141,15 @@ def cashflow(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db
     return reports.cash_flow(db, auth.tenant_id, date_from, date_to)
 
 
+@router.get("/reports/cashier-performance",
+            dependencies=[Depends(require("reports.read"))])
+def cashier_performance(auth: AuthContext = Depends(get_auth),
+                        db: Session = Depends(get_db),
+                        date_from: datetime | None = None,
+                        date_to: datetime | None = None):
+    return reports.cashier_performance(db, auth.tenant_id, date_from, date_to)
+
+
 # ------------------------------------------------------------------ audit
 @router.get("/audit", dependencies=[Depends(require("audit.read"))])
 def audit_trail(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db),

@@ -117,6 +117,44 @@ def _expenses_by_category(expenses) -> list[dict]:
     return [{"category": c, "amount": str(money(v))} for c, v in sorted(grouped.items())]
 
 
+def cashier_performance(db: Session, tenant_id: str,
+                        date_from: datetime | None = None,
+                        date_to: datetime | None = None) -> list[dict]:
+    """Per-cashier sales count, base-currency revenue and void count —
+    the manager's till-monitoring view."""
+    from app.contexts.identity.models import User
+
+    q = select(Sale).where(Sale.tenant_id == tenant_id)
+    if date_from:
+        q = q.where(Sale.captured_at >= date_from)
+    if date_to:
+        q = q.where(Sale.captured_at <= date_to)
+    sales = db.scalars(q).all()
+
+    names = {
+        u.id: u.full_name
+        for u in db.scalars(select(User).where(User.tenant_id == tenant_id)).all()
+    }
+    per: dict[str, dict] = {}
+    for sale in sales:
+        entry = per.setdefault(sale.cashier_id, {
+            "cashier_id": sale.cashier_id,
+            "name": names.get(sale.cashier_id, "Unknown"),
+            "sales_count": 0, "revenue": Decimal("0"), "voids": 0,
+        })
+        if sale.status == "void":
+            entry["voids"] += 1
+        else:
+            entry["sales_count"] += 1
+            entry["revenue"] += to_base(sale.total, sale.exchange_rate)
+
+    rows = sorted(per.values(), key=lambda e: e["revenue"], reverse=True)
+    return [
+        {**row, "revenue": str(money(row["revenue"]))}
+        for row in rows
+    ]
+
+
 def cash_flow(db: Session, tenant_id: str,
               date_from: datetime | None = None,
               date_to: datetime | None = None) -> dict:

@@ -195,7 +195,7 @@ def anomalies(db: Session, tenant_id: str, *, window: int = 30,
                 "sale_id": line.sale_id,
                 "product": line.product_name,
                 "detail": f"Sold at {discount:.0%} below list price "
-                          f"({line.unit_price} vs {list_price})",
+                          f"({float(line.unit_price):.2f} vs {float(list_price):.2f})",
                 "cashier_id": sale_by_id[line.sale_id].cashier_id,
             })
 

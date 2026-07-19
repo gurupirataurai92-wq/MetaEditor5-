@@ -80,3 +80,31 @@ export interface Anomaly {
   severity: string
   detail: string
 }
+
+// ---- client-side role/permission awareness ---------------------------------
+// The access token carries role + permission grants; decoding it lets the UI
+// adapt (hide pages/actions) while the server remains the real enforcer.
+export interface Claims {
+  sub: string
+  role: string
+  perms: string[]
+}
+
+export function getClaims(): Claims | null {
+  if (!accessToken) return null
+  try {
+    const b64 = accessToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const payload = JSON.parse(atob(b64))
+    return { sub: payload.sub, role: payload.role ?? '', perms: payload.perms ?? [] }
+  } catch {
+    return null
+  }
+}
+
+export function can(perm: string): boolean {
+  const claims = getClaims()
+  if (!claims) return false
+  return claims.perms.some(
+    (g) => g === '*' || g === perm || (g.endsWith('.*') && perm.startsWith(g.slice(0, -1))),
+  )
+}
