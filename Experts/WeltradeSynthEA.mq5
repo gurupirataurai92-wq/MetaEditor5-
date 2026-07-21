@@ -1,29 +1,43 @@
 //+------------------------------------------------------------------+
 //|                                             WeltradeSynthEA.mq5   |
 //|            Weltrade GainX / FlipX adaptive synthetic-index EA     |
-//|          Entity-aware: drift-rider for GainX, mean-reversion      |
-//|          for FlipX. Native MQL5, no DLLs / ONNX / external files. |
+//|          Entity-aware: spike-index grind entry for GainX/PainX,   |
+//|          mean-reversion for FlipX. Native MQL5, no DLLs / ONNX.    |
 //+------------------------------------------------------------------+
 #property copyright "Quant Systems"
-#property version   "1.00"
+#property version   "1.10"
 #property description "Adaptive EA for Weltrade synthetic indices (GainX / PainX / FlipX)."
-#property description "Auto-classifies each symbol and applies the technique that suits the"
-#property description "entity: a trend/pullback drift-rider for the drifting GainX/PainX"
-#property description "families, and a z-score mean-reversion fader for the oscillating FlipX"
-#property description "family. Harvests proven modules from the Gold portfolio EA - tiered"
+#property description "Models their generation: GainX/PainX are spike indices (slow grind +"
+#property description "rare opposite spike), FlipX is a driftless volatility walk. Trades the"
+#property description "spike-favourable side only (buys the GainX grind, sells the PainX grind)"
+#property description "so a spike bails the position out, and fades FlipX around its mean."
+#property description "Harvests proven modules from the Gold portfolio EA - tiered"
 #property description "low-balance sizing, ATR risk model, native neural-net confidence filter,"
 #property description "circuit breakers, drawdown recovery, partial/breakeven/trailing/pyramid"
 #property description "management and a portfolio risk governor. Synthetics trade 24/7, so the"
 #property description "session and news-blackout gating from FX/gold systems is deliberately"
 #property description "removed - it does not suit these instruments."
 //
+// Generation model (Weltrade mirrors the Deriv synthetic engine):
+//   GainX  = Boom-type spike index : price GRINDS DOWN on ~every tick and JUMPS
+//            UP on a rare spike (avg once per N ticks, N = 800/999/1200). The
+//            series is ~driftless with strong POSITIVE skew.
+//   PainX  = Crash-type : grinds UP, rare DOWN spikes (negative skew).
+//   FlipX  = Volatility-type : driftless symmetric random walk, no spikes.
+// Consequence: on GainX we trade the SPIKE side only (buy the grind) so the
+// spike bails us out; the anti-spike (short) side has an unbounded spike tail
+// and is never grid-martingaled. PainX is the mirror. FlipX is faded around its
+// mean. These processes are ~zero expectancy by construction, so the engine is
+// tuned for survivable skew and bounded risk, not a fabricated directional edge.
+//
 // Design doctrine (OODA):
-//   OBSERVE  - per-symbol ATR, EMA/SMA/StdDev/RSI, drift bias, spread ratio.
-//   ORIENT   - classify the instrument (GainX / PainX / FlipX / generic) and its
-//              current regime; pick the engine that suits that entity.
-//   DECIDE   - rule trigger AND (optional) online neural-net confidence gate.
-//   ACT      - size by tier + risk%, execute, then manage with partial / breakeven /
-//              trailing / pyramid and multi-layer circuit breakers.
+//   OBSERVE  - per-symbol ATR, EMA/StdDev/RSI, drift bias, spread ratio, spikes.
+//   ORIENT   - classify the instrument (GainX / PainX / FlipX / generic); pick
+//              the engine and the skew-favourable side that suit that entity.
+//   DECIDE   - grind-extreme / mean-reversion trigger AND (optional) NN gate.
+//   ACT      - size by tier + risk%, execute, then manage with basket recovery
+//              (spike-aware) or partial / breakeven / trailing, plus circuit
+//              breakers, a drawdown kill-switch and a portfolio risk governor.
 
 #include <Trade\Trade.mqh>
 
@@ -32,7 +46,6 @@
 //======================================================================
 input string          InpWatchlist        = "GainX 800,GainX 999,GainX 1200,FlipX 1,FlipX 2,FlipX 3"; // comma list; broker names kept verbatim
 input ENUM_TIMEFRAMES InpSignalTF         = PERIOD_M5;   // engine timeframe
-input ENUM_TIMEFRAMES InpTrendTF          = PERIOD_M30;  // higher-TF trend filter (GainX/PainX)
 input double          InpRiskPercent      = 1.0;         // fallback risk% when tier engine is off
 input double          InpMinAccountUSD    = 2.0;         // operational floor (cent accounts scaled x100)
 input int             InpMagicBase        = 20260720;
@@ -46,11 +59,20 @@ input bool            InpUseNNFilter      = true;
 input double          InpNNThreshold      = 0.55;        // min NN confidence to trade
 input double          InpLearningRate     = 0.01;
 
-// --- GainX / PainX drift-rider engine ---
+// --- GainX / PainX spike-index engine ---
+// GainX = up-spike / down-grind (Boom-type), PainX = down-spike / up-grind
+// (Crash-type). We trade the SPIKE-favourable side only (positive skew): buy
+// the grind on GainX, sell the grind on PainX, so a spike helps us and never
+// detonates the basket. The number in the name (800/999/1200) is the average
+// ticks between spikes - higher = rarer spikes.
 input int             InpFastMA           = 21;
-input int             InpSlowMA           = 50;
+input int             InpSlowMA           = 50;          // generic (unknown) symbols only
 input int             InpRSIPeriod        = 14;
-input bool            InpAllowCounterDrift = false;      // trade against the family's drift on strong reversals
+input bool            InpSpikeDirOnly     = true;        // GainX long-only / PainX short-only (survivable skew)
+input int             InpGrindEntryRSI    = 35;          // enter on grind pullback past this RSI extreme (and 100-x on the short side)
+input double          InpSpikeATRmult     = 3.0;         // a bar whose range exceeds this * ATR is flagged a spike
+input int             InpPostSpikeCoolBars = 3;          // do not chase for this many bars after a spike
+input bool            InpBankOnSpike      = true;        // close a green basket immediately when a favourable spike prints
 
 // --- FlipX mean-reversion engine ---
 input int             InpMeanPeriod       = 34;
@@ -172,6 +194,10 @@ struct SymbolConfig
    double           LastInput[NN_INPUTS];
    double           LastHidden[NN_HIDDEN];
    double           LastOutput;
+
+   // spike tracking (GainX/PainX)
+   datetime         LastSpikeBarTime;
+   int              LastSpikeDir;       // +1 up-spike, -1 down-spike
 
    // bookkeeping
    int              TotalTrades;
@@ -348,6 +374,32 @@ double GetSpreadRatio(string symbol, double signalATR)
    if(signalATR <= 0.0) return 0.0;
    double spread = SymbolInfoInteger(symbol, SYMBOL_SPREAD) * SymbolInfoDouble(symbol, SYMBOL_POINT);
    return spread / signalATR;
+}
+
+// Flag a spike on the last CLOSED bar: a bar whose range dwarfs ATR. On spike
+// indices this marks the rare large move; its direction is the spike side.
+void UpdateSpikeState(int idx)
+{
+   string sym = g_cfg[idx].Name;
+   double atr = GetATR(sym, InpSignalTF, ATR_PERIOD);
+   if(atr <= 0.0) return;
+   MqlRates r[];
+   ArraySetAsSeries(r, true);
+   if(CopyRates(sym, InpSignalTF, 0, 2, r) < 2) return;
+   double range = r[1].high - r[1].low;
+   if(range > atr * InpSpikeATRmult)
+   {
+      g_cfg[idx].LastSpikeBarTime = r[1].time;
+      g_cfg[idx].LastSpikeDir = (r[1].close >= r[1].open) ? 1 : -1;
+   }
+}
+
+// Bars elapsed since the last detected spike (huge if none yet).
+int BarsSinceSpike(int idx)
+{
+   if(g_cfg[idx].LastSpikeBarTime <= 0) return 1000000;
+   int sh = iBarShift(g_cfg[idx].Name, InpSignalTF, g_cfg[idx].LastSpikeBarTime, false);
+   return (sh < 0) ? 1000000 : sh;
 }
 
 //======================================================================
@@ -754,54 +806,55 @@ bool BuildSignal(int idx, int &dir, double &slDist, double &tpDist,
 
    if(g_cfg[idx].Engine == ENGINE_TREND)
    {
-      // ---- GainX / PainX / generic : trend-with-drift pullback rider ----
+      // ---- GainX / PainX : spike-index grind-entry, spike-favourable side ----
+      // The series grinds against the spike direction and jumps with it. We buy
+      // the grind on GainX (up-spike) / sell the grind on PainX (down-spike), so
+      // the rare spike resolves the position in our favour. Generic (unknown)
+      // symbols fall back to an EMA trend follower.
+      int spikeDir = g_cfg[idx].DriftBias;               // +1 GainX, -1 PainX, 0 generic
       double fastMA = GetEMA(sym, InpSignalTF, InpFastMA);
-      double slowMA = GetEMA(sym, InpSignalTF, InpSlowMA);
-      if(fastMA <= 0.0 || slowMA <= 0.0) return false;
+      double oversold = InpGrindEntryRSI;                // buy at/below this
+      double overbought = 100.0 - InpGrindEntryRSI;      // sell at/above this
 
-      int localTrend = (fastMA > slowMA) ? 1 : (fastMA < slowMA ? -1 : 0);
-      int htfTrend = 0;
-      double htfFast = GetEMA(sym, InpTrendTF, InpFastMA);
-      double htfSlow = GetEMA(sym, InpTrendTF, InpSlowMA);
-      if(htfFast > 0.0 && htfSlow > 0.0) htfTrend = (htfFast > htfSlow) ? 1 : -1;
+      // Don't chase for a few bars right after a spike (price is stretched).
+      if(BarsSinceSpike(idx) < InpPostSpikeCoolBars) return false;
 
-      // Candidate direction: family drift bias wins; else follow the trend.
-      int cand = (g_cfg[idx].DriftBias != 0) ? g_cfg[idx].DriftBias : localTrend;
-      if(cand == 0) return false;
-
-      // Counter-drift entries only when explicitly allowed.
-      if(g_cfg[idx].DriftBias != 0 && cand != g_cfg[idx].DriftBias && !InpAllowCounterDrift)
-         return false;
-      // Trend alignment: require the HTF not to oppose us.
-      if(htfTrend != 0 && htfTrend != cand && !InpAllowCounterDrift) return false;
-
-      // Pullback-then-resume trigger on the signal TF.
-      MqlRates r[];
-      ArraySetAsSeries(r, true);
-      if(CopyRates(sym, InpSignalTF, 0, 3, r) < 3) return false;
-      bool bounceUp   = (r[0].close > r[1].close) && (r[1].close <= r[2].close);
-      bool bounceDown = (r[0].close < r[1].close) && (r[1].close >= r[2].close);
-
-      if(cand > 0)
+      if(spikeDir != 0)
       {
-         bool pulledBack = (r[1].low <= fastMA) || (rsi < 55.0);
-         if(!(bounceUp && pulledBack && rsi >= 40.0 && rsi <= 72.0)) return false;
-         dir = 1;
+         if(InpSpikeDirOnly)
+         {
+            // Spike-favourable side only (positive skew): buy the grind on GainX,
+            // sell the grind on PainX. The rare spike resolves us in profit.
+            if(spikeDir > 0) { if(rsi > oversold) return false; dir = 1; }
+            else             { if(rsi < overbought) return false; dir = -1; }
+         }
+         else
+         {
+            // Opt-in: fade whichever grind extreme prints, both sides. The
+            // anti-spike side carries an unbounded spike tail - use with care.
+            if(rsi <= oversold)        dir = 1;
+            else if(rsi >= overbought) dir = -1;
+            else return false;
+         }
       }
       else
       {
-         bool pulledBack = (r[1].high >= fastMA) || (rsi > 45.0);
-         if(!(bounceDown && pulledBack && rsi <= 60.0 && rsi >= 28.0)) return false;
-         dir = -1;
+         // Generic (unknown) symbol: EMA trend follower with a grind pullback.
+         double slowMA = GetEMA(sym, InpSignalTF, InpSlowMA);
+         if(fastMA <= 0.0 || slowMA <= 0.0) return false;
+         int t = (fastMA > slowMA) ? 1 : (fastMA < slowMA ? -1 : 0);
+         if(t == 0) return false;
+         if(t > 0) { if(rsi > oversold) return false; dir = 1; }
+         else      { if(rsi < overbought) return false; dir = -1; }
       }
 
       slDist = MathMax(atr * InpSL_ATR_Mult, SL_MIN_POINTS * g_cfg[idx].PointValue);
-      tpDist = (InpTrendTP_R > 0.0) ? slDist * InpTrendTP_R : 0.0; // 0 => trail only
+      tpDist = (InpTrendTP_R > 0.0) ? slDist * InpTrendTP_R : 0.0; // 0 => trail/basket only
 
       double price = SymbolInfoDouble(sym, SYMBOL_BID);
-      f0 = Clamp((double)(localTrend + htfTrend) / 2.0, -1.0, 1.0);
+      f0 = (double)spikeDir;                              // structural skew side
       f1 = (rsi - 50.0) / 50.0;
-      f2 = Clamp((price - fastMA) / atr, -3.0, 3.0) / 3.0;
+      f2 = (fastMA > 0.0) ? Clamp((price - fastMA) / atr, -3.0, 3.0) / 3.0 : 0.0;
       f3 = bias;
       f4 = volRt;
       return true;
@@ -886,7 +939,7 @@ bool OpenPosition(int idx, int direction, double lot, double sl, double tp, doub
 void OpenPyramidAddon(int idx, ulong baseTicket, double addLotMult, int level)
 {
    if(!InpEnablePyramid) return;
-   if(g_cfg[idx].Engine != ENGINE_TREND) return; // pyramiding suits drift-riders, not mean-reversion
+   if(g_cfg[idx].Engine != ENGINE_TREND) return; // pyramiding suits spike-index legs, not mean-reversion
    if(!PositionSelectByTicket(baseTicket)) return;
 
    string sym = g_cfg[idx].Name;
@@ -1044,6 +1097,14 @@ void ManageBasket(int idx)
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double profit = ComputeBasketProfit(idx);
 
+   // Bank on a favourable spike: the spike is our bailout - grab it while green.
+   if(InpBankOnSpike && profit > 0.0 && g_cfg[idx].DriftBias != 0 &&
+      g_cfg[idx].LastSpikeDir == dir && BarsSinceSpike(idx) <= 1)
+   {
+      CloseBasket(idx, "spike bank");
+      return;
+   }
+
    // Basket take-profit / trailing.
    double target = g_cfg[idx].BasketInitRisk * InpBasketTP_R;
    if(target <= 0.0) target = equity * 0.01;
@@ -1084,6 +1145,9 @@ void ProcessSymbol(int idx)
    datetime bt = iTime(sym, InpSignalTF, 0);
    if(bt == 0 || bt == g_cfg[idx].LastBarTime) return;
    g_cfg[idx].LastBarTime = bt;
+
+   // Refresh spike state every bar (needed by open baskets too, before any early return).
+   if(g_cfg[idx].DriftBias != 0) UpdateSpikeState(idx);
 
    if(g_ddKillSwitch) return;
    if(g_portfolioRiskBlocked) return;
@@ -1452,9 +1516,9 @@ int OnInit()
    else
       Print("Recovery (Medula) OFF: per-trade SL/TP with partial/breakeven/trailing/pyramid");
    for(int i = 0; i < g_symbolCount; i++)
-      PrintFormat("  [%s] %s -> %s bias=%+d mag=%d %s",
+      PrintFormat("  [%s] %s -> %s spikeDir=%+d ticks/spike~%d %s",
                   g_cfg[i].Name, TypeName(g_cfg[i].Type),
-                  g_cfg[i].Engine == ENGINE_TREND ? "TREND/drift-rider" : "MEAN-REVERSION",
+                  g_cfg[i].Engine == ENGINE_TREND ? "SPIKE-grind-entry" : "MEAN-REVERSION",
                   g_cfg[i].DriftBias, g_cfg[i].IndexMagnitude,
                   g_cfg[i].Available ? "OK" : "UNAVAILABLE");
    PrintFormat("Symbols available: %d / %d | 24/7 (no session/news gating)", available, g_symbolCount);

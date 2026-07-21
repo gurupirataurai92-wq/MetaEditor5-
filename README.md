@@ -5,14 +5,36 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 
 ### `WeltradeSynthEA.mq5` — Weltrade GainX / FlipX adaptive EA
 An **entity-aware** EA for Weltrade synthetic indices. It auto-classifies every
-symbol on the watchlist and applies *the technique that suits the entity*:
+symbol on the watchlist and applies *the technique that suits how the entity is
+generated*.
 
-| Family | Behaviour | Engine applied |
+**How these instruments are built** (Weltrade mirrors the Deriv synthetic engine —
+RNG tick series, not real markets):
+
+* **GainX = "Boom"-type spike index.** Price **grinds slowly *down*** on ~every
+  tick, then prints a **large upward spike** on average once every *N* ticks
+  (`N` = the number in the name: 800 / 999 / 1200). Tuned so `N × grind ≈ spike`,
+  i.e. ~zero drift with **strong positive skew** (many small down-bars, rare huge
+  up-bars).
+* **PainX = "Crash"-type.** Mirror: grinds *up*, rare *down* spikes (negative skew).
+* **FlipX = "Volatility"-type.** Driftless symmetric random walk — no spikes, no
+  drift; the number is the volatility tier.
+
+| Family | Generation | Engine applied |
 |--------|-----------|----------------|
-| **GainX** | persistent upward drift + spikes | Trend/pullback **drift-rider** (bias long) |
-| **PainX** | persistent downward drift | Trend/pullback drift-rider (bias short) |
-| **FlipX** | oscillating, no drift | **z-score mean-reversion** fader (both sides, TP → mean) |
-| *other*  | unknown synthetic | generic HTF trend follower |
+| **GainX** | down-grind + rare up-spike | **buy the grind** (spike side only); a spike bails the basket |
+| **PainX** | up-grind + rare down-spike | **sell the grind** (spike side only) |
+| **FlipX** | driftless random walk | **z-score mean-reversion** fade around the mean |
+| *other*  | unknown synthetic | generic EMA trend + grind entry |
+
+**Why this is the profitable-by-design choice, honestly stated:** a correctly
+specified synthetic is ~**zero expectancy** — no directional rule creates a real
+edge, and fading a FlipX random walk is zero-E minus spread. So the EA does not
+chase a fabricated edge; it maximises **survivability and skew**. It trades only
+the spike-favourable side (positive skew), never grid-martingales the unbounded
+anti-spike tail, and **banks the basket the moment a favourable spike prints**
+(`InpBankOnSpike`). A post-spike cooldown (`InpPostSpikeCoolBars`) avoids chasing
+stretched price, and spikes are detected via `InpSpikeATRmult × ATR`.
 
 Built with an **OODA** control loop — *Observe* (ATR / EMA / StdDev / RSI / drift),
 *Orient* (classify entity + regime), *Decide* (rule trigger + online neural-net
@@ -52,10 +74,13 @@ pyramiding).
 > accept before running it live.
 
 Key inputs: `InpWatchlist`, `InpSignalTF`, `InpRiskPercent`, `InpUseTierEngine`,
-`InpUseNNFilter` / `InpNNThreshold`, `InpZEntry` (FlipX), `InpAllowCounterDrift`
-(GainX/PainX), the `InpEnableRecovery` grid/basket block, and the risk-management
-toggles. Attach to any one synthetic chart; `OnTimer` drives the whole watchlist.
-No DLLs, ONNX or external files required.
+`InpUseNNFilter` / `InpNNThreshold`, `InpZEntry` (FlipX), the spike-engine block
+(`InpSpikeDirOnly`, `InpGrindEntryRSI`, `InpSpikeATRmult`, `InpPostSpikeCoolBars`,
+`InpBankOnSpike`), the `InpEnableRecovery` grid/basket block, and the
+risk-management toggles. `InpSpikeDirOnly=true` (default) restricts GainX to longs
+and PainX to shorts — the survivable skew; set it false only if you knowingly want
+to fade the grind on both sides. Attach to any one synthetic chart; `OnTimer`
+drives the whole watchlist. No DLLs, ONNX or external files required.
 
 ### `GoldPortfolioEA.mq5`
 Gold-anchored volatility-ranked M1 multi-symbol scalping system (FX / metals /
