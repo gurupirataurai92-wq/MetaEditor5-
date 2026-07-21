@@ -1,235 +1,332 @@
 //+------------------------------------------------------------------+
 //|                                   DerivBoom900GodmodeEA.mq5      |
-//|            "Godmode" spike-aware short-the-drift system          |
-//|                     for the Deriv Boom 900 Index                 |
+//|      "Godmode" v2 — index-arithmetic EV engine for Deriv         |
+//|      Boom 900 with GainX-style drift logic and FlipX-style       |
+//|      regime-flip handling. Runs on Boom/Crash/GainX/PainX/FlipX. |
 //+------------------------------------------------------------------+
 #property copyright "Quant Systems"
-#property version   "1.00"
-#property description "Godmode EA for Deriv's Boom 900 synthetic index. "
-#property description "Boom indices grind lower between rare, very large "
-#property description "upward spikes. This EA sells the drift with an "
-#property description "EMA/candle trend filter, detects spikes from raw "
-#property description "tick deltas to pause entries and trigger emergency "
-#property description "exits, trails profit as price drifts down, and "
-#property description "runs a tiered fixed-fractional risk engine sized "
-#property description "for very small accounts. No martingale/grid - lot "
-#property description "size never increases after a loss."
+#property version   "2.00"
+#property description "Statistical EA built on the arithmetic of spike-type "
+#property description "synthetic indices. Boom N produces ~1 adverse spike "
+#property description "per N ticks (memoryless), with per-tick drift d and "
+#property description "spike size S constructed so p*S ~= |d| (martingale "
+#property description "identity S ~= |d|*N). The EA measures p, d and S "
+#property description "live, solves for the hold length that maximizes "
+#property description "expected value after spread, and only trades while "
+#property description "that EV is positive - otherwise it stands down. "
+#property description "Direction is auto-detected from drift sign (GainX "
+#property description "trait) and a short-window flip detector exits or "
+#property description "reverses on regime change (FlipX trait). Fixed- "
+#property description "fractional risk only; no martingale, no grid. "
+#property description "NOTE: these indices are RNG-generated; no EA can "
+#property description "guarantee profits - this one trades the math and "
+#property description "refuses to trade when the math says the edge is gone."
 
 #include <Trade\Trade.mqh>
 
 //======================================================================
 // INPUT PARAMETERS
 //======================================================================
-input string InpSymbol              = "Boom 900 Index"; // exact name varies by broker; auto-detected if not found
-input long   MagicNumber            = 90020260719;
+input string InpSymbol              = "Boom 900 Index"; // broker naming varies; auto-detected/fallback to chart symbol
+input long   MagicNumber            = 90020260721;
+
+// --- Index arithmetic ---
+input int    SpikeEveryNTicks       = 900;    // the N of the index: Boom 900 -> 900, Boom 500 -> 500, etc.
+input int    StatWindowTicks        = 3000;   // rolling tick window for measuring p, d, S
+input double SpikeMultiplier        = 6.0;    // |tick delta| beyond avg*mult is classified as a spike
+input int    EvRecalcTicks          = 250;    // re-solve the EV plan every this many ticks
+input double MinEdgePriceUnits      = 0.0;    // extra EV hurdle (price units) on top of EV > 0
+input double MinDriftShare          = 0.10;   // |drift| must be at least this fraction of avg |tick| to trade
+
+// --- FlipX-style regime detection ---
+input int    FlipWindowTicks        = 150;    // short window for regime drift
+input double FlipConfirmFactor      = 0.60;   // short drift must oppose position by this fraction of |d|
+input bool   AllowReverseOnFlip     = true;   // after a flip exit, allow immediate entry the other way
+
+// --- Spike handling ---
+input int    SpikeCooldownSeconds   = 30;     // no new entries for this long after any spike
+input double SlSpikeFactor          = 1.25;   // SL distance = measured spike size * this factor
+input double TrailSpikeFactor       = 1.00;   // trail distance = spike size * this (tighter is pointless: spikes gap through)
 
 // --- Risk / account tiering (fixed-fractional only, no martingale) ---
-input double RiskPercent            = 1.0;    // % equity risked per trade (fallback / base tier)
-input double MinAccountUSD          = 2.0;    // below this effective balance, EA stays flat
+input double RiskPercent            = 1.0;    // % equity risked per trade (base tier)
+input double MinAccountUSD          = 2.0;    // below this balance, EA stays flat
 input double MaxAccountDrawdownPct  = 15.0;   // peak-to-equity DD -> hard halt, manual restart required
 input double MaxDailyDrawdownPct    = 8.0;    // balance DD since day-open -> entries blocked until next day
-input int    MaxConsecutiveLosses   = 4;      // trips a cooldown, does not change lot size
+input int    MaxConsecutiveLosses   = 4;      // trips a cooldown, never changes lot size
 input int    LossCooldownMinutes    = 60;
 
-// --- Spike detection (Boom spikes are large, sudden, one-tick upward jumps) ---
-input int    SpikeLookbackTicks     = 300;    // rolling window used for the "average tick move" baseline
-input double SpikeMultiplier        = 8.0;    // a tick jump beyond avg*mult is classified as a spike
-input int    SpikeCooldownSeconds   = 45;     // no new entries for this long after a spike
-input int    SpikeDueWarnTicks      = 650;    // heuristic caution zone as ticks-since-spike approaches ~900
-input double DueWindowRiskCutFactor = 0.5;    // risk multiplier applied while inside the caution zone
-input double EmergencyLossRMultiple = 2.5;    // if a spike fires while in a losing trade beyond this many R, close now
-
-// --- Trend filter (M1) ---
-input int    EmaFastPeriod          = 20;
-input int    EmaSlowPeriod          = 60;
-input int    TrendLookbackBars      = 5;
-
-// --- Stops / targets / trailing (ATR-based) ---
-input int    AtrPeriod              = 14;
-input double SlAtrMultiplier        = 3.0;    // wide by design - spikes are large, tight stops just get chopped
-input double TpAtrMultiplier        = 1.5;
-input double TrailAtrMultiplier     = 1.2;
+// --- Exits / execution ---
 input double BreakevenTriggerR      = 0.6;    // R-multiple profit that moves SL to breakeven
 input double BreakevenBufferPoints  = 5;
-input int    MaxHoldMinutes         = 240;    // force-exit stagnant trades
-
-// --- Execution filters ---
-input double MaxSpreadPoints        = 300;    // synthetic-index price scale differs from FX - tune on demo first
+input double TimeStopPlanFactor     = 1.5;    // force-exit after planTicks * factor ticks in trade
+input double MaxSpreadPoints        = 300;    // tune on demo; synthetic price scales differ per index
 input int    TradeDeviationPoints   = 20;
+
+//======================================================================
+// NAMED CONSTANTS
+//======================================================================
+#define WARMUP_FRACTION        0.5    // fraction of StatWindowTicks required before trading
+#define MIN_TICKS_FOR_SPIKES   200    // don't classify spikes until baseline has this many ticks
+#define EV_SEARCH_STEP         10     // hold-length search granularity (ticks)
+#define EV_SEARCH_MAX_MULT     3      // search hold lengths up to N * this
+#define DIR_WEIGHT_SHORT       0.65   // direction blend: weight on short-window drift (FlipX responsiveness)
+#define DIR_WEIGHT_LONG        0.35   // direction blend: weight on long-window drift (stability)
+#define STATS_PRINT_TICKS      1000   // telemetry print interval
 
 //======================================================================
 // GLOBALS
 //======================================================================
 CTrade   trade;
 string   g_symbol;
-int      g_hEmaFast = INVALID_HANDLE;
-int      g_hEmaSlow = INVALID_HANDLE;
-int      g_hAtr     = INVALID_HANDLE;
 
-// --- spike detection rolling buffer ---
-double   g_tickBuf[];
-int      g_tickBufIdx   = 0;
-int      g_tickBufCount = 0;
-double   g_tickBufSum   = 0.0;
-double   g_lastBid      = 0.0;
-bool     g_haveLastBid  = false;
+// --- rolling tick-delta window (signed deltas + spike flags) ---
+double   g_deltaBuf[];
+int      g_spikeFlagBuf[];
+int      g_head       = 0;
+int      g_count      = 0;
+double   g_sumSigned  = 0.0;   // sum of non-spike signed deltas
+double   g_sumAbs     = 0.0;   // sum of non-spike |deltas|
+int      g_nonSpikeCt = 0;
+int      g_spikeCt    = 0;
+double   g_sumSpikeMag = 0.0;
+
+// --- short (flip) window: non-spike signed deltas only ---
+double   g_flipBuf[];
+int      g_flipHead  = 0;
+int      g_flipCount = 0;
+double   g_flipSum   = 0.0;
+
+// --- measured statistics (refreshed by RecomputePlan) ---
+double   g_p       = 0.0;   // per-tick spike probability (Laplace-blended with the 1/N prior)
+double   g_drift   = 0.0;   // signed drift per tick (negative on Boom/PainX, positive on Crash/GainX)
+double   g_spikeSz = 0.0;   // avg spike magnitude (prior: |d| * N, the martingale identity)
+
+// --- EV plan ---
+int      g_planTicks = 0;    // EV-optimal hold length in ticks
+double   g_planEV    = -1.0; // expected value (price units) of that plan; <= 0 -> stand down
+double   g_tpDist    = 0.0;  // planTicks * |drift|
+
+int      g_ticksSinceRecalc = 0;
+int      g_ticksSinceStats  = 0;
+
+double   g_lastBid     = 0.0;
+bool     g_haveLastBid = false;
 datetime g_spikeCooldownUntil = 0;
-int      g_ticksSinceSpike    = 0;
 
 // --- open position tracking ---
-ulong    g_posTicket      = 0;
-double   g_posRiskAmt     = 0.0;
-double   g_posSlDistance  = 0.0;
-double   g_posEntryPrice  = 0.0;
+ulong    g_posTicket       = 0;
+int      g_posDir          = 0;     // +1 long, -1 short
+double   g_posRiskAmt      = 0.0;
+double   g_posSlDistance   = 0.0;
+double   g_posEntryPrice   = 0.0;
 bool     g_posBreakevenSet = false;
-datetime g_posOpenTime    = 0;
+long     g_posTicksHeld    = 0;
 
 // --- circuit breakers ---
-int      g_consecutiveLosses  = 0;
-datetime g_lossCooldownUntil  = 0;
-double   g_dayStartBalance    = 0.0;
-datetime g_currentDay         = 0;
-double   g_peakEquity         = 0.0;
-bool     g_haltedForDrawdown  = false;
+int      g_consecutiveLosses = 0;
+datetime g_lossCooldownUntil = 0;
+double   g_dayStartBalance   = 0.0;
+datetime g_currentDay        = 0;
+double   g_peakEquity        = 0.0;
+bool     g_haltedForDrawdown = false;
 
 //======================================================================
-// Symbol auto-detection (broker naming for synthetics varies, e.g.
-// "Boom 900 Index" vs "BOOM900" vs "Boom 900 Index_z")
+// Symbol resolution - broker naming for synthetics varies
 //======================================================================
-string FindBoomSymbol(string configured)
+string ResolveSymbol(string configured)
 {
-   if(SymbolSelect(configured, true)) return configured;
+   if(configured != "" && SymbolSelect(configured, true)) return configured;
 
+   // scan for a Boom symbol matching the configured N
+   string nStr = IntegerToString(SpikeEveryNTicks);
    int total = SymbolsTotal(false);
    for(int i = 0; i < total; i++)
    {
       string name = SymbolName(i, false);
       bool hasBoom = (StringFind(name, "Boom") >= 0 || StringFind(name, "BOOM") >= 0);
-      bool has900  = (StringFind(name, "900") >= 0);
-      if(hasBoom && has900 && SymbolSelect(name, true)) return name;
+      if(hasBoom && StringFind(name, nStr) >= 0 && SymbolSelect(name, true)) return name;
+   }
+
+   // fall back to the chart symbol - the stat engine is index-agnostic
+   if(SymbolSelect(_Symbol, true))
+   {
+      PrintFormat("WARN: \"%s\" not found; running on chart symbol %s. "
+                  "Set SpikeEveryNTicks to this index's N.", configured, _Symbol);
+      return _Symbol;
    }
    return "";
 }
 
-//======================================================================
-// OnInit / OnDeinit
-//======================================================================
-int OnInit()
+string ClassifySymbolByName(string name)
 {
-   g_symbol = FindBoomSymbol(InpSymbol);
-   if(g_symbol == "")
-   {
-      PrintFormat("ERROR: could not find/select a Boom 900 symbol (configured=\"%s\")", InpSymbol);
-      return INIT_FAILED;
-   }
-
-   trade.SetExpertMagicNumber((ulong)MagicNumber);
-   trade.SetDeviationInPoints(TradeDeviationPoints);
-
-   g_hEmaFast = iMA(g_symbol, PERIOD_M1, EmaFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
-   g_hEmaSlow = iMA(g_symbol, PERIOD_M1, EmaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
-   g_hAtr     = iATR(g_symbol, PERIOD_M1, AtrPeriod);
-   if(g_hEmaFast == INVALID_HANDLE || g_hEmaSlow == INVALID_HANDLE || g_hAtr == INVALID_HANDLE)
-   {
-      Print("ERROR: indicator handle creation failed");
-      return INIT_FAILED;
-   }
-
-   ArrayResize(g_tickBuf, SpikeLookbackTicks);
-   ArrayInitialize(g_tickBuf, 0.0);
-
-   g_dayStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   g_peakEquity       = AccountInfoDouble(ACCOUNT_EQUITY);
-
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-   dt.hour = 0; dt.min = 0; dt.sec = 0;
-   g_currentDay = StructToTime(dt);
-
-   PrintFormat("Godmode Boom900 EA initialized on %s", g_symbol);
-   return INIT_SUCCEEDED;
-}
-
-void OnDeinit(const int reason)
-{
-   if(g_hEmaFast != INVALID_HANDLE) IndicatorRelease(g_hEmaFast);
-   if(g_hEmaSlow != INVALID_HANDLE) IndicatorRelease(g_hEmaSlow);
-   if(g_hAtr     != INVALID_HANDLE) IndicatorRelease(g_hAtr);
+   if(StringFind(name, "Boom")  >= 0 || StringFind(name, "BOOM")  >= 0) return "Boom (expect down-drift, up-spikes -> short bias)";
+   if(StringFind(name, "Crash") >= 0 || StringFind(name, "CRASH") >= 0) return "Crash (expect up-drift, down-spikes -> long bias)";
+   if(StringFind(name, "GainX") >= 0 || StringFind(name, "Gain")  >= 0) return "GainX (expect up-drift -> long bias)";
+   if(StringFind(name, "PainX") >= 0 || StringFind(name, "Pain")  >= 0) return "PainX (expect down-drift -> short bias)";
+   if(StringFind(name, "FlipX") >= 0 || StringFind(name, "Flip")  >= 0) return "FlipX (regime-flipping -> adaptive direction)";
+   return "Unknown (direction will be measured from drift)";
 }
 
 //======================================================================
-// Spike detection - rolling average of |tick delta|, spike = an upward
-// jump many multiples of that average. Boom spikes are one-directional
-// (up), so only upward jumps are classified as spikes.
+// STATISTICS ENGINE
+// Every tick delta feeds the rolling window. Spikes are deltas far
+// outside the non-spike baseline. The window yields:
+//   p  = (spikes+1)/(ticks+N)      Laplace blend with the 1/N prior
+//   d  = mean non-spike delta      the drift the index grinds at
+//   S  = mean spike magnitude      prior |d|*N (martingale identity)
 //======================================================================
-bool UpdateSpikeDetection(double bid)
+bool FeedDelta(double delta, double &spikeSignedOut)
 {
-   if(!g_haveLastBid)
+   spikeSignedOut = 0.0;
+   double baseline = (g_nonSpikeCt > 0) ? g_sumAbs / g_nonSpikeCt : 0.0;
+   bool isSpike = (baseline > 0.0 && g_count >= MIN_TICKS_FOR_SPIKES &&
+                   MathAbs(delta) > baseline * SpikeMultiplier);
+
+   // evict oldest entry once the ring is full
+   if(g_count == StatWindowTicks)
    {
-      g_lastBid = bid;
-      g_haveLastBid = true;
-      return false;
+      double oldDelta = g_deltaBuf[g_head];
+      if(g_spikeFlagBuf[g_head] == 1)
+      {
+         g_spikeCt--;
+         g_sumSpikeMag -= MathAbs(oldDelta);
+      }
+      else
+      {
+         g_nonSpikeCt--;
+         g_sumSigned -= oldDelta;
+         g_sumAbs    -= MathAbs(oldDelta);
+      }
    }
+   else
+      g_count++;
 
-   double delta    = bid - g_lastBid;
-   double absDelta = MathAbs(delta);
-   g_lastBid = bid;
-
-   double avg = (g_tickBufCount > 0) ? g_tickBufSum / g_tickBufCount : 0.0;
-   bool isSpike = (avg > 0.0 && g_tickBufCount >= SpikeLookbackTicks && delta > avg * SpikeMultiplier);
-
-   g_tickBufSum -= g_tickBuf[g_tickBufIdx];
-   g_tickBuf[g_tickBufIdx] = absDelta;
-   g_tickBufSum += absDelta;
-   g_tickBufIdx = (g_tickBufIdx + 1) % SpikeLookbackTicks;
-   if(g_tickBufCount < SpikeLookbackTicks) g_tickBufCount++;
+   g_deltaBuf[g_head]     = delta;
+   g_spikeFlagBuf[g_head] = isSpike ? 1 : 0;
+   g_head = (g_head + 1) % StatWindowTicks;
 
    if(isSpike)
    {
-      g_spikeCooldownUntil = TimeCurrent() + SpikeCooldownSeconds;
-      g_ticksSinceSpike = 0;
-      PrintFormat("SPIKE detected [%s]: delta=%.5f avg=%.5f ratio=%.1fx", g_symbol, delta, avg, delta / avg);
+      g_spikeCt++;
+      g_sumSpikeMag += MathAbs(delta);
+      spikeSignedOut = delta;
    }
    else
    {
-      g_ticksSinceSpike++;
+      g_nonSpikeCt++;
+      g_sumSigned += delta;
+      g_sumAbs    += MathAbs(delta);
+
+      // short flip window takes non-spike deltas only
+      if(g_flipCount == FlipWindowTicks)
+         g_flipSum -= g_flipBuf[g_flipHead];
+      else
+         g_flipCount++;
+      g_flipBuf[g_flipHead] = delta;
+      g_flipSum += delta;
+      g_flipHead = (g_flipHead + 1) % FlipWindowTicks;
    }
+
+   g_ticksSinceRecalc++;
+   g_ticksSinceStats++;
    return isSpike;
 }
 
-bool IsInSpikeCooldown() { return TimeCurrent() < g_spikeCooldownUntil; }
-bool IsInDueWindow()     { return g_ticksSinceSpike >= SpikeDueWarnTicks; }
+double GetLongDrift()  { return (g_nonSpikeCt > 0) ? g_sumSigned / g_nonSpikeCt : 0.0; }
+double GetShortDrift() { return (g_flipCount  > 0) ? g_flipSum   / g_flipCount  : 0.0; }
+double GetAvgAbsTick() { return (g_nonSpikeCt > 0) ? g_sumAbs    / g_nonSpikeCt : 0.0; }
+bool   IsWarmedUp()    { return g_count >= (int)(StatWindowTicks * WARMUP_FRACTION); }
 
 //======================================================================
-// Trend filter - require EMA-fast below EMA-slow, net-down drift over
-// the lookback window, and a bearish confirming M1 candle.
+// EV PLAN
+// Holding a with-drift trade for n ticks, closing immediately if a
+// spike fires (loss ~ S + spread), taking n*|d| - spread otherwise:
+//   EV(n) = (1-p)^n * (n*|d| - spread) - (1 - (1-p)^n) * (S + spread)
+// Because spikes are memoryless, n is the only free variable - solve
+// for the n that maximizes EV. If even the best n is <= 0 after
+// costs, there is no trade to take and the EA stands down. This is
+// the entire "Godmode": trade only when the arithmetic is on-side.
 //======================================================================
-double GetAtrValue()
+void RecomputePlan()
 {
-   double buf[];
-   if(CopyBuffer(g_hAtr, 0, 0, 1, buf) != 1) return 0.0;
-   return buf[0];
+   g_ticksSinceRecalc = 0;
+   g_planEV    = -1.0;
+   g_planTicks = 0;
+   g_tpDist    = 0.0;
+   if(!IsWarmedUp()) return;
+
+   int totalTicks = g_nonSpikeCt + g_spikeCt;
+   g_p     = (g_spikeCt + 1.0) / (double)(totalTicks + SpikeEveryNTicks);
+   g_drift = GetLongDrift();
+   double absDrift = MathAbs(g_drift);
+   g_spikeSz = (g_spikeCt > 0) ? g_sumSpikeMag / g_spikeCt
+                                : absDrift * SpikeEveryNTicks; // S ~= |d|*N until spikes are observed
+
+   if(absDrift <= 0.0 || g_p <= 0.0 || g_p >= 1.0) return;
+
+   double spread = SymbolInfoDouble(g_symbol, SYMBOL_ASK) - SymbolInfoDouble(g_symbol, SYMBOL_BID);
+   double loss   = g_spikeSz + spread;
+   double q      = 1.0 - g_p;
+
+   double bestEV = -DBL_MAX;
+   int    bestN  = 0;
+   int    maxN   = SpikeEveryNTicks * EV_SEARCH_MAX_MULT;
+   for(int n = EV_SEARCH_STEP; n <= maxN; n += EV_SEARCH_STEP)
+   {
+      double qn = MathPow(q, n);
+      double ev = qn * (n * absDrift - spread) - (1.0 - qn) * loss;
+      if(ev > bestEV) { bestEV = ev; bestN = n; }
+   }
+
+   g_planEV    = bestEV;
+   g_planTicks = bestN;
+   g_tpDist    = bestN * absDrift;
 }
 
-bool IsDowntrendConfirmed()
+void PrintStatsIfDue()
 {
-   double fast[], slow[];
-   if(CopyBuffer(g_hEmaFast, 0, 0, 1, fast) != 1) return false;
-   if(CopyBuffer(g_hEmaSlow, 0, 0, 1, slow) != 1) return false;
-   if(fast[0] >= slow[0]) return false;
-
-   MqlRates r[];
-   ArraySetAsSeries(r, true);
-   if(CopyRates(g_symbol, PERIOD_M1, 0, TrendLookbackBars + 1, r) < TrendLookbackBars + 1) return false;
-
-   bool netDown    = r[1].close < r[TrendLookbackBars].close;
-   bool lastBearish = r[1].close < r[1].open;
-   return netDown && lastBearish;
+   if(g_ticksSinceStats < STATS_PRINT_TICKS) return;
+   g_ticksSinceStats = 0;
+   if(!IsWarmedUp()) return;
+   double absDrift = MathAbs(g_drift);
+   double impliedN = (absDrift > 0.0) ? g_spikeSz / absDrift : 0.0;
+   PrintFormat("[stats %s] p=%.5f (1 per %.0f ticks) drift/tick=%.5f spikeSize=%.5f impliedN=%.0f (config N=%d) | plan: hold=%d ticks tp=%.5f EV=%.5f %s",
+               g_symbol, g_p, (g_p > 0 ? 1.0 / g_p : 0), g_drift, g_spikeSz, impliedN,
+               SpikeEveryNTicks, g_planTicks, g_tpDist, g_planEV,
+               (g_planEV > MinEdgePriceUnits ? "TRADEABLE" : "STAND-DOWN"));
 }
 
 //======================================================================
-// Lot sizing - fixed-fractional, tiered by effective account balance.
-// No martingale: lot size never scales with prior losses.
+// DIRECTION (GainX/FlipX traits)
+// Direction is never hardcoded: it is the sign of a blend of long-
+// and short-window drift. Boom/PainX measure negative -> short;
+// Crash/GainX measure positive -> long; FlipX flips and the short-
+// weighted blend follows the new regime quickly.
+//======================================================================
+int GetTradeDirection()
+{
+   double blend = DIR_WEIGHT_SHORT * GetShortDrift() + DIR_WEIGHT_LONG * GetLongDrift();
+   double avgAbs = GetAvgAbsTick();
+   if(avgAbs <= 0.0) return 0;
+   if(MathAbs(blend) < avgAbs * MinDriftShare) return 0; // drift too weak vs noise - no edge to ride
+   return (blend > 0.0) ? 1 : -1;
+}
+
+// FlipX regime-flip: short-window drift firmly opposing the position
+bool RegimeFlippedAgainst(int posDir)
+{
+   double shortD = GetShortDrift();
+   double threshold = MathAbs(g_drift) * FlipConfirmFactor;
+   if(threshold <= 0.0) return false;
+   if(posDir > 0 && shortD < -threshold) return true;
+   if(posDir < 0 && shortD >  threshold) return true;
+   return false;
+}
+
+//======================================================================
+// LOT SIZING - fixed-fractional, tiered by balance. No martingale:
+// lot size never scales with prior losses.
 //======================================================================
 double GetPointValueMoney()
 {
@@ -242,8 +339,6 @@ double GetPointValueMoney()
 
 double GetTierRiskPercent(double effBalance)
 {
-   // Small accounts get a lighter fraction so a single bad exit can't
-   // wipe a $2-$10 balance; risk% ramps up only once there's a cushion.
    if(effBalance < MinAccountUSD) return 0.0;
    if(effBalance <= 9.99)         return MathMin(RiskPercent, 0.5);
    if(effBalance <= 49.99)        return MathMin(RiskPercent, 0.75);
@@ -252,7 +347,7 @@ double GetTierRiskPercent(double effBalance)
 
 double CalculateLotSize(double riskPct, double slDist, double &riskAmtOut)
 {
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
    double riskAmt = equity * (riskPct / 100.0);
    riskAmtOut = riskAmt;
 
@@ -260,8 +355,7 @@ double CalculateLotSize(double riskPct, double slDist, double &riskAmtOut)
    double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
    if(ptVal <= 0.0 || point <= 0.0 || slDist <= 0.0) return 0.0;
 
-   double rawLot = riskAmt / (slDist / point * ptVal);
-
+   double rawLot  = riskAmt / (slDist / point * ptVal);
    double minLot  = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
    double maxLot  = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_STEP);
@@ -272,153 +366,184 @@ double CalculateLotSize(double riskPct, double slDist, double &riskAmtOut)
    finalLot = MathMin(finalLot, maxLot);
 
    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-   double marginReq = 0.0;
-   if(OrderCalcMargin(ORDER_TYPE_SELL, g_symbol, finalLot, SymbolInfoDouble(g_symbol, SYMBOL_BID), marginReq))
-   {
+   double marginReq  = 0.0;
+   ENUM_ORDER_TYPE ot = (g_drift > 0.0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   double refPrice = (ot == ORDER_TYPE_BUY) ? SymbolInfoDouble(g_symbol, SYMBOL_ASK)
+                                             : SymbolInfoDouble(g_symbol, SYMBOL_BID);
+   if(OrderCalcMargin(ot, g_symbol, finalLot, refPrice, marginReq))
       if(marginReq > freeMargin * 0.5) return 0.0; // never overcommit margin on a small account
-   }
 
    if(finalLot < minLot) return 0.0;
    return finalLot;
 }
 
 //======================================================================
-// Entry
+// ENTRY
 //======================================================================
 bool CanEnterNewTrade()
 {
    if(g_posTicket != 0) return false;
    if(g_haltedForDrawdown) return false;
    if(TimeCurrent() < g_lossCooldownUntil) return false;
-   if(IsInSpikeCooldown()) return false;
-   if(g_tickBufCount < SpikeLookbackTicks) return false; // spike baseline not warmed up yet
+   if(TimeCurrent() < g_spikeCooldownUntil) return false;
+   if(!IsWarmedUp()) return false;
+   if(g_planEV <= MinEdgePriceUnits) return false; // the arithmetic says no edge -> stand down
 
    double spread = (double)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD);
    if(spread > MaxSpreadPoints) return false;
 
-   double effBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   if(effBalance < MinAccountUSD) return false;
-
+   if(AccountInfoDouble(ACCOUNT_BALANCE) < MinAccountUSD) return false;
    return true;
 }
 
 void TryEnter(const MqlTick &tick)
 {
    if(!CanEnterNewTrade()) return;
-   if(!IsDowntrendConfirmed()) return;
 
-   double atr = GetAtrValue();
-   if(atr <= 0.0) return;
+   int dir = GetTradeDirection();
+   if(dir == 0) return;
 
    double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
    double minStopDist = SymbolInfoInteger(g_symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
 
-   double slDist = MathMax(atr * SlAtrMultiplier, minStopDist);
-   double tpDist = MathMax(atr * TpAtrMultiplier, minStopDist);
-   if(slDist <= 0.0) return;
+   // SL sits beyond one measured spike: a stop inside spike range is
+   // guaranteed to be gapped through, which just converts the modeled
+   // spike loss into the same loss plus slippage.
+   double slDist = MathMax(g_spikeSz * SlSpikeFactor, minStopDist);
+   double tpDist = MathMax(g_tpDist, minStopDist);
+   if(slDist <= 0.0 || tpDist <= 0.0) return;
 
-   double effBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double riskPct = GetTierRiskPercent(effBalance);
+   double riskPct = GetTierRiskPercent(AccountInfoDouble(ACCOUNT_BALANCE));
    if(riskPct <= 0.0) return;
-   if(IsInDueWindow()) riskPct *= DueWindowRiskCutFactor; // heuristic caution, not a real prediction
 
    double riskAmt = 0.0;
    double lot = CalculateLotSize(riskPct, slDist, riskAmt);
    if(lot <= 0.0) return;
 
-   double price = tick.bid; // SELL executes at Bid
-   double sl = price + slDist;
-   double tp = price - tpDist;
-
-   if(!trade.Sell(lot, g_symbol, price, sl, tp, "Godmode-Boom900"))
+   bool ok;
+   double price;
+   if(dir > 0)
    {
-      PrintFormat("WARN: sell failed [%s] retcode=%d", g_symbol, trade.ResultRetcode());
+      price = tick.ask;
+      ok = trade.Buy(lot, g_symbol, price, price - slDist, price + tpDist, "Godmode-v2");
+   }
+   else
+   {
+      price = tick.bid;
+      ok = trade.Sell(lot, g_symbol, price, price + slDist, price - tpDist, "Godmode-v2");
+   }
+
+   if(!ok)
+   {
+      PrintFormat("WARN: order failed [%s] retcode=%d", g_symbol, trade.ResultRetcode());
       return;
    }
 
    g_posTicket       = trade.ResultOrder();
+   g_posDir          = dir;
    g_posRiskAmt      = riskAmt;
    g_posSlDistance   = slDist;
    g_posEntryPrice   = price;
    g_posBreakevenSet = false;
-   g_posOpenTime     = TimeCurrent();
+   g_posTicksHeld    = 0;
 
-   PrintFormat("ENTRY SELL [%s] lot=%.2f price=%.5f sl=%.5f tp=%.5f atr=%.5f risk%%=%.2f",
-               g_symbol, lot, price, sl, tp, atr, riskPct);
+   PrintFormat("ENTRY %s [%s] lot=%.2f price=%.5f slDist=%.5f tpDist=%.5f planHold=%d ticks planEV=%.5f",
+               dir > 0 ? "BUY" : "SELL", g_symbol, lot, price, slDist, tpDist, g_planTicks, g_planEV);
 }
 
 //======================================================================
-// Position management - breakeven, ATR trailing, time-stop.
-// SELL positions are triggered/closed against Ask, so trailing math
-// uses tick.ask to match what the broker will actually use.
+// POSITION MANAGEMENT
 //======================================================================
+void ClosePosition(string reason)
+{
+   if(g_posTicket == 0) return;
+   if(PositionSelectByTicket(g_posTicket))
+   {
+      trade.PositionClose(g_posTicket);
+      PrintFormat("EXIT [%s] (%s)", g_symbol, reason);
+   }
+   g_posTicket = 0;
+}
+
 void ManagePosition(const MqlTick &tick)
 {
    if(g_posTicket == 0) return;
    if(!PositionSelectByTicket(g_posTicket))
    {
-      g_posTicket = 0; // closed by SL/TP/manual - stats handled in OnTradeTransaction
+      g_posTicket = 0; // closed by SL/TP - stats handled in OnTradeTransaction
+      return;
+   }
+
+   g_posTicksHeld++;
+
+   // FlipX trait: regime turned against us - the EV model's drift
+   // assumption no longer holds, so the plan is void. Get out; a
+   // reversed entry is allowed on the next tick if enabled.
+   if(RegimeFlippedAgainst(g_posDir))
+   {
+      ClosePosition("regime flip");
+      if(!AllowReverseOnFlip)
+         g_spikeCooldownUntil = TimeCurrent() + SpikeCooldownSeconds;
+      return;
+   }
+
+   // Time(tick)-stop: the EV plan priced a hold of planTicks; well past
+   // that, realized drift has underperformed the model - stand aside.
+   if(g_planTicks > 0 && g_posTicksHeld > (long)(g_planTicks * TimeStopPlanFactor))
+   {
+      ClosePosition("plan tick budget exhausted");
       return;
    }
 
    double entry = PositionGetDouble(POSITION_PRICE_OPEN);
    double curSl = PositionGetDouble(POSITION_SL);
    double curTp = PositionGetDouble(POSITION_TP);
-   double price = tick.ask;
    double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
 
-   double profitDist = entry - price; // positive = favorable for a short
-   double rMultiple = (g_posSlDistance > 0.0) ? profitDist / g_posSlDistance : 0.0;
+   // close price for a long is bid, for a short is ask
+   double closePrice = (g_posDir > 0) ? tick.bid : tick.ask;
+   double profitDist = (g_posDir > 0) ? closePrice - entry : entry - closePrice;
+   double rMultiple  = (g_posSlDistance > 0.0) ? profitDist / g_posSlDistance : 0.0;
 
    if(!g_posBreakevenSet && rMultiple >= BreakevenTriggerR)
    {
-      double newSl = entry - BreakevenBufferPoints * point;
-      if(newSl < curSl && newSl > price)
+      double newSl = (g_posDir > 0) ? entry + BreakevenBufferPoints * point
+                                     : entry - BreakevenBufferPoints * point;
+      bool improves = (g_posDir > 0) ? (newSl > curSl && newSl < closePrice)
+                                      : (newSl < curSl && newSl > closePrice);
+      if(improves && trade.PositionModify(g_posTicket, newSl, curTp))
       {
-         if(trade.PositionModify(g_posTicket, newSl, curTp))
-         {
-            g_posBreakevenSet = true;
-            PrintFormat("Breakeven set [%s] sl=%.5f", g_symbol, newSl);
-         }
+         g_posBreakevenSet = true;
+         PrintFormat("Breakeven set [%s] sl=%.5f", g_symbol, newSl);
       }
    }
-   else if(g_posBreakevenSet)
+   else if(g_posBreakevenSet && g_spikeSz > 0.0)
    {
-      double atr = GetAtrValue();
-      if(atr > 0.0)
-      {
-         double trailDist = atr * TrailAtrMultiplier;
-         double candidateSl = price + trailDist;
-         if(candidateSl < curSl - point)
-            trade.PositionModify(g_posTicket, candidateSl, curTp);
-      }
-   }
-
-   if(MaxHoldMinutes > 0 && TimeCurrent() - g_posOpenTime > MaxHoldMinutes * 60)
-   {
-      trade.PositionClose(g_posTicket);
-      PrintFormat("Time-stop exit [%s] after %d minutes", g_symbol, MaxHoldMinutes);
+      double trailDist = g_spikeSz * TrailSpikeFactor;
+      double candidateSl = (g_posDir > 0) ? closePrice - trailDist : closePrice + trailDist;
+      bool improves = (g_posDir > 0) ? (candidateSl > curSl + point)
+                                      : (candidateSl < curSl - point);
+      if(improves)
+         trade.PositionModify(g_posTicket, candidateSl, curTp);
    }
 }
 
-// If a spike fires while sitting in a trade that's already deep in the
-// red, don't wait for the (deliberately wide) ATR stop - cut it now.
-void CheckEmergencyStopOnSpike()
+// A spike against the position IS the modeled loss event - the EV plan
+// priced exactly this outcome. Take it immediately instead of letting
+// post-spike noise decide whether it grows.
+void OnSpike(double spikeSignedDelta)
 {
-   if(g_posTicket == 0) return;
-   if(!PositionSelectByTicket(g_posTicket)) return;
-   if(g_posRiskAmt <= 0.0) return;
+   g_spikeCooldownUntil = TimeCurrent() + SpikeCooldownSeconds;
+   PrintFormat("SPIKE [%s] delta=%.5f (avg spike %.5f)", g_symbol, spikeSignedDelta, g_spikeSz);
 
-   double profit = PositionGetDouble(POSITION_PROFIT);
-   if(profit < -g_posRiskAmt * EmergencyLossRMultiple)
-   {
-      trade.PositionClose(g_posTicket);
-      PrintFormat("EMERGENCY spike close [%s] profit=%.2f", g_symbol, profit);
-   }
+   if(g_posTicket == 0) return;
+   int spikeDir = (spikeSignedDelta > 0.0) ? 1 : -1;
+   if(spikeDir != g_posDir)
+      ClosePosition("adverse spike - modeled loss taken");
 }
 
 //======================================================================
-// Circuit breakers
+// ACCOUNT GUARDS
 //======================================================================
 void CloseAllManaged(string reason)
 {
@@ -445,9 +570,8 @@ void UpdateDayRollover()
    {
       g_currentDay = today;
       g_dayStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-      // Daily-loss cooldown clears with the new day; account-level
-      // drawdown halt is intentionally NOT auto-cleared here - that's a
-      // hard stop requiring the operator to review and restart the EA.
+      // account-level drawdown halt is deliberately NOT auto-cleared -
+      // that hard stop requires the operator to review and restart
    }
 }
 
@@ -461,7 +585,8 @@ void UpdateAccountGuards()
    {
       g_haltedForDrawdown = true;
       CloseAllManaged("account drawdown guard");
-      PrintFormat("HALT: account drawdown %.2f%% >= cap %.2f%% - manual restart required", ddPct, MaxAccountDrawdownPct);
+      PrintFormat("HALT: account drawdown %.2f%% >= cap %.2f%% - manual restart required",
+                  ddPct, MaxAccountDrawdownPct);
    }
 
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -474,8 +599,8 @@ void UpdateAccountGuards()
 }
 
 //======================================================================
-// OnTradeTransaction - track realized results for the consecutive-loss
-// breaker. Lot size is never changed here (no martingale).
+// OnTradeTransaction - realized-result tracking for the consecutive-
+// loss breaker. Lot size is never changed here (no martingale).
 //======================================================================
 void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest &request, const MqlTradeResult &result)
 {
@@ -496,18 +621,83 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
       if(g_consecutiveLosses >= MaxConsecutiveLosses)
       {
          g_lossCooldownUntil = TimeCurrent() + LossCooldownMinutes * 60;
-         PrintFormat("Circuit breaker: %d consecutive losses -> cooldown %d min", g_consecutiveLosses, LossCooldownMinutes);
+         PrintFormat("Circuit breaker: %d consecutive losses -> cooldown %d min",
+                     g_consecutiveLosses, LossCooldownMinutes);
          g_consecutiveLosses = 0;
       }
    }
    else if(profit > 0.0)
-   {
       g_consecutiveLosses = 0;
-   }
 
    g_posTicket = 0;
    PrintFormat("Trade closed [%s] profit=%.2f", g_symbol, profit);
 }
+
+//======================================================================
+// OnInit / OnDeinit
+//======================================================================
+void WarmupFromTickHistory()
+{
+   MqlTick hist[];
+   int copied = CopyTicks(g_symbol, hist, COPY_TICKS_INFO, 0, StatWindowTicks + 500);
+   if(copied <= 1)
+   {
+      Print("Tick-history warmup unavailable - stats will build from live ticks");
+      return;
+   }
+   double dummy;
+   for(int i = 0; i < copied; i++)
+   {
+      if(hist[i].bid <= 0.0) continue;
+      if(!g_haveLastBid) { g_lastBid = hist[i].bid; g_haveLastBid = true; continue; }
+      double delta = hist[i].bid - g_lastBid;
+      g_lastBid = hist[i].bid;
+      if(delta != 0.0) FeedDelta(delta, dummy);
+   }
+   PrintFormat("Warmed up from %d historical ticks (%d in window, %d spikes)", copied, g_count, g_spikeCt);
+}
+
+int OnInit()
+{
+   if(SpikeEveryNTicks <= 0 || StatWindowTicks <= MIN_TICKS_FOR_SPIKES || FlipWindowTicks <= 0)
+   {
+      Print("ERROR: invalid window/N inputs");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+
+   g_symbol = ResolveSymbol(InpSymbol);
+   if(g_symbol == "")
+   {
+      PrintFormat("ERROR: could not resolve a tradeable symbol (configured=\"%s\")", InpSymbol);
+      return INIT_FAILED;
+   }
+
+   trade.SetExpertMagicNumber((ulong)MagicNumber);
+   trade.SetDeviationInPoints(TradeDeviationPoints);
+
+   ArrayResize(g_deltaBuf, StatWindowTicks);
+   ArrayResize(g_spikeFlagBuf, StatWindowTicks);
+   ArrayResize(g_flipBuf, FlipWindowTicks);
+   ArrayInitialize(g_deltaBuf, 0.0);
+   ArrayInitialize(g_spikeFlagBuf, 0);
+   ArrayInitialize(g_flipBuf, 0.0);
+
+   g_dayStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   g_peakEquity      = AccountInfoDouble(ACCOUNT_EQUITY);
+
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   dt.hour = 0; dt.min = 0; dt.sec = 0;
+   g_currentDay = StructToTime(dt);
+
+   PrintFormat("Godmode v2 initialized on %s | %s | N=%d", g_symbol, ClassifySymbolByName(g_symbol), SpikeEveryNTicks);
+
+   WarmupFromTickHistory();
+   RecomputePlan();
+   return INIT_SUCCEEDED;
+}
+
+void OnDeinit(const int reason) { }
 
 //======================================================================
 // OnTick
@@ -517,13 +707,29 @@ void OnTick()
    MqlTick tick;
    if(!SymbolInfoTick(g_symbol, tick)) return;
 
+   if(!g_haveLastBid)
+   {
+      g_lastBid = tick.bid;
+      g_haveLastBid = true;
+      return;
+   }
+
+   double delta = tick.bid - g_lastBid;
+   g_lastBid = tick.bid;
+
+   if(delta != 0.0)
+   {
+      double spikeSigned = 0.0;
+      if(FeedDelta(delta, spikeSigned))
+         OnSpike(spikeSigned);
+   }
+
    UpdateDayRollover();
-
-   bool spikeJustFired = UpdateSpikeDetection(tick.bid);
-   if(spikeJustFired) CheckEmergencyStopOnSpike();
-
    UpdateAccountGuards();
-   ManagePosition(tick);
 
+   if(g_ticksSinceRecalc >= EvRecalcTicks) RecomputePlan();
+   PrintStatsIfDue();
+
+   ManagePosition(tick);
    if(g_posTicket == 0) TryEnter(tick);
 }
