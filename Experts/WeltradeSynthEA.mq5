@@ -5,7 +5,7 @@
 //|          mean-reversion for FlipX. Native MQL5, no DLLs / ONNX.    |
 //+------------------------------------------------------------------+
 #property copyright "Quant Systems"
-#property version   "1.20"
+#property version   "1.30"
 #property description "Adaptive EA for Weltrade synthetic indices (GainX / PainX / FlipX)."
 #property description "Models their generation: GainX/PainX are spike indices (slow grind +"
 #property description "rare opposite spike), FlipX is a driftless volatility walk. Trades the"
@@ -84,6 +84,20 @@ input bool            InpAutoCalibrate    = true;
 input int             InpSpikeWarmupBars  = 300;         // bars observed before trusting calibration
 input int             InpMinSpikesForCal  = 5;           // need at least this many spikes to call a direction
 input double          InpSpikeDirDominance = 0.65;       // >= this fraction one-way = directional spike index
+
+// --- arithmetic EV engine (the generation formula, traded directly) ---
+// A spike index is built so N * grind ~= spike, i.e. EV ~ 0 minus costs. This
+// gate computes the MEASURED expected value of an entry - capturable spike
+// gain vs. grind bleed while holding plus spread - and trades only when the
+// broker's actual parameters leave positive EV on the table. FlipX fades are
+// gated on measured lag-1 return autocorrelation: fading pays only if returns
+// really mean-revert (negative autocorr); a pure random walk is stood aside.
+input bool            InpUseEVGate        = true;        // require measured EV > costs before any entry
+input double          InpSpikeCaptureFrac = 0.60;        // fraction of the avg spike magnitude we expect to capture
+input double          InpEVHoldFactor     = 0.50;        // fraction of the avg inter-spike interval we expect to hold (banking shortens it)
+input double          InpEVSafety         = 1.10;        // required edge multiple over (bleed + spread)
+input double          InpMinCycleFrac     = 0.30;        // skip early-cycle entries (right after a spike the full bleed is still ahead)
+input double          InpACGateMax        = -0.02;       // FlipX: lag-1 return autocorrelation must be below this to fade
 
 // --- FlipX mean-reversion engine ---
 input int             InpMeanPeriod       = 34;
@@ -216,6 +230,9 @@ struct SymbolConfig
    int              SpikeUpCount;
    int              SpikeDownCount;
    double           SpikeMagSumATR;     // sum of spike ranges in ATR units
+   double           GrindSumATR;        // signed sum of non-spike bar bodies (ATR units)
+   int              GrindBarCount;
+   double           GrindPerBarATR;     // avg signed grind per non-spike bar (ATR units)
    bool             Calibrated;
    double           AvgSpikeMagATR;
    double           AvgBarsBetweenSpikes;
@@ -397,6 +414,31 @@ double GetSpreadRatio(string symbol, double signalATR)
    return spread / signalATR;
 }
 
+// Lag-1 autocorrelation of close-to-close returns. Mean reversion in levels
+// implies NEGATIVE return autocorrelation; a pure random walk gives ~0. This is
+// the arithmetic test of whether a FlipX-style fade has anything to fade.
+double GetReturnAutocorr(string symbol, ENUM_TIMEFRAMES tf, int lookback)
+{
+   double c[];
+   ArraySetAsSeries(c, true);
+   int need = lookback + 2;
+   if(CopyClose(symbol, tf, 0, need, c) < need) return 0.0;
+
+   double r[];
+   ArrayResize(r, lookback + 1);
+   double mean = 0.0;
+   for(int i = 0; i <= lookback; i++) { r[i] = c[i] - c[i + 1]; mean += r[i]; }
+   mean /= (lookback + 1);
+
+   double num = 0.0, den = 0.0;
+   for(int i = 0; i < lookback; i++)
+      num += (r[i] - mean) * (r[i + 1] - mean);
+   for(int i = 0; i <= lookback; i++)
+      den += (r[i] - mean) * (r[i] - mean);
+   if(den <= 0.0) return 0.0;
+   return num / den;
+}
+
 // Lock a symbol's engine to what its spikes actually did over the warmup window.
 void CalibrateSymbol(int idx)
 {
@@ -405,6 +447,8 @@ void CalibrateSymbol(int idx)
                                ? g_cfg[idx].SpikeMagSumATR / g_cfg[idx].SpikeCount : 0.0;
    g_cfg[idx].AvgBarsBetweenSpikes = (g_cfg[idx].SpikeCount > 0)
                                ? (double)g_cfg[idx].BarsObserved / g_cfg[idx].SpikeCount : 0.0;
+   g_cfg[idx].GrindPerBarATR = (g_cfg[idx].GrindBarCount > 0)
+                               ? g_cfg[idx].GrindSumATR / g_cfg[idx].GrindBarCount : 0.0;
 
    int         prevBias = g_cfg[idx].DriftBias;
    ENUM_ENGINE prevEng  = g_cfg[idx].Engine;
@@ -422,12 +466,26 @@ void CalibrateSymbol(int idx)
    else { g_cfg[idx].DriftBias = 0; g_cfg[idx].Engine = ENGINE_MEANREV; }     // too few spikes -> volatility
 
    g_cfg[idx].Calibrated = true;
-   PrintFormat("Calibrated [%s]: obs=%d spikes=%d (up=%d dn=%d) avgMag=%.2fATR ~bars/spike=%.0f => %s spikeDir=%+d (name-guess was %s %+d)",
+   PrintFormat("Calibrated [%s]: obs=%d spikes=%d (up=%d dn=%d) avgMag=%.2fATR grind/bar=%+.4fATR ~bars/spike=%.0f => %s spikeDir=%+d (name-guess was %s %+d)",
                g_cfg[idx].Name, g_cfg[idx].BarsObserved, g_cfg[idx].SpikeCount,
                g_cfg[idx].SpikeUpCount, g_cfg[idx].SpikeDownCount, g_cfg[idx].AvgSpikeMagATR,
-               g_cfg[idx].AvgBarsBetweenSpikes,
+               g_cfg[idx].GrindPerBarATR, g_cfg[idx].AvgBarsBetweenSpikes,
                g_cfg[idx].Engine == ENGINE_TREND ? "SPIKE" : "MEANREV", g_cfg[idx].DriftBias,
                prevEng == ENGINE_TREND ? "SPIKE" : "MEANREV", prevBias);
+
+   // Report the measured EV per entry so the log shows whether this feed
+   // actually leaves an edge: capture*spike vs hold*grind + spread.
+   if(g_cfg[idx].Engine == ENGINE_TREND && g_cfg[idx].SpikeCount > 0)
+   {
+      double atr = GetATR(g_cfg[idx].Name, InpSignalTF, ATR_PERIOD);
+      double spread = SymbolInfoInteger(g_cfg[idx].Name, SYMBOL_SPREAD) * g_cfg[idx].PointValue;
+      double expGain  = g_cfg[idx].AvgSpikeMagATR * atr * InpSpikeCaptureFrac;
+      double expBleed = MathAbs(g_cfg[idx].GrindPerBarATR) * atr
+                        * g_cfg[idx].AvgBarsBetweenSpikes * InpEVHoldFactor;
+      PrintFormat("  EV [%s]: expGain=%.5f expBleed=%.5f spread=%.5f -> net=%.5f (%s)",
+                  g_cfg[idx].Name, expGain, expBleed, spread, expGain - expBleed - spread,
+                  (expGain > (expBleed + spread) * InpEVSafety) ? "TRADEABLE" : "gate will block");
+   }
 }
 
 // Flag a spike on the last CLOSED bar (range dwarfs ATR), accumulate the
@@ -451,6 +509,13 @@ void UpdateSpikeState(int idx)
       g_cfg[idx].SpikeCount++;
       if(sd > 0) g_cfg[idx].SpikeUpCount++; else g_cfg[idx].SpikeDownCount++;
       g_cfg[idx].SpikeMagSumATR += range / atr;
+   }
+   else
+   {
+      // Non-spike bar = grind: its signed body measures the per-bar bleed the
+      // EV gate charges against holding for the next spike.
+      g_cfg[idx].GrindSumATR += (r[1].close - r[1].open) / atr;
+      g_cfg[idx].GrindBarCount++;
    }
 
    if(InpAutoCalibrate && !g_cfg[idx].Calibrated &&
@@ -912,8 +977,32 @@ bool BuildSignal(int idx, int &dir, double &slDist, double &tpDist,
          else      { if(rsi < overbought) return false; dir = -1; }
       }
 
+      // --- Arithmetic EV gate (calibrated spike symbols) ------------------
+      // Per entry: EV = capture*avgSpike - holdFrac*avgBarsBetween*|grind| - spread.
+      // A perfectly built index nets ~0 minus costs, so this passes only when
+      // the feed's measured parameters actually leave an edge. cycleFrac skips
+      // the bars right after a spike, when the full bleed is still ahead.
+      if(InpUseEVGate && g_cfg[idx].Calibrated && g_cfg[idx].DriftBias != 0 &&
+         g_cfg[idx].SpikeCount > 0)
+      {
+         double cycleFrac = (g_cfg[idx].AvgBarsBetweenSpikes > 0.0)
+                            ? (double)BarsSinceSpike(idx) / g_cfg[idx].AvgBarsBetweenSpikes : 1.0;
+         if(cycleFrac < InpMinCycleFrac) return false;
+
+         double spreadPx = SymbolInfoInteger(sym, SYMBOL_SPREAD) * g_cfg[idx].PointValue;
+         double expGain  = g_cfg[idx].AvgSpikeMagATR * atr * InpSpikeCaptureFrac;
+         double expBleed = MathAbs(g_cfg[idx].GrindPerBarATR) * atr
+                           * g_cfg[idx].AvgBarsBetweenSpikes * InpEVHoldFactor;
+         if(expGain < (expBleed + spreadPx) * InpEVSafety) return false;
+      }
+
       slDist = MathMax(atr * InpSL_ATR_Mult, SL_MIN_POINTS * g_cfg[idx].PointValue);
-      tpDist = (InpTrendTP_R > 0.0) ? slDist * InpTrendTP_R : 0.0; // 0 => trail/basket only
+      // TP from the measured average spike, not a generic R-multiple, once we
+      // know this symbol's real spike magnitude.
+      if(g_cfg[idx].Calibrated && g_cfg[idx].DriftBias != 0 && g_cfg[idx].AvgSpikeMagATR > 0.0)
+         tpDist = g_cfg[idx].AvgSpikeMagATR * atr * InpSpikeCaptureFrac;
+      else
+         tpDist = (InpTrendTP_R > 0.0) ? slDist * InpTrendTP_R : 0.0; // 0 => trail/basket only
 
       double price = SymbolInfoDouble(sym, SYMBOL_BID);
       f0 = (double)spikeDir;                              // structural skew side
@@ -926,6 +1015,16 @@ bool BuildSignal(int idx, int &dir, double &slDist, double &tpDist,
    else
    {
       // ---- FlipX : z-score mean-reversion fader ----
+      // Structure gate: level mean reversion implies NEGATIVE lag-1 return
+      // autocorrelation. A pure random walk measures ~0 and offers nothing to
+      // fade - paying spread on zero-EV trades is the only guaranteed loser,
+      // so we stand aside unless the data shows real reversion.
+      if(InpUseEVGate)
+      {
+         double ac = GetReturnAutocorr(sym, InpSignalTF, MathMin(InpMeanPeriod * 3, 120));
+         if(ac > InpACGateMax) return false;
+      }
+
       double mean = GetSMA(sym, InpSignalTF, InpMeanPeriod);
       if(mean <= 0.0) return false;
       double sd = GetStdDev(sym, InpSignalTF, InpMeanPeriod, mean);
@@ -1592,6 +1691,11 @@ int OnInit()
                   InpSpikeWarmupBars);
    else
       Print("Auto-calibration OFF: engines fixed by symbol name");
+   if(InpUseEVGate)
+      PrintFormat("EV gate ON: spike entries need capture(%.2f)*avgSpike > holdFrac(%.2f)*bleed + spread, x%.2f margin; FlipX fades need lag-1 autocorr <= %.3f",
+                  InpSpikeCaptureFrac, InpEVHoldFactor, InpEVSafety, InpACGateMax);
+   else
+      Print("EV gate OFF: entries rely on triggers + NN filter only");
    Print("===============================================");
    return INIT_SUCCEEDED;
 }

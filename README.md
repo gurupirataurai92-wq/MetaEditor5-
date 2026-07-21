@@ -40,6 +40,24 @@ So if your broker's GainX actually spikes the other way, or a "FlipX" turns out 
 drift, the EA corrects itself instead of trusting the label — and it logs the
 verdict (`Calibrated [SYMBOL]: … => SPIKE spikeDir=+1 (name-guess was …)`).
 
+**Arithmetic EV engine (`InpUseEVGate`, on by default).** The generation formula
+`N × grind ≈ spike` is traded *directly*: after calibration the EA knows each
+symbol's average spike magnitude, average bars between spikes and average grind
+per bar, and computes the measured expected value of every entry —
+
+```
+EV = capture% × avgSpike  −  hold% × avgBarsBetween × |grind/bar|  −  spread
+```
+
+Entries fire **only when EV clears costs by `InpEVSafety`**; the spike TP is
+sized from the *measured* average spike (`InpSpikeCaptureFrac`), and early-cycle
+entries right after a spike are skipped (`InpMinCycleFrac`). FlipX fades get the
+mirror-image test: level mean-reversion implies **negative lag-1 return
+autocorrelation**, so the EA measures it and only fades when it is really there
+(`InpACGateMax`) — a pure random walk is stood aside instead of paying spread on
+zero-EV trades. The calibration log prints each symbol's EV verdict
+(`TRADEABLE` / `gate will block`).
+
 **Why this is the profitable-by-design choice, honestly stated:** a correctly
 specified synthetic is ~**zero expectancy** — no directional rule creates a real
 edge, and fading a FlipX random walk is zero-E minus spread. So the EA does not
