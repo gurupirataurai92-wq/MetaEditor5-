@@ -5,7 +5,7 @@
 //|          mean-reversion for FlipX. Native MQL5, no DLLs / ONNX.    |
 //+------------------------------------------------------------------+
 #property copyright "Quant Systems"
-#property version   "1.10"
+#property version   "1.20"
 #property description "Adaptive EA for Weltrade synthetic indices (GainX / PainX / FlipX)."
 #property description "Models their generation: GainX/PainX are spike indices (slow grind +"
 #property description "rare opposite spike), FlipX is a driftless volatility walk. Trades the"
@@ -32,8 +32,9 @@
 //
 // Design doctrine (OODA):
 //   OBSERVE  - per-symbol ATR, EMA/StdDev/RSI, drift bias, spread ratio, spikes.
-//   ORIENT   - classify the instrument (GainX / PainX / FlipX / generic); pick
-//              the engine and the skew-favourable side that suit that entity.
+//   ORIENT   - classify by name as a prior, then SELF-CALIBRATE: measure each
+//              symbol's real spike direction/frequency/magnitude and re-lock the
+//              engine and skew-favourable side to what the data actually shows.
 //   DECIDE   - grind-extreme / mean-reversion trigger AND (optional) NN gate.
 //   ACT      - size by tier + risk%, execute, then manage with basket recovery
 //              (spike-aware) or partial / breakeven / trailing, plus circuit
@@ -73,6 +74,16 @@ input int             InpGrindEntryRSI    = 35;          // enter on grind pullb
 input double          InpSpikeATRmult     = 3.0;         // a bar whose range exceeds this * ATR is flagged a spike
 input int             InpPostSpikeCoolBars = 3;          // do not chase for this many bars after a spike
 input bool            InpBankOnSpike      = true;        // close a green basket immediately when a favourable spike prints
+
+// --- self-calibration: learn each synthetic's real spike behaviour ---
+// The name is only the initial guess. Over a warmup window the EA measures each
+// symbol's actual spike direction, frequency and magnitude, then locks the
+// engine to what the data shows: a dominant spike side -> spike engine on that
+// side; no reliable spike side -> FlipX-style mean reversion.
+input bool            InpAutoCalibrate    = true;
+input int             InpSpikeWarmupBars  = 300;         // bars observed before trusting calibration
+input int             InpMinSpikesForCal  = 5;           // need at least this many spikes to call a direction
+input double          InpSpikeDirDominance = 0.65;       // >= this fraction one-way = directional spike index
 
 // --- FlipX mean-reversion engine ---
 input int             InpMeanPeriod       = 34;
@@ -198,6 +209,16 @@ struct SymbolConfig
    // spike tracking (GainX/PainX)
    datetime         LastSpikeBarTime;
    int              LastSpikeDir;       // +1 up-spike, -1 down-spike
+
+   // self-calibration statistics
+   int              BarsObserved;
+   int              SpikeCount;
+   int              SpikeUpCount;
+   int              SpikeDownCount;
+   double           SpikeMagSumATR;     // sum of spike ranges in ATR units
+   bool             Calibrated;
+   double           AvgSpikeMagATR;
+   double           AvgBarsBetweenSpikes;
 
    // bookkeeping
    int              TotalTrades;
@@ -376,8 +397,41 @@ double GetSpreadRatio(string symbol, double signalATR)
    return spread / signalATR;
 }
 
-// Flag a spike on the last CLOSED bar: a bar whose range dwarfs ATR. On spike
-// indices this marks the rare large move; its direction is the spike side.
+// Lock a symbol's engine to what its spikes actually did over the warmup window.
+void CalibrateSymbol(int idx)
+{
+   int tot = g_cfg[idx].SpikeUpCount + g_cfg[idx].SpikeDownCount;
+   g_cfg[idx].AvgSpikeMagATR = (g_cfg[idx].SpikeCount > 0)
+                               ? g_cfg[idx].SpikeMagSumATR / g_cfg[idx].SpikeCount : 0.0;
+   g_cfg[idx].AvgBarsBetweenSpikes = (g_cfg[idx].SpikeCount > 0)
+                               ? (double)g_cfg[idx].BarsObserved / g_cfg[idx].SpikeCount : 0.0;
+
+   int         prevBias = g_cfg[idx].DriftBias;
+   ENUM_ENGINE prevEng  = g_cfg[idx].Engine;
+
+   if(tot >= InpMinSpikesForCal)
+   {
+      double dom = (double)MathMax(g_cfg[idx].SpikeUpCount, g_cfg[idx].SpikeDownCount) / tot;
+      if(dom >= InpSpikeDirDominance)
+      {
+         g_cfg[idx].DriftBias = (g_cfg[idx].SpikeUpCount > g_cfg[idx].SpikeDownCount) ? 1 : -1;
+         g_cfg[idx].Engine    = ENGINE_TREND;   // directional spike index
+      }
+      else { g_cfg[idx].DriftBias = 0; g_cfg[idx].Engine = ENGINE_MEANREV; } // symmetric -> volatility
+   }
+   else { g_cfg[idx].DriftBias = 0; g_cfg[idx].Engine = ENGINE_MEANREV; }     // too few spikes -> volatility
+
+   g_cfg[idx].Calibrated = true;
+   PrintFormat("Calibrated [%s]: obs=%d spikes=%d (up=%d dn=%d) avgMag=%.2fATR ~bars/spike=%.0f => %s spikeDir=%+d (name-guess was %s %+d)",
+               g_cfg[idx].Name, g_cfg[idx].BarsObserved, g_cfg[idx].SpikeCount,
+               g_cfg[idx].SpikeUpCount, g_cfg[idx].SpikeDownCount, g_cfg[idx].AvgSpikeMagATR,
+               g_cfg[idx].AvgBarsBetweenSpikes,
+               g_cfg[idx].Engine == ENGINE_TREND ? "SPIKE" : "MEANREV", g_cfg[idx].DriftBias,
+               prevEng == ENGINE_TREND ? "SPIKE" : "MEANREV", prevBias);
+}
+
+// Flag a spike on the last CLOSED bar (range dwarfs ATR), accumulate the
+// direction/magnitude statistics, and calibrate once the warmup window is met.
 void UpdateSpikeState(int idx)
 {
    string sym = g_cfg[idx].Name;
@@ -386,12 +440,22 @@ void UpdateSpikeState(int idx)
    MqlRates r[];
    ArraySetAsSeries(r, true);
    if(CopyRates(sym, InpSignalTF, 0, 2, r) < 2) return;
+
+   g_cfg[idx].BarsObserved++;
    double range = r[1].high - r[1].low;
    if(range > atr * InpSpikeATRmult)
    {
+      int sd = (r[1].close >= r[1].open) ? 1 : -1;
       g_cfg[idx].LastSpikeBarTime = r[1].time;
-      g_cfg[idx].LastSpikeDir = (r[1].close >= r[1].open) ? 1 : -1;
+      g_cfg[idx].LastSpikeDir     = sd;
+      g_cfg[idx].SpikeCount++;
+      if(sd > 0) g_cfg[idx].SpikeUpCount++; else g_cfg[idx].SpikeDownCount++;
+      g_cfg[idx].SpikeMagSumATR += range / atr;
    }
+
+   if(InpAutoCalibrate && !g_cfg[idx].Calibrated &&
+      g_cfg[idx].BarsObserved >= InpSpikeWarmupBars && !HasOpenPosition(idx))
+      CalibrateSymbol(idx);
 }
 
 // Bars elapsed since the last detected spike (huge if none yet).
@@ -1146,8 +1210,9 @@ void ProcessSymbol(int idx)
    if(bt == 0 || bt == g_cfg[idx].LastBarTime) return;
    g_cfg[idx].LastBarTime = bt;
 
-   // Refresh spike state every bar (needed by open baskets too, before any early return).
-   if(g_cfg[idx].DriftBias != 0) UpdateSpikeState(idx);
+   // Observe spikes & self-calibrate every bar, for every symbol (FlipX included),
+   // before any early return - open baskets and calibration both depend on it.
+   UpdateSpikeState(idx);
 
    if(g_ddKillSwitch) return;
    if(g_portfolioRiskBlocked) return;
@@ -1522,6 +1587,11 @@ int OnInit()
                   g_cfg[i].DriftBias, g_cfg[i].IndexMagnitude,
                   g_cfg[i].Available ? "OK" : "UNAVAILABLE");
    PrintFormat("Symbols available: %d / %d | 24/7 (no session/news gating)", available, g_symbolCount);
+   if(InpAutoCalibrate)
+      PrintFormat("Auto-calibration ON: name is the prior; each symbol re-locks its engine after %d bars of observed spikes",
+                  InpSpikeWarmupBars);
+   else
+      Print("Auto-calibration OFF: engines fixed by symbol name");
    Print("===============================================");
    return INIT_SUCCEEDED;
 }

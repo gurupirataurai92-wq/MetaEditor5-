@@ -27,6 +27,19 @@ RNG tick series, not real markets):
 | **FlipX** | driftless random walk | **z-score mean-reversion** fade around the mean |
 | *other*  | unknown synthetic | generic EMA trend + grind entry |
 
+**Self-calibration (`InpAutoCalibrate`, on by default).** The name is only the
+*initial guess*. For the first `InpSpikeWarmupBars` bars the EA observes every
+symbol and measures its **actual** spike direction, frequency (`~bars/spike`) and
+magnitude (`avgMag × ATR`). It then locks each engine to what the data shows:
+
+* a dominant spike side (≥ `InpSpikeDirDominance` of spikes one way, with at least
+  `InpMinSpikesForCal` spikes) → **spike engine** on that measured side;
+* no reliable spike side → **FlipX-style mean reversion**.
+
+So if your broker's GainX actually spikes the other way, or a "FlipX" turns out to
+drift, the EA corrects itself instead of trusting the label — and it logs the
+verdict (`Calibrated [SYMBOL]: … => SPIKE spikeDir=+1 (name-guess was …)`).
+
 **Why this is the profitable-by-design choice, honestly stated:** a correctly
 specified synthetic is ~**zero expectancy** — no directional rule creates a real
 edge, and fading a FlipX random walk is zero-E minus spread. So the EA does not
