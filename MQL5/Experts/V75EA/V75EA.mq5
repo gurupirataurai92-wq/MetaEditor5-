@@ -14,11 +14,12 @@
 //|  push notifications — all under the same hard risk rails.        |
 //+------------------------------------------------------------------+
 #property copyright "V75EA"
-#property version   "4.00"
+#property version   "5.00"
 #property strict
 
 #include <V75EA\Types.mqh>
 #include <V75EA\VolatilityMath.mqh>
+#include <V75EA\EdgeModel.mqh>
 #include <V75EA\RegimeDetector.mqh>
 #include <V75EA\MarketStructure.mqh>
 #include <V75EA\MomentumEngine.mqh>
@@ -53,6 +54,12 @@ input int             InpSigmaHorizonBars  = 10;     // horizon for sigma stop /
 input double          InpSigmaStopK        = 1.0;    // stop at k theoretical sigmas
 input int             InpRealizedVolBars   = 30;     // window for realized-vol estimate
 input double          InpMinVolRatio       = 0.60;   // skip dead markets (realized << theoretical)
+
+//--- Edge model (expected-value gate)
+input bool            InpUseEvGate         = true;   // only trade measured positive EV after spread
+input int             InpEdgeLookback      = 100;    // bars for drift/persistence estimation
+input double          InpDriftTStat        = 2.0;    // t-stat needed before drift is credited
+input double          InpMinEvR            = 0.05;   // minimum expected value in R to trade
 
 //--- Indicator periods
 input int    InpEmaFast            = 20;
@@ -128,6 +135,7 @@ input bool   InpShowDashboard       = true;
 input bool   InpUseNotifications    = false;  // requires MetaQuotes ID in MT5 settings
 
 CVolatilityMath     g_vol;
+CEdgeModel          g_edge;
 CRegimeDetector     g_regime;
 CMarketStructure    g_structure;
 CMomentumEngine     g_momentum;
@@ -146,11 +154,13 @@ datetime    g_lastBarTime   = 0;
 ENUM_REGIME g_regimeAtEntry = REGIME_RANGE;
 bool        g_paused        = false;
 double      g_lastConfidence = 0.0;
+double      g_lastEvR        = 0.0;
 
 //+------------------------------------------------------------------+
 int OnInit()
   {
    g_vol.Init(_Symbol, InpTimeframe, InpAnnualVolPercent);
+   g_edge.Init(_Symbol, InpTimeframe, InpEdgeLookback, InpDriftTStat);
 
    if(!g_regime.Init(_Symbol, InpTimeframe, InpAdxPeriod, InpAdxTrendThreshold, InpAdxStrongThreshold,
                      InpEmaFast, InpEmaSlow, InpAtrPeriod, InpBandsPeriod, InpBandsDeviation,
@@ -282,9 +292,25 @@ void OnTick()
       tpDistance = slDistance * rr;
      }
 
-   //--- log the first-passage touch odds so the risk geometry is explicit
-   double pStop = g_vol.ProbTouch(slDistance, InpSigmaHorizonBars);
-   double pTgt  = g_vol.ProbTouch(tpDistance, InpSigmaHorizonBars);
+   //--- ARITHMETIC GATE: measured expected value in R, net of spread.
+   //    Driftless GBM gives EV = -spread for ANY geometry; this only passes when
+   //    the live series shows statistically real drift in the trade's direction.
+   int    dir         = (decision.signal == SIGNAL_BUY) ? 1 : -1;
+   double spreadPrice = (double)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD)
+                        * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double evR = g_edge.ExpectedValueR(dir, slDistance, tpDistance, spreadPrice);
+   g_lastEvR  = evR;
+   if(InpUseEvGate && evR < InpMinEvR)
+     {
+      static datetime lastEvLog = 0;
+      if(TimeCurrent() - lastEvLog > 300) // log at most every 5 minutes
+        {
+         PrintFormat("V75EA: EV gate blocked %s (EV=%.3fR < %.2fR) — no measurable edge after spread.",
+                     (dir == 1 ? "BUY" : "SELL"), evR, InpMinEvR);
+         lastEvLog = TimeCurrent();
+        }
+      return;
+     }
 
    //--- risk request = base * OODA multiplier * recovery multiplier (all hard-capped)
    double effRisk = decision.riskPercent * g_recovery.Multiplier();
@@ -294,9 +320,11 @@ void OnTick()
    if(g_trades.OpenTrade(decision.signal, lots, slDistance, tpDistance))
      {
       g_regimeAtEntry = obs.regime;
-      string msg = StringFormat("V75EA %s lots=%.2f conf=%.2f volR=%.2f pStop=%.2f pTgt=%.2f | %s",
+      double tstat = 0.0, ac1 = 0.0, vr = 1.0;
+      g_edge.Diagnostics(tstat, ac1, vr, 5);
+      string msg = StringFormat("V75EA %s lots=%.2f conf=%.2f volR=%.2f EV=%.3fR t=%.2f ac1=%.2f VR5=%.2f | %s",
                                 (decision.signal == SIGNAL_BUY ? "BUY" : "SELL"),
-                                lots, decision.confidence, volRatio, pStop, pTgt, decision.reason);
+                                lots, decision.confidence, volRatio, evR, tstat, ac1, vr, decision.reason);
       Print(msg);
       Notify(msg);
      }
@@ -366,7 +394,8 @@ void UpdateDashboard(const SObservation &obs)
    st.dailyPnlPercent = g_safety.DailyPnlPercent();
    st.equity          = AccountInfoDouble(ACCOUNT_EQUITY);
    st.balance         = AccountInfoDouble(ACCOUNT_BALANCE);
-   st.status          = g_safety.IsHalted() ? "HALTED" : "SCANNING";
+   st.status          = g_safety.IsHalted() ? "HALTED"
+                        : StringFormat("SCAN  EV %+.2fR", g_lastEvR);
    g_dashboard.Update(st);
   }
 

@@ -22,6 +22,7 @@ MQL5/
   Include/V75EA/
     Types.mqh                        Shared enums/structs (ENUM_SIGNAL, dashboard state)
     VolatilityMath.mqh               V75 arithmetic: sigma, vol ratio, touch prob
+    EdgeModel.mqh                    Live expected-value gate (gambler's-ruin math)
     RegimeDetector.mqh               7-way market regime classification
     MultiTimeframe.mqh               Higher-timeframe directional bias (M15 + H1)
     MarketStructure.mqh              Swing points, HH/HL vs LH/LL, BOS / CHoCH, S&R
@@ -60,6 +61,30 @@ beats break-even — first-passage odds exactly offset the payoff ratio, and spr
 makes it negative. So the EA does **not** bet on price direction from geometry; it
 trades the *deviations from randomness* (vol clustering + trend persistence) that the
 confluence stack measures, and uses the math to size risk honestly.
+
+## The expected-value gate (`EdgeModel.mqh`)
+
+The strongest consequence of the arithmetic, made executable. For barriers at
++TP / −SL around entry:
+
+- **Driftless case**: `P(hit TP first) = SL/(SL+TP)` ⇒ `EV = 0` before spread,
+  negative after. Exactly zero, for every geometry, always.
+- **With drift μ** (two-barrier hitting probability, gambler's-ruin form):
+  `θ = 2μ/σ²`, `P_win = (1 − e^{θ·SL}) / (e^{−θ·TP} − e^{θ·SL})` — which collapses
+  to `SL/(SL+TP)` as μ→0.
+
+Before every entry the EdgeModel estimates drift from the last `InpEdgeLookback`
+bars of log-returns, **credits it only if its t-statistic ≥ `InpDriftTStat`**
+(otherwise drift is treated as zero — no trading on noise), computes
+`EV = P_win·RR − (1−P_win) − spread/SL` in R-multiples, and the EA refuses the
+trade unless `EV ≥ InpMinEvR`. Diagnostics (drift t-stat, lag-1 autocorrelation,
+variance ratio) are logged on every entry and the live EV shows on the dashboard.
+
+What this means honestly: **if V75's generator is truly memoryless, this EA's
+correct behavior is to trade rarely or not at all** — refusing negative-EV bets
+*is* the edge over participants who donate spread to randomness. It profits only
+when measurable, statistically significant deviations exist; it cannot conjure
+profit from pure noise, and neither can any other EA.
 
 ## "Godmode"-style traits
 
