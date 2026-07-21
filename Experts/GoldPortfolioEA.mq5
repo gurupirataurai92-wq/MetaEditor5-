@@ -11,7 +11,10 @@
 #property description "across the configured watchlist. Native MQL5 "
 #property description "neural-net signal filter, SQLite trade logging, "
 #property description "tiered risk sizing, and multi-layer circuit "
-#property description "breakers. No external files, DLLs, or ONNX."
+#property description "breakers. BTCUSD Godmode confluence module: "
+#property description "EMA trend bias, RSI+MACD momentum, volume "
+#property description "participation, ATR-multiple exits, and a daily "
+#property description "loss kill switch. No external files, DLLs, or ONNX."
 
 #include <Trade\Trade.mqh>
 
@@ -39,6 +42,25 @@ input double LearningRate       = 0.01;
 input int    RankIntervalMins   = 15;
 input double PyramidL1Mult      = 0.50;
 input double PyramidL2Mult      = 0.25;
+
+// --- Godmode confluence module (arithmetic ported from PineScripts/BTCUSD_Godmode_Strategy.pine)
+input bool            EnableGodmode        = true;      // extra EMA/RSI/MACD confluence gate for the Godmode symbol
+input string          GodmodeSymbol        = "BTCUSD";
+input ENUM_TIMEFRAMES GodmodeTimeframe     = PERIOD_M15;
+input int             GodmodeEmaFast       = 21;
+input int             GodmodeEmaSlow       = 55;
+input int             GodmodeEmaMacro      = 200;
+input int             GodmodeRsiPeriod     = 14;
+input double          GodmodeRsiOverbought = 70.0;
+input double          GodmodeRsiOversold   = 30.0;
+input int             GodmodeMacdFast      = 12;
+input int             GodmodeMacdSlow      = 26;
+input int             GodmodeMacdSignal    = 9;
+input double          GodmodeAtrStopMult   = 2.0;      // SL distance = Godmode-TF ATR x this
+input double          GodmodeAtrTpMult     = 3.5;      // TP distance = Godmode-TF ATR x this
+input bool            GodmodeVolumeFilter  = true;      // require above-average tick volume on the signal bar
+input int             GodmodeVolumeMA      = 20;
+input double          GodmodeDailyLossPct  = 5.0;      // daily-loss kill switch; 0 disables
 
 //======================================================================
 // NAMED CONSTANTS (no magic numbers in logic)
@@ -201,6 +223,10 @@ int               g_totalClosedTrades = 0;
 int               g_nnTotalTrades = 0;
 int               g_nnWins = 0;
 bool              g_portfolioRiskBlocked = false;
+
+bool              g_godmodeKillSwitch   = false;
+datetime          g_godmodeTrendBarTime = 0;
+int               g_godmodeTrendState   = 0;
 
 //======================================================================
 // ENUMS
@@ -614,6 +640,205 @@ double GetSpreadRatio(string symbol)
    double m1ATR = GetATR(symbol, PERIOD_M1, ATR_PERIOD);
    if(m1ATR <= 0.0) return 0.0;
    return spread / m1ATR;
+}
+
+//======================================================================
+// SECTION 19 — GODMODE CONFLUENCE MODULE
+// Arithmetic ported from PineScripts/BTCUSD_Godmode_Strategy.pine:
+// EMA(fast/slow/macro) trend bias, RSI mid-band + MACD histogram
+// momentum confluence, RSI band-recross / MACD line-cross triggers,
+// above-average volume participation, ATR-multiple SL/TP distances,
+// trend-flip exit, and a daily-loss kill switch.
+//======================================================================
+bool GodmodeApplies(string sym)
+{
+   return EnableGodmode && sym == GodmodeSymbol;
+}
+
+// Sequential EMA over an oldest-first array, seeded with the SMA of the
+// first `period` values; out[i] for i < period-1 holds the running seed.
+bool ComputeEMASeries(const double &src[], int period, double &out[])
+{
+   int n = ArraySize(src);
+   if(period <= 0 || n < period + 2) return false;
+   ArrayResize(out, n);
+   double sum = 0.0;
+   for(int i = 0; i < period; i++) { sum += src[i]; out[i] = sum / (i + 1); }
+   double k = 2.0 / (period + 1.0);
+   for(int i = period; i < n; i++)
+      out[i] = src[i] * k + out[i - 1] * (1.0 - k);
+   return true;
+}
+
+// Wilder-smoothed RSI over an oldest-first array; out[i] valid for i >= period.
+bool ComputeRSISeries(const double &src[], int period, double &out[])
+{
+   int n = ArraySize(src);
+   if(period <= 0 || n < period + 2) return false;
+   ArrayResize(out, n);
+   ArrayInitialize(out, 50.0);
+
+   double avgGain = 0.0, avgLoss = 0.0;
+   for(int i = 1; i <= period; i++)
+   {
+      double ch = src[i] - src[i - 1];
+      if(ch > 0.0) avgGain += ch; else avgLoss -= ch;
+   }
+   avgGain /= period;
+   avgLoss /= period;
+   out[period] = (avgLoss == 0.0) ? 100.0 : 100.0 - 100.0 / (1.0 + avgGain / avgLoss);
+
+   for(int i = period + 1; i < n; i++)
+   {
+      double ch = src[i] - src[i - 1];
+      double gain = (ch > 0.0) ? ch : 0.0;
+      double loss = (ch < 0.0) ? -ch : 0.0;
+      avgGain = (avgGain * (period - 1) + gain) / period;
+      avgLoss = (avgLoss * (period - 1) + loss) / period;
+      out[i] = (avgLoss == 0.0) ? 100.0 : 100.0 - 100.0 / (1.0 + avgGain / avgLoss);
+   }
+   return true;
+}
+
+int GodmodeBarsNeeded()
+{
+   int slowest = MathMax(GodmodeEmaMacro, GodmodeMacdSlow + GodmodeMacdSignal);
+   slowest = MathMax(slowest, MathMax(GodmodeRsiPeriod, GodmodeVolumeMA));
+   return slowest + 60; // warm-up so the SMA-seeded EMAs converge
+}
+
+// Copies closed bars (oldest-first) of the Godmode timeframe.
+bool GodmodeCopyCloses(string sym, MqlRates &bars[], double &closes[])
+{
+   int need = GodmodeBarsNeeded();
+   ArraySetAsSeries(bars, false);
+   if(CopyRates(sym, GodmodeTimeframe, 1, need, bars) < need) return false;
+   int n = ArraySize(bars);
+   ArrayResize(closes, n);
+   for(int i = 0; i < n; i++) closes[i] = bars[i].close;
+   return true;
+}
+
+// Returns +1 long / -1 short / 0 no-signal; on a signal also outputs the
+// ATR-multiple SL/TP distances so sizing stays risk-consistent (the lot
+// engine turns SL distance into qty = risk$ / stopDist).
+int GetGodmodeSignal(string sym, double &slDistOut, double &tpDistOut)
+{
+   slDistOut = 0.0;
+   tpDistOut = 0.0;
+
+   MqlRates bars[];
+   double closes[];
+   if(!GodmodeCopyCloses(sym, bars, closes)) return 0;
+   int n = ArraySize(closes);
+
+   double emaFast[], emaSlow[], emaMacro[], rsi[];
+   if(!ComputeEMASeries(closes, GodmodeEmaFast, emaFast)) return 0;
+   if(!ComputeEMASeries(closes, GodmodeEmaSlow, emaSlow)) return 0;
+   if(!ComputeEMASeries(closes, GodmodeEmaMacro, emaMacro)) return 0;
+   if(!ComputeRSISeries(closes, GodmodeRsiPeriod, rsi)) return 0;
+
+   double emaMacdFast[], emaMacdSlow[], macdLine[], macdSig[];
+   if(!ComputeEMASeries(closes, GodmodeMacdFast, emaMacdFast)) return 0;
+   if(!ComputeEMASeries(closes, GodmodeMacdSlow, emaMacdSlow)) return 0;
+   ArrayResize(macdLine, n);
+   for(int i = 0; i < n; i++) macdLine[i] = emaMacdFast[i] - emaMacdSlow[i];
+   if(!ComputeEMASeries(macdLine, GodmodeMacdSignal, macdSig)) return 0;
+
+   int cur = n - 1, prev = n - 2;
+   double hist = macdLine[cur] - macdSig[cur];
+
+   // 1. Trend bias: price vs macro EMA plus fast/slow alignment
+   bool bullBias = closes[cur] > emaMacro[cur] && emaFast[cur] > emaSlow[cur];
+   bool bearBias = closes[cur] < emaMacro[cur] && emaFast[cur] < emaSlow[cur];
+
+   // 2. Momentum confluence: RSI mid-band + MACD histogram sign
+   bool momBull = rsi[cur] > 50.0 && rsi[cur] < GodmodeRsiOverbought && hist > 0.0;
+   bool momBear = rsi[cur] < 50.0 && rsi[cur] > GodmodeRsiOversold   && hist < 0.0;
+
+   // 3. Event trigger on the signal bar: RSI band recross or MACD cross
+   bool rsiUpCross    = rsi[prev] <= GodmodeRsiOversold   && rsi[cur] > GodmodeRsiOversold;
+   bool rsiDownCross  = rsi[prev] >= GodmodeRsiOverbought && rsi[cur] < GodmodeRsiOverbought;
+   bool macdUpCross   = macdLine[prev] <= macdSig[prev] && macdLine[cur] > macdSig[cur];
+   bool macdDownCross = macdLine[prev] >= macdSig[prev] && macdLine[cur] < macdSig[cur];
+
+   // 4. Participation filter: above-average tick volume on the signal bar
+   if(GodmodeVolumeFilter && n > GodmodeVolumeMA)
+   {
+      double volSum = 0.0;
+      for(int i = n - GodmodeVolumeMA; i < n; i++) volSum += (double)bars[i].tick_volume;
+      if((double)bars[cur].tick_volume <= volSum / GodmodeVolumeMA) return 0;
+   }
+
+   // 5. ATR-multiple exit distances on the Godmode timeframe
+   double atr = GetATR(sym, GodmodeTimeframe, ATR_PERIOD);
+   if(atr <= 0.0) return 0;
+   slDistOut = atr * GodmodeAtrStopMult;
+   tpDistOut = atr * GodmodeAtrTpMult;
+
+   if(bullBias && momBull && (rsiUpCross || macdUpCross)) return 1;
+   if(bearBias && momBear && (rsiDownCross || macdDownCross)) return -1;
+   return 0;
+}
+
+// Trend state on the Godmode timeframe: +1 full bull alignment (fast>slow
+// and close>macro), -1 full bear alignment, 0 mixed or data unavailable.
+// Cached per bar - ManageOpenPositions calls this on every cycle.
+int GetGodmodeTrendState(string sym)
+{
+   datetime barTime = iTime(sym, GodmodeTimeframe, 0);
+   if(barTime != 0 && barTime == g_godmodeTrendBarTime) return g_godmodeTrendState;
+
+   MqlRates bars[];
+   double closes[];
+   if(!GodmodeCopyCloses(sym, bars, closes)) return 0;
+   int n = ArraySize(closes);
+
+   double emaFast[], emaSlow[], emaMacro[];
+   if(!ComputeEMASeries(closes, GodmodeEmaFast, emaFast)) return 0;
+   if(!ComputeEMASeries(closes, GodmodeEmaSlow, emaSlow)) return 0;
+   if(!ComputeEMASeries(closes, GodmodeEmaMacro, emaMacro)) return 0;
+
+   int cur = n - 1;
+   int state = 0;
+   if(emaFast[cur] > emaSlow[cur] && closes[cur] > emaMacro[cur]) state = 1;
+   else if(emaFast[cur] < emaSlow[cur] && closes[cur] < emaMacro[cur]) state = -1;
+
+   g_godmodeTrendBarTime = barTime;
+   g_godmodeTrendState = state;
+   return state;
+}
+
+void CloseAllManagedPositions(string reason)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      if(magic < MagicBase || magic >= MagicBase + g_symbolCount) continue;
+      if(trade.PositionClose(ticket)) RemoveOpenTradeState(ticket);
+   }
+   PrintFormat("All managed positions closed (%s)", reason);
+}
+
+// Daily-loss kill switch: measured against the 00:00 UTC session-start
+// balance; trips once per day and clears on the daily session reset.
+void UpdateGodmodeKillSwitch()
+{
+   if(!EnableGodmode || GodmodeDailyLossPct <= 0.0) return;
+   if(g_godmodeKillSwitch) return;
+   if(g_sessionStartBalance <= 0.0) return;
+
+   double dailyLossPct = (g_sessionStartBalance - AccountInfoDouble(ACCOUNT_EQUITY))
+                          / g_sessionStartBalance * 100.0;
+   if(dailyLossPct >= GodmodeDailyLossPct)
+   {
+      g_godmodeKillSwitch = true;
+      PrintFormat("GODMODE KILL SWITCH: daily loss %.2f%% >= %.2f%% - flattening and blocking new entries until 00:00 UTC",
+                  dailyLossPct, GodmodeDailyLossPct);
+      CloseAllManagedPositions("godmode-kill-switch");
+   }
 }
 
 //======================================================================
@@ -1212,10 +1437,23 @@ void ProcessSymbol(int idx)
    ENUM_SESSION session = GetCurrentSession();
    if(!IsSessionTradingAllowed(session)) return;
 
+   if(g_godmodeKillSwitch) return; // daily-loss kill switch - no new entries until 00:00 UTC
+
    int htfBias = GetHTFBias(sym);
    if(htfBias == 0) return;
 
    if(!M1CandleConfirmation(sym, htfBias)) return;
+
+   // Godmode confluence gate: the EMA/RSI/MACD/volume stack must fire in
+   // the same direction as the HTF cascade, and its ATR-multiple SL/TP
+   // distances replace the default M1/H1 exit arithmetic below.
+   bool godmodeActive = GodmodeApplies(sym);
+   double gmSlDist = 0.0, gmTpDist = 0.0;
+   if(godmodeActive)
+   {
+      int gmDir = GetGodmodeSignal(sym, gmSlDist, gmTpDist);
+      if(gmDir != htfBias) return;
+   }
 
    double deltaScore   = GetTickDeltaScore(sym);
    double pressureProxy = GetCandlePressure(sym);
@@ -1236,6 +1474,7 @@ void ProcessSymbol(int idx)
    if(g_portfolioRiskBlocked) return; // governor tripped at 5%, held until back under 3%
 
    double slDist = MathMax(m1ATR * 1.5, SL_MIN_POINTS * g_cfg[idx].PointValue);
+   if(godmodeActive) slDist = MathMax(gmSlDist, SL_MIN_POINTS * g_cfg[idx].PointValue);
    double riskAmt;
    double activeRisk = GetActiveRiskPct();
    double lot = CalculateLotSize(idx, activeRisk, slDist, riskAmt);
@@ -1249,6 +1488,7 @@ void ProcessSymbol(int idx)
       return;
 
    double tpDist = MathMax(spread * 3.0, h1ATR * 0.50);
+   if(godmodeActive) tpDist = MathMax(gmTpDist, spread * 3.0);
    double entryPrice = (htfBias > 0) ? SymbolInfoDouble(sym, SYMBOL_ASK) : SymbolInfoDouble(sym, SYMBOL_BID);
    double sl = (htfBias > 0) ? entryPrice - slDist : entryPrice + slDist;
    double tp = (htfBias > 0) ? entryPrice + tpDist : entryPrice - tpDist;
@@ -1262,6 +1502,7 @@ void ProcessSymbol(int idx)
 void ManageOpenPositions()
 {
    UpdatePortfolioRiskState();
+   UpdateGodmodeKillSwitch();
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -1286,8 +1527,24 @@ void ManageOpenPositions()
       int stIdx = FindOpenTradeState(ticket);
       double riskAmt = (stIdx >= 0) ? g_openTrades[stIdx].RiskAmt : 0.0;
 
+      // Godmode positions swing on the Godmode timeframe: exempt from the
+      // scalp timeout, closed instead on a full trend flip against them.
+      bool godmodePos = GodmodeApplies(sym);
+      if(godmodePos)
+      {
+         int trendState = GetGodmodeTrendState(sym);
+         bool flip = (type == POSITION_TYPE_BUY) ? trendState == -1 : trendState == 1;
+         if(flip)
+         {
+            trade.PositionClose(ticket);
+            RemoveOpenTradeState(ticket);
+            PrintFormat("Godmode trend flip - [%s]", sym);
+            continue;
+         }
+      }
+
       // C. 2-minute forced exit
-      if(TimeCurrent() - openTime >= FORCED_EXIT_SECONDS)
+      if(!godmodePos && TimeCurrent() - openTime >= FORCED_EXIT_SECONDS)
       {
          trade.PositionClose(ticket);
          RemoveOpenTradeState(ticket);
@@ -1462,6 +1719,7 @@ void UpdateSessionResetIfNeeded()
       g_globalSessionPnL = 0.0;
       for(int i = 0; i < g_symbolCount; i++) g_cfg[i].SessionPnL = 0.0;
       g_sessionStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+      g_godmodeKillSwitch = false;
       Print("Daily session reset (00:00 UTC)");
    }
 }
@@ -1525,6 +1783,25 @@ void RankSymbols()
             selectedCount++;
          }
          break;
+      }
+   }
+
+   // The Godmode symbol also gets a guaranteed slot while the module is on,
+   // so its confluence stack is always live regardless of volatility rank.
+   if(EnableGodmode)
+   {
+      for(int i = 0; i < g_symbolCount; i++)
+      {
+         if(g_rank[i].Symbol == GodmodeSymbol)
+         {
+            int gi = FindCfgIndex(GodmodeSymbol);
+            if(gi >= 0 && g_cfg[gi].Available && g_rank[i].FinalRank > -1.0 && !g_rank[i].Selected)
+            {
+               g_rank[i].Selected = true;
+               selectedCount++;
+            }
+            break;
+         }
       }
    }
 
