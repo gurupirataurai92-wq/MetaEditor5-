@@ -1,27 +1,24 @@
 //+------------------------------------------------------------------+
 //|                                                        V75EA.mq5 |
-//|  Confluence-based EA for Deriv Volatility 75 Index, driven by an |
-//|  OODA decision cycle with an optional adaptive "God mode".      |
+//|  Confluence + OODA EA for Deriv Volatility 75, v4.00.           |
 //|                                                                  |
-//|  OBSERVE   RegimeDetector + ATR/spread snapshot                  |
-//|  ORIENT    MultiTimeframe, MarketStructure, TrendStrength,       |
-//|            MomentumEngine -> ConfluenceEngine score under an      |
-//|            adaptive threshold                                     |
-//|  DECIDE    OodaEngine -> signal, risk %, SL/TP, trailing          |
-//|  ACT       RiskManager sizing -> TradeManager execution,          |
-//|            breakeven, partial close, ATR trailing                 |
-//|  FEEDBACK  realized results adapt threshold/risk (bounded) and    |
-//|            feed SafetyGuard + PerformanceTracker                  |
+//|  Grounded in the V75 arithmetic (driftless GBM, constant 75%     |
+//|  annual vol): VolatilityMath supplies theoretical per-bar sigma, |
+//|  realized/theoretical vol ratio (the exploitable clustering      |
+//|  signal), first-passage touch probabilities, and sigma-scaled    |
+//|  stops so risk is constant in probability terms.                 |
 //|                                                                  |
-//|  God mode = adaptive-aggressive, NOT risk-free: every adaptive   |
-//|  request is still clamped by RiskManager's hard cap and gated    |
-//|  by SafetyGuard's circuit breakers.                              |
+//|  "Godmode"-style traits (as seen on commercial synthetic-index   |
+//|  EAs): on-chart dashboard + PAUSE / CLOSE-ALL buttons, bounded    |
+//|  loss recovery (opt-in), session filter, daily profit target,    |
+//|  push notifications — all under the same hard risk rails.        |
 //+------------------------------------------------------------------+
 #property copyright "V75EA"
-#property version   "3.00"
+#property version   "4.00"
 #property strict
 
 #include <V75EA\Types.mqh>
+#include <V75EA\VolatilityMath.mqh>
 #include <V75EA\RegimeDetector.mqh>
 #include <V75EA\MarketStructure.mqh>
 #include <V75EA\MomentumEngine.mqh>
@@ -31,17 +28,33 @@
 #include <V75EA\OodaEngine.mqh>
 #include <V75EA\RiskManager.mqh>
 #include <V75EA\SafetyGuard.mqh>
+#include <V75EA\RecoveryManager.mqh>
+#include <V75EA\Dashboard.mqh>
 #include <V75EA\TradeManager.mqh>
 #include <V75EA\PerformanceTracker.mqh>
 
+enum ENUM_STOP_MODE
+  {
+   STOP_ATR   = 0,   // stop distance from ATR (adaptive to realized range)
+   STOP_SIGMA = 1    // stop distance from theoretical V75 sigma (constant probability)
+  };
+
 //--- General
 input ulong           InpMagicNumber       = 750001;
-input ENUM_TIMEFRAMES InpTimeframe         = PERIOD_M5;   // trade-setup timeframe
-input ENUM_TIMEFRAMES InpHtf1              = PERIOD_M15;  // intermediate bias
-input ENUM_TIMEFRAMES InpHtf2              = PERIOD_H1;   // overall bias
+input ENUM_TIMEFRAMES InpTimeframe         = PERIOD_M5;
+input ENUM_TIMEFRAMES InpHtf1              = PERIOD_M15;
+input ENUM_TIMEFRAMES InpHtf2              = PERIOD_H1;
 input bool            InpTradeOnNewBarOnly = true;
 
-//--- Indicator periods (shared where sensible)
+//--- V75 arithmetic
+input double          InpAnnualVolPercent  = 75.0;   // 75 for V75; set to match the instrument
+input ENUM_STOP_MODE  InpStopMode          = STOP_ATR;
+input int             InpSigmaHorizonBars  = 10;     // horizon for sigma stop / touch probability
+input double          InpSigmaStopK        = 1.0;    // stop at k theoretical sigmas
+input int             InpRealizedVolBars   = 30;     // window for realized-vol estimate
+input double          InpMinVolRatio       = 0.60;   // skip dead markets (realized << theoretical)
+
+//--- Indicator periods
 input int    InpEmaFast            = 20;
 input int    InpEmaSlow            = 50;
 input int    InpAdxPeriod          = 14;
@@ -53,8 +66,8 @@ input int    InpAtrPeriod          = 14;
 //--- Regime detection
 input double InpAdxTrendThreshold  = 22.0;
 input double InpAdxStrongThreshold = 30.0;
-input double InpAtrExpansionRatio  = 1.5;   // ATR vs 50-bar avg to call a breakout
-input double InpBbCompressionRatio = 0.7;   // BB width vs 50-bar avg to call compression
+input double InpAtrExpansionRatio  = 1.5;
+input double InpBbCompressionRatio = 0.7;
 input double InpRsiOverbought      = 70.0;
 input double InpRsiOversold        = 30.0;
 
@@ -69,19 +82,32 @@ input double InpAdxNormalizer      = 50.0;
 input int    InpSlopeLookback      = 5;
 
 //--- Confluence
-input double InpMinConfidence      = 0.60;  // base threshold; OODA adapts around it
+input double InpMinConfidence      = 0.60;
 
-//--- God mode (adaptive-aggressive OODA loop)
+//--- God mode (adaptive OODA)
 input bool   InpGodMode            = true;
-input double InpGodMinConfidence   = 0.50;  // most aggressive adaptive threshold
-input double InpGodMaxConfidence   = 0.75;  // most defensive adaptive threshold
-input double InpGodRiskBoostMax    = 1.5;   // risk multiplier ceiling on hot streaks
-input int    InpMaxPositions       = 3;     // pyramiding cap, same-direction only (1 = off)
-input double InpTrailAtrMult       = 2.0;   // ATR trailing distance (god mode)
+input double InpGodMinConfidence   = 0.50;
+input double InpGodMaxConfidence   = 0.75;
+input double InpGodRiskBoostMax    = 1.5;
+input int    InpMaxPositions       = 3;
+input double InpTrailAtrMult       = 2.0;
+
+//--- Bounded recovery (Godmode trait) — OFF by default
+input bool   InpUseRecovery        = false;
+input int    InpRecoveryMaxSteps   = 3;
+input double InpRecoveryStepFactor = 1.5;
+input double InpRecoveryMaxMult    = 3.0;
+input double InpRecoveryEquityFloorPct = 80.0;   // recovery disabled below this % of start equity
+
+//--- Session filter + daily profit target
+input bool   InpUseSession         = false;
+input int    InpSessionStartHour   = 6;    // server time
+input int    InpSessionEndHour     = 22;
+input double InpDailyProfitTarget  = 0.0;  // % of day-start equity; 0 disables
 
 //--- Risk management
-input double InpRiskPercent        = 1.0;   // base risk per trade, % equity
-input double InpMaxRiskPercent     = 2.0;   // hard cap, adaptive requests cannot exceed
+input double InpRiskPercent        = 1.0;
+input double InpMaxRiskPercent     = 2.0;   // hard ceiling; recovery/OODA cannot exceed it
 input double InpAtrStopMultiplier  = 1.5;
 input double InpAtrTakeProfitMult  = 3.0;
 
@@ -97,6 +123,11 @@ input double InpBreakevenAtrMult    = 1.0;
 input double InpPartialCloseAtrMult = 2.0;
 input double InpPartialClosePercent = 50.0;
 
+//--- UX
+input bool   InpShowDashboard       = true;
+input bool   InpUseNotifications    = false;  // requires MetaQuotes ID in MT5 settings
+
+CVolatilityMath     g_vol;
 CRegimeDetector     g_regime;
 CMarketStructure    g_structure;
 CMomentumEngine     g_momentum;
@@ -106,15 +137,21 @@ CConfluenceEngine   g_confluence;
 COodaEngine         g_ooda;
 CRiskManager        g_risk;
 CSafetyGuard        g_safety;
+CRecoveryManager    g_recovery;
+CDashboard          g_dashboard;
 CTradeManager       g_trades;
 CPerformanceTracker g_perf;
 
 datetime    g_lastBarTime   = 0;
 ENUM_REGIME g_regimeAtEntry = REGIME_RANGE;
+bool        g_paused        = false;
+double      g_lastConfidence = 0.0;
 
 //+------------------------------------------------------------------+
 int OnInit()
   {
+   g_vol.Init(_Symbol, InpTimeframe, InpAnnualVolPercent);
+
    if(!g_regime.Init(_Symbol, InpTimeframe, InpAdxPeriod, InpAdxTrendThreshold, InpAdxStrongThreshold,
                      InpEmaFast, InpEmaSlow, InpAtrPeriod, InpBandsPeriod, InpBandsDeviation,
                      InpAtrExpansionRatio, InpBbCompressionRatio))
@@ -147,15 +184,20 @@ int OnInit()
 
    g_risk.Init(_Symbol, InpRiskPercent, InpMaxRiskPercent);
    g_safety.Init(_Symbol, InpMaxDailyLossPercent, InpMaxDrawdownPercent,
-                 InpMaxConsecutiveLoss, InpMaxSpreadPoints);
+                 InpMaxConsecutiveLoss, InpMaxSpreadPoints,
+                 InpUseSession, InpSessionStartHour, InpSessionEndHour, InpDailyProfitTarget);
+   g_recovery.Init(InpUseRecovery, InpRecoveryMaxSteps, InpRecoveryStepFactor,
+                   InpRecoveryMaxMult, InpRecoveryEquityFloorPct);
    g_trades.Init(_Symbol, InpMagicNumber, InpSlippagePoints,
                  InpBreakevenAtrMult, InpPartialCloseAtrMult, InpPartialClosePercent);
    g_trades.SetTrailing(InpGodMode, InpTrailAtrMult);
+   g_dashboard.Init("v75ea_", InpShowDashboard);
    g_perf.Reset();
 
-   Print("V75EA v3 initialized on ", _Symbol,
-         " setup TF=", EnumToString(InpTimeframe),
-         " godMode=", (InpGodMode ? "ON" : "OFF"));
+   Print("V75EA v4 on ", _Symbol, " TF=", EnumToString(InpTimeframe),
+         " godMode=", (InpGodMode ? "ON" : "OFF"),
+         " recovery=", (InpUseRecovery ? "ON" : "OFF"),
+         " stopMode=", (InpStopMode == STOP_SIGMA ? "SIGMA" : "ATR"));
    return INIT_SUCCEEDED;
   }
 
@@ -163,6 +205,7 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    g_perf.PrintSummary();
+   g_dashboard.Deinit();
    g_regime.Deinit();
    g_momentum.Deinit();
    g_trend.Deinit();
@@ -181,8 +224,17 @@ void OnTick()
    if(!g_ooda.Observe(obs))
       return;
 
-   //--- ACT (management): breakeven / partial / trailing on every tick
+   //--- ACT (management): breakeven / partial / trailing every tick
    g_trades.ManageOpenPositions(obs.atr);
+
+   //--- daily profit target: flatten and lock in
+   if(g_safety.DailyProfitReached() && g_trades.HasOpenPosition())
+     {
+      g_trades.CloseAll();
+      Notify("V75EA: daily profit target reached — positions closed.");
+     }
+
+   UpdateDashboard(obs);
 
    bool newBar = IsNewBar();
    if(InpTradeOnNewBarOnly && !newBar)
@@ -190,7 +242,14 @@ void OnTick()
    if(newBar)
       g_structure.Update();
 
+   if(g_paused)
+      return;
    if(!g_safety.IsTradingAllowed())
+      return;
+
+   //--- arithmetic gate: skip dead markets (realized vol far below theoretical)
+   double volRatio = g_vol.VolRatio(InpRealizedVolBars);
+   if(volRatio < InpMinVolRatio)
       return;
 
    int maxPositions = MathMax(1, InpMaxPositions);
@@ -202,8 +261,9 @@ void OnTick()
    SDecision decision;
    if(!g_ooda.Decide(obs, decision, InpAtrStopMultiplier, InpAtrTakeProfitMult, InpRiskPercent))
       return;
+   g_lastConfidence = decision.confidence;
 
-   //--- pyramiding: additional entries only in the direction of existing exposure
+   //--- pyramiding: only add in the direction of existing exposure
    if(openCount > 0)
      {
       int haveDir = g_trades.OpenDirection();
@@ -212,22 +272,56 @@ void OnTick()
          return;
      }
 
-   //--- ACT (entry)
-   g_risk.SetRiskPercent(decision.riskPercent); // hard-capped inside RiskManager
-   double lots = g_risk.CalculateLotSize(decision.slDistance);
+   //--- stop/target distances: ATR (from OODA) or theoretical sigma
+   double slDistance = decision.slDistance;
+   double tpDistance = decision.tpDistance;
+   if(InpStopMode == STOP_SIGMA)
+     {
+      slDistance = g_vol.SigmaStopDistance(InpSigmaHorizonBars, InpSigmaStopK);
+      double rr  = (InpAtrStopMultiplier > 0.0) ? (InpAtrTakeProfitMult / InpAtrStopMultiplier) : 2.0;
+      tpDistance = slDistance * rr;
+     }
 
-   if(g_trades.OpenTrade(decision.signal, lots, decision.slDistance, decision.tpDistance))
+   //--- log the first-passage touch odds so the risk geometry is explicit
+   double pStop = g_vol.ProbTouch(slDistance, InpSigmaHorizonBars);
+   double pTgt  = g_vol.ProbTouch(tpDistance, InpSigmaHorizonBars);
+
+   //--- risk request = base * OODA multiplier * recovery multiplier (all hard-capped)
+   double effRisk = decision.riskPercent * g_recovery.Multiplier();
+   g_risk.SetRiskPercent(effRisk);
+   double lots = g_risk.CalculateLotSize(slDistance);
+
+   if(g_trades.OpenTrade(decision.signal, lots, slDistance, tpDistance))
      {
       g_regimeAtEntry = obs.regime;
-      PrintFormat("V75EA entry: %s lots=%.2f conf=%.2f | %s",
-                  (decision.signal == SIGNAL_BUY ? "BUY" : "SELL"),
-                  lots, decision.confidence, decision.reason);
+      string msg = StringFormat("V75EA %s lots=%.2f conf=%.2f volR=%.2f pStop=%.2f pTgt=%.2f | %s",
+                                (decision.signal == SIGNAL_BUY ? "BUY" : "SELL"),
+                                lots, decision.confidence, volRatio, pStop, pTgt, decision.reason);
+      Print(msg);
+      Notify(msg);
      }
   }
 
 //+------------------------------------------------------------------+
-//| FEEDBACK: realized results close the OODA loop and feed the      |
-//| safety and performance modules                                   |
+//| Dashboard button clicks                                          |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+  {
+   ENUM_PANEL_ACTION action = g_dashboard.HandleEvent(id, lparam, dparam, sparam);
+   if(action == PANEL_TOGGLE_PAUSE)
+     {
+      g_paused = !g_paused;
+      Print("V75EA: ", (g_paused ? "PAUSED by user." : "RESUMED by user."));
+     }
+   else if(action == PANEL_CLOSE_ALL)
+     {
+      g_trades.CloseAll();
+      Print("V75EA: CLOSE ALL by user.");
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| FEEDBACK                                                         |
 //+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                          const MqlTradeRequest &request,
@@ -247,8 +341,56 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       bool win = (profit >= 0.0);
       g_safety.RegisterTradeResult(win);
       g_ooda.RegisterTradeResult(win);
+      g_recovery.RegisterResult(win);
       g_perf.RecordClosedTrade(profit, g_regimeAtEntry);
+      Notify(StringFormat("V75EA closed: %s %.2f", (win ? "WIN" : "LOSS"), profit));
      }
+  }
+
+//+------------------------------------------------------------------+
+void UpdateDashboard(const SObservation &obs)
+  {
+   if(!InpShowDashboard)
+      return;
+
+   SDashboardState st;
+   st.godMode         = InpGodMode;
+   st.paused          = g_paused;
+   st.regime          = RegimeName(obs.regime);
+   st.confidence      = g_lastConfidence;
+   st.threshold       = g_ooda.DynamicConfidence();
+   st.riskMult        = g_ooda.RiskMultiplier();
+   st.recoveryStep    = g_recovery.Step();
+   st.volRatio        = g_vol.VolRatio(InpRealizedVolBars);
+   st.openPositions   = g_trades.CountOpenPositions();
+   st.dailyPnlPercent = g_safety.DailyPnlPercent();
+   st.equity          = AccountInfoDouble(ACCOUNT_EQUITY);
+   st.balance         = AccountInfoDouble(ACCOUNT_BALANCE);
+   st.status          = g_safety.IsHalted() ? "HALTED" : "SCANNING";
+   g_dashboard.Update(st);
+  }
+
+//+------------------------------------------------------------------+
+void Notify(const string msg)
+  {
+   if(InpUseNotifications)
+      SendNotification(msg);
+  }
+
+//+------------------------------------------------------------------+
+string RegimeName(const ENUM_REGIME r)
+  {
+   switch(r)
+     {
+      case REGIME_STRONG_UPTREND:   return "STRONG UP";
+      case REGIME_WEAK_UPTREND:     return "WEAK UP";
+      case REGIME_STRONG_DOWNTREND: return "STRONG DOWN";
+      case REGIME_WEAK_DOWNTREND:   return "WEAK DOWN";
+      case REGIME_RANGE:            return "RANGE";
+      case REGIME_BREAKOUT:         return "BREAKOUT";
+      case REGIME_COMPRESSION:      return "COMPRESSION";
+     }
+   return "UNKNOWN";
   }
 
 //+------------------------------------------------------------------+

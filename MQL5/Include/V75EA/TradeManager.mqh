@@ -64,6 +64,18 @@ public:
       return count;
      }
 
+   //--- close every position this EA owns on the symbol (panel button / profit target)
+   void              CloseAll(void)
+     {
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+         if(PositionGetString(POSITION_SYMBOL) != m_symbol) continue;
+         m_trade.PositionClose(ticket);
+        }
+     }
+
    //--- +1 when all open positions are long, -1 all short, 0 flat or mixed
    int               OpenDirection(void)
      {

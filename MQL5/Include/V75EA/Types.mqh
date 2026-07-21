@@ -23,4 +23,22 @@ struct SConfluenceResult
    string      reason;      // human-readable breakdown for logging
   };
 
+//--- live status pushed to the on-chart dashboard
+struct SDashboardState
+  {
+   bool     godMode;
+   bool     paused;
+   string   regime;
+   double   confidence;
+   double   threshold;
+   double   riskMult;
+   int      recoveryStep;
+   double   volRatio;
+   int      openPositions;
+   double   dailyPnlPercent;
+   double   equity;
+   double   balance;
+   string   status;        // short state line (e.g. "SCANNING", "HALTED: daily loss")
+  };
+
 #endif // V75EA_TYPES_MQH

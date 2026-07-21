@@ -1,17 +1,17 @@
 //+------------------------------------------------------------------+
 //|                                       V75EA_GodMode_AllInOne.mq5 |
-//|  Single-file build of V75EA v3.00 for easy compilation:          |
+//|  Single-file build of V75EA v4.00 for easy compilation:          |
 //|  paste into MQL5/Experts, press F7 in MetaEditor 5 — no Include  |
 //|  folder setup required. Identical logic to the modular project.  |
 //|                                                                  |
-//|  Confluence-based EA for Deriv Volatility 75 Index, driven by an |
-//|  OODA decision cycle (Observe-Orient-Decide-Act-Feedback) with   |
-//|  an optional adaptive "God mode". God mode is adaptive-          |
-//|  aggressive, NOT risk-free: every adaptive request is clamped by |
-//|  the RiskManager hard cap and gated by SafetyGuard breakers.     |
+//|  V75-arithmetic-grounded (driftless GBM, constant 75% annual     |
+//|  vol) confluence + OODA EA with Godmode-style traits: on-chart   |
+//|  dashboard + PAUSE/CLOSE-ALL buttons, bounded opt-in recovery,   |
+//|  session filter, daily profit target, notifications — all under  |
+//|  the same hard risk rails (cap, daily loss, drawdown, streak).   |
 //+------------------------------------------------------------------+
 #property copyright "V75EA"
-#property version   "3.00"
+#property version   "4.00"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -36,6 +36,160 @@ struct SConfluenceResult
    double      confidence;  // 0..1
    double      atr;         // current ATR, for stop/target sizing
    string      reason;      // human-readable breakdown for logging
+  };
+
+//--- live status pushed to the on-chart dashboard
+struct SDashboardState
+  {
+   bool     godMode;
+   bool     paused;
+   string   regime;
+   double   confidence;
+   double   threshold;
+   double   riskMult;
+   int      recoveryStep;
+   double   volRatio;
+   int      openPositions;
+   double   dailyPnlPercent;
+   double   equity;
+   double   balance;
+   string   status;        // short state line (e.g. "SCANNING", "HALTED: daily loss")
+  };
+
+
+//+------------------------------------------------------------------+
+//|                                               VolatilityMath.mqh |
+//|  Encodes the arithmetic of a Deriv volatility index: a driftless |
+//|  geometric Brownian motion with a constant annualized volatility |
+//|  (75% for V75). Provides the theoretical per-bar sigma, realized  |
+//|  vs theoretical volatility (the clustering signal), first-passage |
+//|  touch probabilities (reflection principle), and sigma-scaled     |
+//|  stop distances so risk is constant in PROBABILITY terms.         |
+//|                                                                  |
+//|  Key implication encoded here: under pure driftless GBM no SL/TP  |
+//|  geometry beats break-even, so the EA must trade deviations from  |
+//|  randomness (vol expansion, trend persistence) — this module      |
+//|  measures them rather than assuming price predictability.         |
+//+------------------------------------------------------------------+
+
+
+class CVolatilityMath
+  {
+private:
+   string          m_symbol;
+   ENUM_TIMEFRAMES m_tf;
+   double          m_annualVol;     // e.g. 0.75 for V75
+   double          m_barSeconds;
+   double          m_secondsPerYear;
+
+public:
+                     CVolatilityMath(void) : m_annualVol(0.75), m_barSeconds(300.0),
+                                              m_secondsPerYear(31536000.0) {}
+
+   void              Init(const string symbol, const ENUM_TIMEFRAMES tf, const double annualVolPercent)
+     {
+      m_symbol         = symbol;
+      m_tf             = tf;
+      m_annualVol      = MathMax(0.01, annualVolPercent / 100.0);
+      m_barSeconds     = (double)PeriodSeconds(tf);
+      m_secondsPerYear = 365.0 * 24.0 * 3600.0;
+     }
+
+   //--- theoretical std-dev of one bar's log-return (fraction of price)
+   double            BarSigma(void)
+     {
+      return m_annualVol * MathSqrt(m_barSeconds / m_secondsPerYear);
+     }
+
+   //--- theoretical std-dev of log-return over N bars
+   double            HorizonSigma(const int bars)
+     {
+      double t = m_barSeconds * MathMax(1, bars);
+      return m_annualVol * MathSqrt(t / m_secondsPerYear);
+     }
+
+   //--- expected absolute price move over one bar: price * sigma * sqrt(2/pi)
+   double            ExpectedBarMove(void)
+     {
+      double price = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+      return price * BarSigma() * MathSqrt(2.0 / M_PI);
+     }
+
+   //--- realized log-return sigma over the last N closed bars
+   double            RealizedSigma(const int bars)
+     {
+      int n = MathMax(2, bars);
+      double close[];
+      ArraySetAsSeries(close, true);
+      if(CopyClose(m_symbol, m_tf, 0, n + 1, close) < n + 1)
+         return 0.0;
+
+      double mean = 0.0;
+      double rets[];
+      ArrayResize(rets, n);
+      for(int i = 0; i < n; i++)
+        {
+         double r = (close[i + 1] > 0.0) ? MathLog(close[i] / close[i + 1]) : 0.0;
+         rets[i]  = r;
+         mean    += r;
+        }
+      mean /= n;
+
+      double var = 0.0;
+      for(int i = 0; i < n; i++)
+        {
+         double d = rets[i] - mean;
+         var += d * d;
+        }
+      var /= (n - 1);
+      return MathSqrt(var);
+     }
+
+   //--- realized / theoretical volatility. >1 = expansion (cluster), <1 = compression.
+   //    This is the exploitable signal: magnitude is predictable, direction is not.
+   double            VolRatio(const int bars)
+     {
+      double theo = BarSigma();
+      if(theo <= 0.0)
+         return 1.0;
+      double realized = RealizedSigma(bars);
+      return realized / theo;
+     }
+
+   //--- probability price touches a barrier `distance` away within `bars`,
+   //    for driftless BM: P = 2 * (1 - Phi(distance / (price * horizonSigma)))
+   double            ProbTouch(const double distance, const int bars)
+     {
+      double price = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+      double sig   = price * HorizonSigma(bars);
+      if(sig <= 0.0 || distance <= 0.0)
+         return 0.0;
+      double z = distance / sig;
+      double p = 2.0 * (1.0 - NormCdf(z));
+      return MathMax(0.0, MathMin(1.0, p));
+     }
+
+   //--- stop distance placed at k theoretical sigmas over `bars` (constant-probability risk)
+   double            SigmaStopDistance(const int bars, const double k)
+     {
+      double price = SymbolInfoDouble(m_symbol, SYMBOL_BID);
+      return price * HorizonSigma(bars) * MathMax(0.1, k);
+     }
+
+private:
+   //--- standard normal CDF via erf approximation (Abramowitz & Stegun 7.1.26)
+   double            NormCdf(const double x)
+     {
+      return 0.5 * (1.0 + Erf(x / MathSqrt(2.0)));
+     }
+
+   double            Erf(const double x)
+     {
+      double t    = 1.0 / (1.0 + 0.3275911 * MathAbs(x));
+      double y    = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
+                    - 0.284496736) * t + 0.254829592) * t * MathExp(-x * x);
+      return (x >= 0.0) ? y : -y;
+     }
   };
 
 
@@ -1145,24 +1299,41 @@ private:
    bool     m_tradingHalted;
    double   m_maxSpreadPoints;
 
+   //--- session filter + daily profit target
+   bool     m_useSession;
+   int      m_sessionStartHour;   // broker/server time, 0-23
+   int      m_sessionEndHour;     // exclusive; wraps past midnight if end < start
+   double   m_dailyProfitTarget;  // % of day-start equity; 0 disables
+   bool     m_profitTargetHit;
+
 public:
-                     CSafetyGuard(void) : m_consecutiveLosses(0), m_tradingHalted(false) {}
+                     CSafetyGuard(void) : m_consecutiveLosses(0), m_tradingHalted(false),
+                                          m_useSession(false), m_sessionStartHour(0),
+                                          m_sessionEndHour(24), m_dailyProfitTarget(0.0),
+                                          m_profitTargetHit(false) {}
 
    void              Init(const string symbol, const double maxDailyLossPercent,
                            const double maxDrawdownPercent, const int maxConsecutiveLosses,
-                           const double maxSpreadPoints)
+                           const double maxSpreadPoints,
+                           const bool useSession, const int sessionStartHour, const int sessionEndHour,
+                           const double dailyProfitTarget)
      {
       m_symbol               = symbol;
       m_maxDailyLossPercent  = maxDailyLossPercent;
       m_maxDrawdownPercent   = maxDrawdownPercent;
       m_maxConsecutiveLosses = maxConsecutiveLosses;
       m_maxSpreadPoints      = maxSpreadPoints;
+      m_useSession           = useSession;
+      m_sessionStartHour     = sessionStartHour;
+      m_sessionEndHour       = sessionEndHour;
+      m_dailyProfitTarget    = dailyProfitTarget;
 
       m_startEquity    = AccountInfoDouble(ACCOUNT_EQUITY);
       m_dayStartEquity = m_startEquity;
       m_currentDay     = TimeCurrent() - (TimeCurrent() % 86400);
       m_consecutiveLosses = 0;
       m_tradingHalted     = false;
+      m_profitTargetHit   = false;
      }
 
    //--- Call once per tick: resets daily counters when a new trading day starts
@@ -1175,6 +1346,7 @@ public:
          m_dayStartEquity    = AccountInfoDouble(ACCOUNT_EQUITY);
          m_tradingHalted     = false;
          m_consecutiveLosses = 0;
+         m_profitTargetHit   = false;
          Print("SafetyGuard: new trading day, counters reset. Equity=", m_dayStartEquity);
         }
      }
@@ -1224,6 +1396,14 @@ public:
       if(spreadPoints > (long)m_maxSpreadPoints)
          return false;
 
+      //--- daily profit target: lock in gains, stop opening for the day
+      if(DailyProfitReached())
+         return false;
+
+      //--- session/time filter
+      if(!IsWithinSession())
+         return false;
+
       //--- margin buffer: refuse new trades if margin level is too tight
       double marginUsed = AccountInfoDouble(ACCOUNT_MARGIN);
       if(marginUsed > 0.0)
@@ -1236,7 +1416,324 @@ public:
       return true;
      }
 
+   //--- true once the day's profit target is reached (main EA may flatten on this)
+   bool              DailyProfitReached(void)
+     {
+      if(m_dailyProfitTarget <= 0.0)
+         return false;
+      double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
+      double gainPct  = (equity - m_dayStartEquity) / m_dayStartEquity * 100.0;
+      if(gainPct >= m_dailyProfitTarget)
+        {
+         if(!m_profitTargetHit)
+           {
+            m_profitTargetHit = true;
+            Print("SafetyGuard: daily profit target hit (", DoubleToString(gainPct, 2), "%). Locking in for the day.");
+           }
+         return true;
+        }
+      return false;
+     }
+
+   bool              IsWithinSession(void)
+     {
+      if(!m_useSession)
+         return true;
+      MqlDateTime dt;
+      TimeToStruct(TimeCurrent(), dt);
+      int h = dt.hour;
+      if(m_sessionStartHour == m_sessionEndHour)
+         return true; // 24h
+      if(m_sessionStartHour < m_sessionEndHour)
+         return (h >= m_sessionStartHour && h < m_sessionEndHour);
+      //--- wraps past midnight (e.g. 22 -> 6)
+      return (h >= m_sessionStartHour || h < m_sessionEndHour);
+     }
+
+   double            DailyPnlPercent(void)
+     {
+      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+      if(m_dayStartEquity <= 0.0)
+         return 0.0;
+      return (equity - m_dayStartEquity) / m_dayStartEquity * 100.0;
+     }
+
    bool              IsHalted(void) const { return m_tradingHalted; }
+  };
+
+
+//+------------------------------------------------------------------+
+//|                                             RecoveryManager.mqh |
+//|  Bounded loss-recovery ("Godmode" trait) — a SAFE reinterpretation |
+//|  of the martingale recovery those EAs are known for. After a loss |
+//|  it raises the risk request by a capped multiplier for a limited  |
+//|  number of steps, resets fully on any win, and refuses to act     |
+//|  once equity falls below a hard floor. The account-level daily-   |
+//|  loss and drawdown kill-switches in SafetyGuard still bound it,   |
+//|  so a losing run cannot compound without limit. Default: OFF.     |
+//+------------------------------------------------------------------+
+
+
+class CRecoveryManager
+  {
+private:
+   bool     m_enabled;
+   int      m_step;           // 0 = no recovery in progress
+   int      m_maxSteps;
+   double   m_stepFactor;     // risk multiplier applied per step
+   double   m_maxMultiplier;  // absolute ceiling on the multiplier
+   double   m_equityFloor;    // recovery disabled below this equity
+   double   m_startEquity;
+
+public:
+                     CRecoveryManager(void) : m_enabled(false), m_step(0), m_maxSteps(3),
+                                               m_stepFactor(1.5), m_maxMultiplier(3.0),
+                                               m_equityFloor(0.0), m_startEquity(0.0) {}
+
+   void              Init(const bool enabled, const int maxSteps, const double stepFactor,
+                           const double maxMultiplier, const double equityFloorPercent)
+     {
+      m_enabled       = enabled;
+      m_maxSteps      = MathMax(1, maxSteps);
+      m_stepFactor    = MathMax(1.0, stepFactor);
+      m_maxMultiplier = MathMax(1.0, maxMultiplier);
+      m_step          = 0;
+      m_startEquity   = AccountInfoDouble(ACCOUNT_EQUITY);
+      m_equityFloor   = m_startEquity * (equityFloorPercent / 100.0);
+     }
+
+   //--- feedback: a win clears the ladder, a loss climbs one rung (capped)
+   void              RegisterResult(const bool win)
+     {
+      if(!m_enabled)
+         return;
+      if(win)
+         m_step = 0;
+      else
+         m_step = MathMin(m_maxSteps, m_step + 1);
+     }
+
+   //--- risk multiplier to apply on the next entry
+   double            Multiplier(void)
+     {
+      if(!m_enabled || m_step <= 0)
+         return 1.0;
+
+      //--- disable recovery if equity has fallen below the floor (let it heal, don't dig)
+      if(AccountInfoDouble(ACCOUNT_EQUITY) < m_equityFloor)
+         return 1.0;
+
+      double mult = MathPow(m_stepFactor, m_step);
+      return MathMin(m_maxMultiplier, mult);
+     }
+
+   bool              IsRecovering(void) const { return (m_enabled && m_step > 0); }
+   int               Step(void)         const { return m_step; }
+   bool              Enabled(void)      const { return m_enabled; }
+  };
+
+
+//+------------------------------------------------------------------+
+//|                                                    Dashboard.mqh |
+//|  On-chart status panel + control buttons ("Godmode" EA trait).   |
+//|  Renders a live readout of the OODA/God-mode state and exposes   |
+//|  PAUSE/RESUME and CLOSE ALL buttons. HandleEvent() is called     |
+//|  from the EA's OnChartEvent and returns the action to perform.   |
+//+------------------------------------------------------------------+
+
+
+
+enum ENUM_PANEL_ACTION
+  {
+   PANEL_NONE         = 0,
+   PANEL_TOGGLE_PAUSE = 1,
+   PANEL_CLOSE_ALL    = 2
+  };
+
+class CDashboard
+  {
+private:
+   string   m_prefix;
+   bool     m_enabled;
+   int      m_x;
+   int      m_y;
+   int      m_w;
+   int      m_rowH;
+
+   string   m_bg, m_title, m_btnPause, m_btnClose;
+   string   m_rows[10];
+   int      m_rowCount;
+
+   //--- palette (V75EA gold-on-charcoal identity)
+   color    m_cBg, m_cText, m_cMuted, m_cGold, m_cUp, m_cDown;
+
+public:
+                     CDashboard(void) : m_enabled(false), m_x(14), m_y(28), m_w(240), m_rowH(20), m_rowCount(0) {}
+
+   void              Init(const string prefix, const bool enabled)
+     {
+      m_prefix  = prefix;
+      m_enabled = enabled;
+      m_cBg   = (color)C'20,25,36';
+      m_cText = (color)C'232,236,244';
+      m_cMuted= (color)C'140,149,168';
+      m_cGold = (color)C'217,160,63';
+      m_cUp   = (color)C'63,182,139';
+      m_cDown = (color)C'224,92,92';
+
+      m_bg       = m_prefix + "bg";
+      m_title    = m_prefix + "title";
+      m_btnPause = m_prefix + "btnPause";
+      m_btnClose = m_prefix + "btnClose";
+
+      if(!m_enabled)
+         return;
+
+      CreatePanel();
+     }
+
+   void              Deinit(void)
+     {
+      if(!m_enabled)
+         return;
+      ObjectsDeleteAll(0, m_prefix);
+     }
+
+   //--- returns the action a button click requests (PANEL_NONE otherwise)
+   ENUM_PANEL_ACTION HandleEvent(const int id, const long &lparam,
+                                  const double &dparam, const string &sparam)
+     {
+      if(!m_enabled || id != CHARTEVENT_OBJECT_CLICK)
+         return PANEL_NONE;
+
+      if(sparam == m_btnPause)
+        {
+         ObjectSetInteger(0, m_btnPause, OBJPROP_STATE, false);
+         return PANEL_TOGGLE_PAUSE;
+        }
+      if(sparam == m_btnClose)
+        {
+         ObjectSetInteger(0, m_btnClose, OBJPROP_STATE, false);
+         return PANEL_CLOSE_ALL;
+        }
+      return PANEL_NONE;
+     }
+
+   void              Update(const SDashboardState &s)
+     {
+      if(!m_enabled)
+         return;
+
+      color pnlColor = (s.dailyPnlPercent >= 0.0) ? m_cUp : m_cDown;
+
+      SetTitle(StringFormat("V75EA  %s", s.godMode ? "GOD MODE" : "STANDARD"));
+
+      SetRow(0, "State",       s.paused ? "PAUSED" : s.status, s.paused ? m_cDown : m_cGold);
+      SetRow(1, "Regime",      s.regime, m_cText);
+      SetRow(2, "Confidence",  StringFormat("%.2f / thr %.2f", s.confidence, s.threshold), m_cText);
+      SetRow(3, "Vol ratio",   StringFormat("%.2f x", s.volRatio),
+             (s.volRatio >= 1.0) ? m_cUp : m_cMuted);
+      SetRow(4, "Risk mult",   StringFormat("%.2f x", s.riskMult), m_cText);
+      SetRow(5, "Recovery",    (s.recoveryStep > 0) ? StringFormat("step %d", s.recoveryStep) : "-",
+             (s.recoveryStep > 0) ? m_cDown : m_cMuted);
+      SetRow(6, "Positions",   StringFormat("%d", s.openPositions), m_cText);
+      SetRow(7, "Day P/L",     StringFormat("%+.2f%%", s.dailyPnlPercent), pnlColor);
+      SetRow(8, "Equity",      StringFormat("%.2f", s.equity), m_cText);
+
+      //--- keep pause button label in sync
+      ObjectSetString(0, m_btnPause, OBJPROP_TEXT, s.paused ? "RESUME" : "PAUSE");
+     }
+
+private:
+   void              CreatePanel(void)
+     {
+      int rows   = 9;
+      int height = 34 + rows * m_rowH + 34;
+
+      //--- background
+      ObjectCreate(0, m_bg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, m_bg, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, m_bg, OBJPROP_XDISTANCE, m_x);
+      ObjectSetInteger(0, m_bg, OBJPROP_YDISTANCE, m_y);
+      ObjectSetInteger(0, m_bg, OBJPROP_XSIZE, m_w);
+      ObjectSetInteger(0, m_bg, OBJPROP_YSIZE, height);
+      ObjectSetInteger(0, m_bg, OBJPROP_BGCOLOR, m_cBg);
+      ObjectSetInteger(0, m_bg, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+      ObjectSetInteger(0, m_bg, OBJPROP_COLOR, m_cGold);
+      ObjectSetInteger(0, m_bg, OBJPROP_BACK, false);
+      ObjectSetInteger(0, m_bg, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, m_bg, OBJPROP_HIDDEN, true);
+
+      //--- title
+      CreateLabel(m_title, m_x + 12, m_y + 10, "V75EA", m_cGold, 11, true);
+
+      //--- rows
+      for(int i = 0; i < rows; i++)
+        {
+         string keyName = m_prefix + "k" + (string)i;
+         string valName = m_prefix + "v" + (string)i;
+         int yy = m_y + 34 + i * m_rowH;
+         CreateLabel(keyName, m_x + 12, yy, "", m_cMuted, 9, false);
+         CreateLabel(valName, m_x + m_w - 12, yy, "", m_cText, 9, false, ANCHOR_RIGHT_UPPER);
+         m_rows[i] = valName;
+        }
+      m_rowCount = rows;
+
+      //--- buttons
+      int by = m_y + 34 + rows * m_rowH + 4;
+      CreateButton(m_btnPause, m_x + 12, by, 100, 24, "PAUSE", m_cGold);
+      CreateButton(m_btnClose, m_x + m_w - 112, by, 100, 24, "CLOSE ALL", m_cDown);
+     }
+
+   void              CreateLabel(const string name, const int x, const int y, const string text,
+                                  const color clr, const int fontSize, const bool bold,
+                                  const ENUM_ANCHOR_POINT anchor = ANCHOR_LEFT_UPPER)
+     {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+      ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
+      ObjectSetString(0, name, OBJPROP_TEXT, text);
+      ObjectSetString(0, name, OBJPROP_FONT, bold ? "Arial Bold" : "Arial");
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+     }
+
+   void              CreateButton(const string name, const int x, const int y, const int w, const int h,
+                                   const string text, const color clr)
+     {
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+      ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+      ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
+      ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+      ObjectSetString(0, name, OBJPROP_TEXT, text);
+      ObjectSetString(0, name, OBJPROP_FONT, "Arial Bold");
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, (color)C'232,236,244');
+      ObjectSetInteger(0, name, OBJPROP_BGCOLOR, (color)C'32,40,56');
+      ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, clr);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+     }
+
+   void              SetTitle(const string text)
+     {
+      ObjectSetString(0, m_title, OBJPROP_TEXT, text);
+     }
+
+   void              SetRow(const int i, const string key, const string val, const color valColor)
+     {
+      if(i < 0 || i >= m_rowCount)
+         return;
+      ObjectSetString(0, m_prefix + "k" + (string)i, OBJPROP_TEXT, key);
+      ObjectSetString(0, m_rows[i], OBJPROP_TEXT, val);
+      ObjectSetInteger(0, m_rows[i], OBJPROP_COLOR, valColor);
+     }
   };
 
 
@@ -1299,6 +1796,18 @@ public:
             count++;
         }
       return count;
+     }
+
+   //--- close every position this EA owns on the symbol (panel button / profit target)
+   void              CloseAll(void)
+     {
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+        {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0 || !PositionSelectByTicket(ticket)) continue;
+         if(PositionGetString(POSITION_SYMBOL) != m_symbol) continue;
+         m_trade.PositionClose(ticket);
+        }
      }
 
    //--- +1 when all open positions are long, -1 all short, 0 flat or mixed
@@ -1490,14 +1999,28 @@ public:
   };
 
 
+enum ENUM_STOP_MODE
+  {
+   STOP_ATR   = 0,   // stop distance from ATR (adaptive to realized range)
+   STOP_SIGMA = 1    // stop distance from theoretical V75 sigma (constant probability)
+  };
+
 //--- General
 input ulong           InpMagicNumber       = 750001;
-input ENUM_TIMEFRAMES InpTimeframe         = PERIOD_M5;   // trade-setup timeframe
-input ENUM_TIMEFRAMES InpHtf1              = PERIOD_M15;  // intermediate bias
-input ENUM_TIMEFRAMES InpHtf2              = PERIOD_H1;   // overall bias
+input ENUM_TIMEFRAMES InpTimeframe         = PERIOD_M5;
+input ENUM_TIMEFRAMES InpHtf1              = PERIOD_M15;
+input ENUM_TIMEFRAMES InpHtf2              = PERIOD_H1;
 input bool            InpTradeOnNewBarOnly = true;
 
-//--- Indicator periods (shared where sensible)
+//--- V75 arithmetic
+input double          InpAnnualVolPercent  = 75.0;   // 75 for V75; set to match the instrument
+input ENUM_STOP_MODE  InpStopMode          = STOP_ATR;
+input int             InpSigmaHorizonBars  = 10;     // horizon for sigma stop / touch probability
+input double          InpSigmaStopK        = 1.0;    // stop at k theoretical sigmas
+input int             InpRealizedVolBars   = 30;     // window for realized-vol estimate
+input double          InpMinVolRatio       = 0.60;   // skip dead markets (realized << theoretical)
+
+//--- Indicator periods
 input int    InpEmaFast            = 20;
 input int    InpEmaSlow            = 50;
 input int    InpAdxPeriod          = 14;
@@ -1509,8 +2032,8 @@ input int    InpAtrPeriod          = 14;
 //--- Regime detection
 input double InpAdxTrendThreshold  = 22.0;
 input double InpAdxStrongThreshold = 30.0;
-input double InpAtrExpansionRatio  = 1.5;   // ATR vs 50-bar avg to call a breakout
-input double InpBbCompressionRatio = 0.7;   // BB width vs 50-bar avg to call compression
+input double InpAtrExpansionRatio  = 1.5;
+input double InpBbCompressionRatio = 0.7;
 input double InpRsiOverbought      = 70.0;
 input double InpRsiOversold        = 30.0;
 
@@ -1525,19 +2048,32 @@ input double InpAdxNormalizer      = 50.0;
 input int    InpSlopeLookback      = 5;
 
 //--- Confluence
-input double InpMinConfidence      = 0.60;  // base threshold; OODA adapts around it
+input double InpMinConfidence      = 0.60;
 
-//--- God mode (adaptive-aggressive OODA loop)
+//--- God mode (adaptive OODA)
 input bool   InpGodMode            = true;
-input double InpGodMinConfidence   = 0.50;  // most aggressive adaptive threshold
-input double InpGodMaxConfidence   = 0.75;  // most defensive adaptive threshold
-input double InpGodRiskBoostMax    = 1.5;   // risk multiplier ceiling on hot streaks
-input int    InpMaxPositions       = 3;     // pyramiding cap, same-direction only (1 = off)
-input double InpTrailAtrMult       = 2.0;   // ATR trailing distance (god mode)
+input double InpGodMinConfidence   = 0.50;
+input double InpGodMaxConfidence   = 0.75;
+input double InpGodRiskBoostMax    = 1.5;
+input int    InpMaxPositions       = 3;
+input double InpTrailAtrMult       = 2.0;
+
+//--- Bounded recovery (Godmode trait) — OFF by default
+input bool   InpUseRecovery        = false;
+input int    InpRecoveryMaxSteps   = 3;
+input double InpRecoveryStepFactor = 1.5;
+input double InpRecoveryMaxMult    = 3.0;
+input double InpRecoveryEquityFloorPct = 80.0;   // recovery disabled below this % of start equity
+
+//--- Session filter + daily profit target
+input bool   InpUseSession         = false;
+input int    InpSessionStartHour   = 6;    // server time
+input int    InpSessionEndHour     = 22;
+input double InpDailyProfitTarget  = 0.0;  // % of day-start equity; 0 disables
 
 //--- Risk management
-input double InpRiskPercent        = 1.0;   // base risk per trade, % equity
-input double InpMaxRiskPercent     = 2.0;   // hard cap, adaptive requests cannot exceed
+input double InpRiskPercent        = 1.0;
+input double InpMaxRiskPercent     = 2.0;   // hard ceiling; recovery/OODA cannot exceed it
 input double InpAtrStopMultiplier  = 1.5;
 input double InpAtrTakeProfitMult  = 3.0;
 
@@ -1553,6 +2089,11 @@ input double InpBreakevenAtrMult    = 1.0;
 input double InpPartialCloseAtrMult = 2.0;
 input double InpPartialClosePercent = 50.0;
 
+//--- UX
+input bool   InpShowDashboard       = true;
+input bool   InpUseNotifications    = false;  // requires MetaQuotes ID in MT5 settings
+
+CVolatilityMath     g_vol;
 CRegimeDetector     g_regime;
 CMarketStructure    g_structure;
 CMomentumEngine     g_momentum;
@@ -1562,15 +2103,21 @@ CConfluenceEngine   g_confluence;
 COodaEngine         g_ooda;
 CRiskManager        g_risk;
 CSafetyGuard        g_safety;
+CRecoveryManager    g_recovery;
+CDashboard          g_dashboard;
 CTradeManager       g_trades;
 CPerformanceTracker g_perf;
 
 datetime    g_lastBarTime   = 0;
 ENUM_REGIME g_regimeAtEntry = REGIME_RANGE;
+bool        g_paused        = false;
+double      g_lastConfidence = 0.0;
 
 //+------------------------------------------------------------------+
 int OnInit()
   {
+   g_vol.Init(_Symbol, InpTimeframe, InpAnnualVolPercent);
+
    if(!g_regime.Init(_Symbol, InpTimeframe, InpAdxPeriod, InpAdxTrendThreshold, InpAdxStrongThreshold,
                      InpEmaFast, InpEmaSlow, InpAtrPeriod, InpBandsPeriod, InpBandsDeviation,
                      InpAtrExpansionRatio, InpBbCompressionRatio))
@@ -1603,15 +2150,20 @@ int OnInit()
 
    g_risk.Init(_Symbol, InpRiskPercent, InpMaxRiskPercent);
    g_safety.Init(_Symbol, InpMaxDailyLossPercent, InpMaxDrawdownPercent,
-                 InpMaxConsecutiveLoss, InpMaxSpreadPoints);
+                 InpMaxConsecutiveLoss, InpMaxSpreadPoints,
+                 InpUseSession, InpSessionStartHour, InpSessionEndHour, InpDailyProfitTarget);
+   g_recovery.Init(InpUseRecovery, InpRecoveryMaxSteps, InpRecoveryStepFactor,
+                   InpRecoveryMaxMult, InpRecoveryEquityFloorPct);
    g_trades.Init(_Symbol, InpMagicNumber, InpSlippagePoints,
                  InpBreakevenAtrMult, InpPartialCloseAtrMult, InpPartialClosePercent);
    g_trades.SetTrailing(InpGodMode, InpTrailAtrMult);
+   g_dashboard.Init("v75ea_", InpShowDashboard);
    g_perf.Reset();
 
-   Print("V75EA v3 initialized on ", _Symbol,
-         " setup TF=", EnumToString(InpTimeframe),
-         " godMode=", (InpGodMode ? "ON" : "OFF"));
+   Print("V75EA v4 on ", _Symbol, " TF=", EnumToString(InpTimeframe),
+         " godMode=", (InpGodMode ? "ON" : "OFF"),
+         " recovery=", (InpUseRecovery ? "ON" : "OFF"),
+         " stopMode=", (InpStopMode == STOP_SIGMA ? "SIGMA" : "ATR"));
    return INIT_SUCCEEDED;
   }
 
@@ -1619,6 +2171,7 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    g_perf.PrintSummary();
+   g_dashboard.Deinit();
    g_regime.Deinit();
    g_momentum.Deinit();
    g_trend.Deinit();
@@ -1637,8 +2190,17 @@ void OnTick()
    if(!g_ooda.Observe(obs))
       return;
 
-   //--- ACT (management): breakeven / partial / trailing on every tick
+   //--- ACT (management): breakeven / partial / trailing every tick
    g_trades.ManageOpenPositions(obs.atr);
+
+   //--- daily profit target: flatten and lock in
+   if(g_safety.DailyProfitReached() && g_trades.HasOpenPosition())
+     {
+      g_trades.CloseAll();
+      Notify("V75EA: daily profit target reached — positions closed.");
+     }
+
+   UpdateDashboard(obs);
 
    bool newBar = IsNewBar();
    if(InpTradeOnNewBarOnly && !newBar)
@@ -1646,7 +2208,14 @@ void OnTick()
    if(newBar)
       g_structure.Update();
 
+   if(g_paused)
+      return;
    if(!g_safety.IsTradingAllowed())
+      return;
+
+   //--- arithmetic gate: skip dead markets (realized vol far below theoretical)
+   double volRatio = g_vol.VolRatio(InpRealizedVolBars);
+   if(volRatio < InpMinVolRatio)
       return;
 
    int maxPositions = MathMax(1, InpMaxPositions);
@@ -1658,8 +2227,9 @@ void OnTick()
    SDecision decision;
    if(!g_ooda.Decide(obs, decision, InpAtrStopMultiplier, InpAtrTakeProfitMult, InpRiskPercent))
       return;
+   g_lastConfidence = decision.confidence;
 
-   //--- pyramiding: additional entries only in the direction of existing exposure
+   //--- pyramiding: only add in the direction of existing exposure
    if(openCount > 0)
      {
       int haveDir = g_trades.OpenDirection();
@@ -1668,22 +2238,56 @@ void OnTick()
          return;
      }
 
-   //--- ACT (entry)
-   g_risk.SetRiskPercent(decision.riskPercent); // hard-capped inside RiskManager
-   double lots = g_risk.CalculateLotSize(decision.slDistance);
+   //--- stop/target distances: ATR (from OODA) or theoretical sigma
+   double slDistance = decision.slDistance;
+   double tpDistance = decision.tpDistance;
+   if(InpStopMode == STOP_SIGMA)
+     {
+      slDistance = g_vol.SigmaStopDistance(InpSigmaHorizonBars, InpSigmaStopK);
+      double rr  = (InpAtrStopMultiplier > 0.0) ? (InpAtrTakeProfitMult / InpAtrStopMultiplier) : 2.0;
+      tpDistance = slDistance * rr;
+     }
 
-   if(g_trades.OpenTrade(decision.signal, lots, decision.slDistance, decision.tpDistance))
+   //--- log the first-passage touch odds so the risk geometry is explicit
+   double pStop = g_vol.ProbTouch(slDistance, InpSigmaHorizonBars);
+   double pTgt  = g_vol.ProbTouch(tpDistance, InpSigmaHorizonBars);
+
+   //--- risk request = base * OODA multiplier * recovery multiplier (all hard-capped)
+   double effRisk = decision.riskPercent * g_recovery.Multiplier();
+   g_risk.SetRiskPercent(effRisk);
+   double lots = g_risk.CalculateLotSize(slDistance);
+
+   if(g_trades.OpenTrade(decision.signal, lots, slDistance, tpDistance))
      {
       g_regimeAtEntry = obs.regime;
-      PrintFormat("V75EA entry: %s lots=%.2f conf=%.2f | %s",
-                  (decision.signal == SIGNAL_BUY ? "BUY" : "SELL"),
-                  lots, decision.confidence, decision.reason);
+      string msg = StringFormat("V75EA %s lots=%.2f conf=%.2f volR=%.2f pStop=%.2f pTgt=%.2f | %s",
+                                (decision.signal == SIGNAL_BUY ? "BUY" : "SELL"),
+                                lots, decision.confidence, volRatio, pStop, pTgt, decision.reason);
+      Print(msg);
+      Notify(msg);
      }
   }
 
 //+------------------------------------------------------------------+
-//| FEEDBACK: realized results close the OODA loop and feed the      |
-//| safety and performance modules                                   |
+//| Dashboard button clicks                                          |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+  {
+   ENUM_PANEL_ACTION action = g_dashboard.HandleEvent(id, lparam, dparam, sparam);
+   if(action == PANEL_TOGGLE_PAUSE)
+     {
+      g_paused = !g_paused;
+      Print("V75EA: ", (g_paused ? "PAUSED by user." : "RESUMED by user."));
+     }
+   else if(action == PANEL_CLOSE_ALL)
+     {
+      g_trades.CloseAll();
+      Print("V75EA: CLOSE ALL by user.");
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| FEEDBACK                                                         |
 //+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                          const MqlTradeRequest &request,
@@ -1703,8 +2307,56 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       bool win = (profit >= 0.0);
       g_safety.RegisterTradeResult(win);
       g_ooda.RegisterTradeResult(win);
+      g_recovery.RegisterResult(win);
       g_perf.RecordClosedTrade(profit, g_regimeAtEntry);
+      Notify(StringFormat("V75EA closed: %s %.2f", (win ? "WIN" : "LOSS"), profit));
      }
+  }
+
+//+------------------------------------------------------------------+
+void UpdateDashboard(const SObservation &obs)
+  {
+   if(!InpShowDashboard)
+      return;
+
+   SDashboardState st;
+   st.godMode         = InpGodMode;
+   st.paused          = g_paused;
+   st.regime          = RegimeName(obs.regime);
+   st.confidence      = g_lastConfidence;
+   st.threshold       = g_ooda.DynamicConfidence();
+   st.riskMult        = g_ooda.RiskMultiplier();
+   st.recoveryStep    = g_recovery.Step();
+   st.volRatio        = g_vol.VolRatio(InpRealizedVolBars);
+   st.openPositions   = g_trades.CountOpenPositions();
+   st.dailyPnlPercent = g_safety.DailyPnlPercent();
+   st.equity          = AccountInfoDouble(ACCOUNT_EQUITY);
+   st.balance         = AccountInfoDouble(ACCOUNT_BALANCE);
+   st.status          = g_safety.IsHalted() ? "HALTED" : "SCANNING";
+   g_dashboard.Update(st);
+  }
+
+//+------------------------------------------------------------------+
+void Notify(const string msg)
+  {
+   if(InpUseNotifications)
+      SendNotification(msg);
+  }
+
+//+------------------------------------------------------------------+
+string RegimeName(const ENUM_REGIME r)
+  {
+   switch(r)
+     {
+      case REGIME_STRONG_UPTREND:   return "STRONG UP";
+      case REGIME_WEAK_UPTREND:     return "WEAK UP";
+      case REGIME_STRONG_DOWNTREND: return "STRONG DOWN";
+      case REGIME_WEAK_DOWNTREND:   return "WEAK DOWN";
+      case REGIME_RANGE:            return "RANGE";
+      case REGIME_BREAKOUT:         return "BREAKOUT";
+      case REGIME_COMPRESSION:      return "COMPRESSION";
+     }
+   return "UNKNOWN";
   }
 
 //+------------------------------------------------------------------+

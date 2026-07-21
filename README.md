@@ -20,7 +20,8 @@ logic can evolve independently.
 MQL5/
   Experts/V75EA/V75EA.mq5            Main EA: wires modules, OnTick pipeline
   Include/V75EA/
-    Types.mqh                        Shared enums/structs (ENUM_SIGNAL, result)
+    Types.mqh                        Shared enums/structs (ENUM_SIGNAL, dashboard state)
+    VolatilityMath.mqh               V75 arithmetic: sigma, vol ratio, touch prob
     RegimeDetector.mqh               7-way market regime classification
     MultiTimeframe.mqh               Higher-timeframe directional bias (M15 + H1)
     MarketStructure.mqh              Swing points, HH/HL vs LH/LL, BOS / CHoCH, S&R
@@ -30,9 +31,55 @@ MQL5/
     RiskManager.mqh                  ATR + %-equity position sizing
     SafetyGuard.mqh                  Daily loss, drawdown, streak, spread/margin caps
     OodaEngine.mqh                   OODA cycle + adaptive God-mode feedback loop
+    RecoveryManager.mqh              Bounded, opt-in loss recovery (capped martingale)
+    Dashboard.mqh                    On-chart status panel + PAUSE / CLOSE-ALL buttons
     TradeManager.mqh                 Execution, breakeven, partial close, ATR trailing
     PerformanceTracker.mqh           Win rate, profit factor, drawdown, per-regime
 ```
+
+## The V75 arithmetic (why the EA does what it does)
+
+V75 is a **driftless geometric Brownian motion** with constant annualized
+volatility (75%). `VolatilityMath.mqh` encodes that directly:
+
+- **Per-bar sigma** — `σ_bar = 0.75 × √(barSeconds / yearSeconds)`: the theoretical,
+  *known* expected magnitude of a bar. The one predictable parameter.
+- **Vol ratio** — realized σ (from actual log-returns) ÷ theoretical σ. Above 1 =
+  expansion/clustering, below 1 = compression. This is the **only exploitable
+  signal**, because magnitude is predictable but direction is not. The EA skips
+  markets below `InpMinVolRatio` (dead tape isn't worth the spread).
+- **First-passage touch probability** — reflection principle:
+  `P(touch d within t) = 2·(1 − Φ(d / (price·σ_horizon)))`. Logged on every entry so
+  the risk geometry is explicit.
+- **Sigma-scaled stops** — with `InpStopMode = STOP_SIGMA`, the stop is placed at
+  `k` theoretical sigmas, making risk constant in *probability* terms rather than in
+  arbitrary pips.
+
+**The hard truth this encodes:** under pure driftless GBM, *no* stop/target geometry
+beats break-even — first-passage odds exactly offset the payoff ratio, and spread
+makes it negative. So the EA does **not** bet on price direction from geometry; it
+trades the *deviations from randomness* (vol clustering + trend persistence) that the
+confluence stack measures, and uses the math to size risk honestly.
+
+## "Godmode"-style traits
+
+Traits common to commercial synthetic-index EAs (e.g. the Medula/Godmode category),
+implemented here under the same risk rails:
+
+- **On-chart dashboard** (`Dashboard.mqh`) — live regime, confidence vs adaptive
+  threshold, vol ratio, risk multiplier, recovery step, open positions, day P/L,
+  equity — plus **PAUSE/RESUME** and **CLOSE ALL** buttons wired through `OnChartEvent`.
+- **Bounded recovery** (`RecoveryManager.mqh`, `InpUseRecovery`, default **OFF**) — after
+  a loss, raises the risk request by a capped multiplier (`stepFactor^step`, hard
+  ceiling `InpRecoveryMaxMult`) for at most `InpRecoveryMaxSteps` steps, resets on any
+  win, and disables itself below an equity floor. Unlike classic martingale it is
+  bounded *and* still clamped by `InpMaxRiskPercent` and every SafetyGuard breaker —
+  it cannot compound a losing run without limit.
+- **Session filter** (`InpUseSession`) — restrict trading to chosen server hours.
+- **Daily profit target** (`InpDailyProfitTarget`) — once hit, flatten and lock in for
+  the day.
+- **Push notifications** (`InpUseNotifications`) — entry/exit alerts to the MT5 mobile
+  app (needs a MetaQuotes ID configured).
 
 ## God mode (OODA loop)
 
