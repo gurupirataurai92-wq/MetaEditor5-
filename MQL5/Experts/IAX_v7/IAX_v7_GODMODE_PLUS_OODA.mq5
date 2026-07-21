@@ -12,8 +12,8 @@
 //+------------------------------------------------------------------+
 #property copyright "IAX v7.0 GODMODE+ OODA"
 #property link      ""
-#property version   "7.00"
-#property description "Institutional Adaptive XAUUSD EA — GODMODE+ OODA build: the 9-factor probabilistic engine restructured as an explicit Observe-Orient-Decide-Act loop with per-phase telemetry, decision ledger, layered governors and online adaptive learning. No profit is promised."
+#property version   "7.10"
+#property description "Institutional Adaptive XAUUSD EA — GODMODE+ OODA v7.1: 9-factor probabilistic engine as an explicit OODA loop, plus a pattern-arithmetic layer — learned per-pattern expectancy, hour-of-day volatility profile, serial-correlation bias, round-number TP snapping. No profit is promised."
 
 //====================================================================
 // [ENUMS]
@@ -93,6 +93,7 @@ enum ENUM_BLOCK_REASON
    BLOCK_VOTE_EDGE_TOO_THIN,
    BLOCK_MAX_POSITIONS,
    BLOCK_GEOMETRY_INCOHERENT,
+   BLOCK_PATTERN_NEGATIVE,
    BLOCK_COUNT // sentinel, keep last
   };
 
@@ -214,6 +215,16 @@ input int    InpOODATempoSec          = 0;      // Intra-bar re-orient cadence (
 input int    InpOODALedgerSize        = 6;      // Recent-decision ledger rows shown on the dashboard
 input bool   InpOODALogPhaseTimings   = true;   // Print per-phase OODA loop timings in the end-of-run report
 
+input group "=== PATTERN ARITHMETIC (GODMODE+ v7.1) ===";
+input bool   InpPatternLearnerOn     = true;   // Learn per-pattern (regime-group x session x direction) expectancy in R; suppress proven-negative patterns
+input int    InpPatternMinSamples    = 15;     // Closed trades required in a pattern bucket before its expectancy is trusted
+input double InpPatternBlockAvgR     = -0.05;  // Suppress a pattern whose average R falls below this
+input double InpPatternBoostAvgR     = 0.30;   // Boost size when a pattern's average R exceeds this
+input double InpPatternBoostFactor   = 1.25;   // Size multiplier for proven-positive patterns
+input bool   InpUseHourVolProfile    = true;   // Scale TP/SL to the learned hour-of-day ATR profile of the instrument
+input bool   InpUseSerialBias        = true;   // Confidence tilt from measured continuation/alternation bias of closed-bar returns
+input bool   InpSnapTPBeforeRound    = true;   // Pull TP just in front of .00/.50 round-number walls in its path
+
 //====================================================================
 // [GLOBAL STATE] — all declared before first use (MQL5 is single-pass)
 //====================================================================
@@ -277,6 +288,7 @@ double   g_bkConfidenceAtEntry[MAX_BASKETS];
 int      g_bkEntryHour[MAX_BASKETS];
 ulong    g_bkTicket[MAX_BASKETS];        // 0 until reconciled with a live position ticket
 int      g_bkFactorVote[MAX_BASKETS][NUM_FACTORS]; // snapshot of factor votes at entry, for adaptive learning
+int      g_bkPatternId[MAX_BASKETS];               // pattern bucket at entry, for pattern-expectancy learning
 double   g_groupPeakProfitBuy = 0.0;     // basket-group (all active BUY slots) peak floating profit
 double   g_groupPeakProfitSell = 0.0;    // basket-group (all active SELL slots) peak floating profit
 
@@ -352,6 +364,17 @@ datetime g_lastEntryBarTime = 0;     // bar whose signal already produced an ent
 bool     g_newSignalBar = false;
 string   g_oodaLedger[];             // newest-first ring of recent decision summaries
 
+// --- Pattern arithmetic (v7.1): the measured statistics of the entity ---
+#define NUM_PATTERNS 60              // 6 regime groups x 5 sessions x 2 directions
+double   g_patRSum[NUM_PATTERNS];    // summed result in R per pattern bucket
+int      g_patCount[NUM_PATTERNS];
+bool     g_patBlocked[NUM_PATTERNS];
+int      g_currentPatternId = -1;
+double   g_patternSizeBoost = 1.0;
+double   g_serialP = 0.5;            // P(consecutive closed-bar returns share a sign): >0.5 continuation, <0.5 alternation
+double   g_hourATR[24];              // learned EWMA ATR per hour of day (gold's intraday vol profile)
+double   g_allATR = 0.0;             // learned EWMA ATR overall
+
 //====================================================================
 // [FORWARD DECLARATIONS]
 //====================================================================
@@ -392,6 +415,16 @@ void   OODA_Act(ENUM_OODA_DECISION decision);
 bool   TempoAllowsIntraBarReorient();
 void   OODA_LedgerPush(string row);
 string DecisionToString(ENUM_OODA_DECISION d);
+int    RegimeGroup(ENUM_REGIME r);
+int    CurrentPatternId(int direction);
+string PatternIdToString(int pid);
+void   PatternLearn(int pid, double resultR);
+void   UpdateVolProfile();
+double HourVolFactor();
+void   UpdateSerialBias();
+double SerialBiasMultiplier(int direction);
+double SnapTPBeforeRound(double entryPrice, double tp, int direction);
+double NormalizeLot(double lot);
 ENUM_REGIME ClassifyRegime();
 double RegimeQualityMultiplier(ENUM_REGIME r);
 ENUM_SESSION CurrentSession();
@@ -468,6 +501,7 @@ string BlockReasonToString(ENUM_BLOCK_REASON r)
       case BLOCK_VOTE_EDGE_TOO_THIN:        return "VOTE_EDGE_TOO_THIN";
       case BLOCK_MAX_POSITIONS:             return "MAX_POSITIONS";
       case BLOCK_GEOMETRY_INCOHERENT:       return "GEOMETRY_INCOHERENT";
+      case BLOCK_PATTERN_NEGATIVE:          return "PATTERN_NEGATIVE_EXPECTANCY";
       default:                              return "UNKNOWN";
      }
   }
@@ -819,6 +853,9 @@ void SaveFactorWeights()
 void LoadPersistedState()
   {
    for(int h = 0; h < 24; h++) { g_hourPnLSum[h] = 0.0; g_hourSampleCount[h] = 0; g_hourBlocked[h] = false; }
+   for(int p = 0; p < NUM_PATTERNS; p++) { g_patRSum[p] = 0.0; g_patCount[p] = 0; g_patBlocked[p] = false; }
+   for(int h = 0; h < 24; h++) g_hourATR[h] = 0.0;
+   g_allATR = 0.0;
    g_consecutiveLosses = 0;
    g_cooldownUntil = 0;
    g_dailyStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -847,6 +884,15 @@ void LoadPersistedState()
       g_hourSampleCount[h] = (int)FileReadNumber(fh);
       g_hourBlocked[h]     = (FileReadNumber(fh) != 0.0);
      }
+   for(int p = 0; p < NUM_PATTERNS && !FileIsEnding(fh); p++)
+     {
+      g_patRSum[p]    = FileReadNumber(fh);
+      g_patCount[p]   = (int)FileReadNumber(fh);
+      g_patBlocked[p] = (FileReadNumber(fh) != 0.0);
+     }
+   for(int h = 0; h < 24 && !FileIsEnding(fh); h++)
+      g_hourATR[h] = FileReadNumber(fh);
+   if(!FileIsEnding(fh)) g_allATR = FileReadNumber(fh);
    FileClose(fh);
    Log("Persisted state loaded from " + g_stateFileName);
   }
@@ -862,6 +908,11 @@ void SavePersistedState()
    FileWrite(fh, g_consecutiveLosses, (long)g_cooldownUntil, g_dailyStartEquity, (long)g_currentDayStamp);
    for(int h = 0; h < 24; h++)
       FileWrite(fh, g_hourPnLSum[h], g_hourSampleCount[h], g_hourBlocked[h] ? 1 : 0);
+   for(int p = 0; p < NUM_PATTERNS; p++)
+      FileWrite(fh, g_patRSum[p], g_patCount[p], g_patBlocked[p] ? 1 : 0);
+   for(int h = 0; h < 24; h++)
+      FileWrite(fh, g_hourATR[h]);
+   FileWrite(fh, g_allATR);
    FileClose(fh);
   }
 
@@ -926,7 +977,7 @@ int OnInit()
         }
      }
 
-   for(int i = 0; i < MAX_BASKETS; i++) { g_bkActive[i] = false; g_bkTicket[i] = 0; }
+   for(int i = 0; i < MAX_BASKETS; i++) { g_bkActive[i] = false; g_bkTicket[i] = 0; g_bkPatternId[i] = -1; }
    for(int i = 0; i < MAX_PENDING; i++) g_pendingActive[i] = false;
    g_swActive = false;
    for(int r = 0; r < BLOCK_COUNT; r++) g_blockCounts[r] = 0;
@@ -1631,6 +1682,8 @@ int OODA_Orient()
    g_sessionQuality = SessionQualityMultiplier(g_session);
    g_ignitionBar = DetectIgnitionBar();
    g_exhaustionBar = DetectExhaustionBar();
+   UpdateVolProfile();
+   UpdateSerialBias();
 
    g_lastEdge = MathAbs(g_buyProb - g_sellProb);
    g_confidence = g_lastEdge * g_regimeQuality * g_sessionQuality * 100.0;
@@ -1648,6 +1701,14 @@ int OODA_Orient()
       bool trendDown = (g_regime == REGIME_STRONG_BEAR || g_regime == REGIME_NORMAL_BEAR || g_regime == REGIME_WEAK_BEAR || g_regime == REGIME_BREAKOUT_DOWN);
       bool isContinuation = (direction == 1 && trendUp) || (direction == -1 && trendDown);
       if(isContinuation) g_confidence *= 0.65;
+     }
+
+   // Serial-correlation tilt: reward signal types that match the measured
+   // statistical character of recent bars (continuation vs alternation).
+   if(direction != 0)
+     {
+      double serM = SerialBiasMultiplier(direction);
+      if(serM != 1.0) g_confidence *= serM;
      }
 
    g_signalsGenerated++;
@@ -1699,6 +1760,24 @@ ENUM_OODA_DECISION OODA_Decide(int direction)
    // Confidence gate passed — a "shadow gate" candidate even if a governor
    // blocks it downstream, tracked separately for the end-of-run report.
    g_shadowGateWouldHaveTraded++;
+
+   // Pattern-expectancy gate: this exact pattern (regime-group x session x
+   // direction) must not have PROVEN negative arithmetic over enough samples.
+   g_currentPatternId = CurrentPatternId(direction);
+   g_patternSizeBoost = 1.0;
+   if(InpPatternLearnerOn && g_patCount[g_currentPatternId] >= InpPatternMinSamples)
+     {
+      double patAvgR = g_patRSum[g_currentPatternId] / g_patCount[g_currentPatternId];
+      if(g_patBlocked[g_currentPatternId])
+        {
+         g_lastDecisionReason = StringFormat("pattern %s avgR=%.2f over %d trades",
+             PatternIdToString(g_currentPatternId), patAvgR, g_patCount[g_currentPatternId]);
+         LogBlock(BLOCK_PATTERN_NEGATIVE, g_lastDecisionReason);
+         return DEC_BLOCKED;
+        }
+      if(patAvgR >= InpPatternBoostAvgR)
+         g_patternSizeBoost = InpPatternBoostFactor;
+     }
 
    ENUM_BLOCK_REASON blockedBy = BLOCK_NONE;
    if(!PassGovernors(direction, blockedBy))
@@ -1769,6 +1848,185 @@ void OODA_LedgerPush(string row)
    if(n < maxRows) { ArrayResize(g_oodaLedger, n + 1); n++; }
    for(int i = n - 1; i > 0; i--) g_oodaLedger[i] = g_oodaLedger[i - 1];
    g_oodaLedger[0] = row;
+  }
+
+//====================================================================
+// [PATTERN ARITHMETIC — v7.1] The measured statistics of the entity.
+// Gold is not random noise: it has an intraday volatility profile, it
+// reacts at .00/.50 round numbers, its bar-to-bar returns alternate
+// between continuation and mean-reversion character, and specific
+// (regime x session x direction) patterns carry persistent expectancy.
+// Everything here is MEASURED online with sample-size guards — no
+// pattern is trusted before InpPatternMinSamples closed trades.
+//====================================================================
+int RegimeGroup(ENUM_REGIME r)
+  {
+   switch(r)
+     {
+      case REGIME_STRONG_BULL: case REGIME_STRONG_BEAR:                          return 0;
+      case REGIME_NORMAL_BULL: case REGIME_NORMAL_BEAR:                          return 1;
+      case REGIME_WEAK_BULL:   case REGIME_WEAK_BEAR:                            return 2;
+      case REGIME_RANGE:       case REGIME_VOL_COMPRESSION:                      return 3;
+      case REGIME_BREAKOUT_UP: case REGIME_BREAKOUT_DOWN: case REGIME_VOL_EXPANSION: return 4;
+      default:                                                                   return 5; // exhaustion / reversal risk / unknown
+     }
+  }
+
+int CurrentPatternId(int direction)
+  {
+   return (RegimeGroup(g_regime) * 5 + (int)g_session) * 2 + (direction == 1 ? 0 : 1);
+  }
+
+string PatternIdToString(int pid)
+  {
+   if(pid < 0 || pid >= NUM_PATTERNS) return "n/a";
+   string grpName;
+   switch(pid / 10)
+     {
+      case 0: grpName = "STRONG"; break;
+      case 1: grpName = "NORMAL"; break;
+      case 2: grpName = "WEAK";   break;
+      case 3: grpName = "RANGE";  break;
+      case 4: grpName = "BRKOUT"; break;
+      default: grpName = "EXHREV"; break;
+     }
+   string sessName;
+   switch((pid / 2) % 5)
+     {
+      case 0: sessName = "ASIA"; break;
+      case 1: sessName = "LDN";  break;
+      case 2: sessName = "NY";   break;
+      case 3: sessName = "OVL";  break;
+      default: sessName = "ROLL"; break;
+     }
+   return grpName + "/" + sessName + "/" + ((pid % 2) == 0 ? "BUY" : "SELL");
+  }
+
+void PatternLearn(int pid, double resultR)
+  {
+   if(!InpPatternLearnerOn || pid < 0 || pid >= NUM_PATTERNS) return;
+   g_patRSum[pid] += MathMax(-3.0, MathMin(3.0, resultR)); // clamp: one outlier may not define a pattern
+   g_patCount[pid]++;
+   if(g_patCount[pid] >= InpPatternMinSamples)
+     {
+      double avg = g_patRSum[pid] / g_patCount[pid];
+      bool was = g_patBlocked[pid];
+      g_patBlocked[pid] = (avg < InpPatternBlockAvgR);
+      if(g_patBlocked[pid] && !was)
+         Log(StringFormat("PATTERN LEARNER: %s proven negative (avgR %.2f over %d trades) — suppressing.",
+             PatternIdToString(pid), avg, g_patCount[pid]));
+      else if(!g_patBlocked[pid] && was)
+         Log(StringFormat("PATTERN LEARNER: %s recovered (avgR %.2f) — re-enabled.", PatternIdToString(pid), avg));
+     }
+   SavePersistedState();
+  }
+
+// Hour-of-day volatility profile: EWMA of signal-TF ATR per hour bucket.
+// Gold's day has a shape — quiet Asia, London-open expansion, NY-overlap
+// peak — and the geometry should target what the hour actually delivers.
+void UpdateVolProfile()
+  {
+   if(!InpUseHourVolProfile) return;
+   double atr[]; ArraySetAsSeries(atr, true);
+   if(CopyBuffer(h_atr_sig, 0, 0, 1, atr) < 1) return;
+   MqlDateTime dt; TimeToStruct(TimeCurrent(), dt);
+   double a = 0.05;
+   if(g_hourATR[dt.hour] <= 0.0) g_hourATR[dt.hour] = atr[0];
+   else g_hourATR[dt.hour] = (1.0 - a) * g_hourATR[dt.hour] + a * atr[0];
+   if(g_allATR <= 0.0) g_allATR = atr[0];
+   else g_allATR = (1.0 - a) * g_allATR + a * atr[0];
+  }
+
+double HourVolFactor()
+  {
+   if(!InpUseHourVolProfile) return 1.0;
+   MqlDateTime dt; TimeToStruct(TimeCurrent(), dt);
+   if(g_allATR <= 0.0 || g_hourATR[dt.hour] <= 0.0) return 1.0;
+   double f = g_hourATR[dt.hour] / g_allATR;
+   return MathMax(0.6, MathMin(1.5, f));
+  }
+
+// Serial correlation of closed-bar returns: the probability that two
+// consecutive bars share a sign. > 0.5 = continuation character (trends
+// follow through), < 0.5 = alternation character (moves get faded).
+void UpdateSerialBias()
+  {
+   if(!InpUseSerialBias) { g_serialP = 0.5; return; }
+   double c[]; ArraySetAsSeries(c, true);
+   int n = 42; // 41 returns -> 40 consecutive pairs
+   if(CopyClose(g_symbol, g_signalTF, 1, n, c) < n) { g_serialP = 0.5; return; }
+   int agree = 0, pairs = 0;
+   for(int i = 0; i < n - 2; i++)
+     {
+      double r1 = c[i] - c[i + 1];
+      double r2 = c[i + 1] - c[i + 2];
+      if(r1 == 0.0 || r2 == 0.0) continue;
+      pairs++;
+      if((r1 > 0.0) == (r2 > 0.0)) agree++;
+     }
+   g_serialP = (pairs > 0) ? (double)agree / pairs : 0.5;
+  }
+
+// Continuation-type signals (momentum/trend drive the direction) deserve
+// extra confidence in a continuation market and less in an alternating
+// one; reversal-type signals (sweep/wick against momentum) the opposite.
+double SerialBiasMultiplier(int direction)
+  {
+   if(!InpUseSerialBias) return 1.0;
+   bool contType = (g_factorVote[1] == direction || g_factorVote[2] == direction);
+   bool revType  = (g_factorVote[4] == direction || g_factorVote[5] == direction) && g_factorVote[1] != direction;
+   if(g_serialP >= 0.55 && contType) return 1.08;
+   if(g_serialP <= 0.45 && revType)  return 1.08;
+   if(g_serialP >= 0.55 && revType)  return 0.92;
+   if(g_serialP <= 0.45 && contType) return 0.92;
+   return 1.0;
+  }
+
+// Reversals cluster at .00/.50 — if the TP path barely punches through
+// such a wall, take the profit in front of it instead of betting on the
+// breach. (Entry-side wall avoidance already lives in the HTF zone map.)
+double SnapTPBeforeRound(double entryPrice, double tp, int direction)
+  {
+   double pad = PointsToUSD(InpRoundLevelPadPoints);
+   if(pad <= 0.0) return tp;
+   if(direction == 1)
+     {
+      double level = MathFloor(tp * 2.0) / 2.0; // highest .00/.50 at or below TP
+      if(level > entryPrice && (tp - level) < pad)
+        {
+         double snapped = level - pad;
+         if(snapped > entryPrice)
+           {
+            Log(StringFormat("GEOMETRY: TP %.2f snapped to %.2f — in front of round-number wall %.2f.", tp, snapped, level));
+            return snapped;
+           }
+        }
+     }
+   else
+     {
+      double level = MathCeil(tp * 2.0) / 2.0; // lowest .00/.50 at or above TP
+      if(level < entryPrice && (level - tp) < pad)
+        {
+         double snapped = level + pad;
+         if(snapped < entryPrice)
+           {
+            Log(StringFormat("GEOMETRY: TP %.2f snapped to %.2f — in front of round-number wall %.2f.", tp, snapped, level));
+            return snapped;
+           }
+        }
+     }
+   return tp;
+  }
+
+double NormalizeLot(double lot)
+  {
+   double lotMin  = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_STEP);
+   double lotMax  = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MAX);
+   lot = MathMax(lot, lotMin);
+   lot = MathMin(lot, lotMax);
+   lot = MathRound(lot / lotStep) * lotStep;
+   return NormalizeDouble(lot, 2);
   }
 
 //====================================================================
@@ -2060,6 +2318,19 @@ bool CalcGeometry(int direction, double entryPrice, double &sl, double &tp)
       tpDistance = atr[0] * eff_TP_ATR_Mult * tpMult;
      }
 
+   // [PATTERN ARITHMETIC] Scale the target to what this hour of the gold day
+   // statistically delivers (learned EWMA vol profile): a TP beyond the hour's
+   // typical range is arithmetically unreachable; one far below it wastes edge.
+   if(InpUseHourVolProfile)
+     {
+      double volF = HourVolFactor();
+      if(volF != 1.0)
+        {
+         tpDistance *= volF;
+         slDistance *= (0.5 + 0.5 * volF); // SL scales half as hard to keep R geometry sane
+        }
+     }
+
    // Effective TP = max(userTP, TPSpreadFloorMult * spread) — never let the
    // target be eaten by the cost of entry.
    double spread = CurrentSpreadUSD();
@@ -2075,6 +2346,9 @@ bool CalcGeometry(int direction, double entryPrice, double &sl, double &tp)
 
    sl = (direction == 1) ? entryPrice - slDistance : entryPrice + slDistance;
    tp = (direction == 1) ? entryPrice + tpDistance : entryPrice - tpDistance;
+
+   if(InpSnapTPBeforeRound)
+      tp = SnapTPBeforeRound(entryPrice, tp, direction);
 
    sl = PadAntiStopHunt(sl, direction, true);
    sl = ClampToStopsLevel(entryPrice, sl, direction, true);
@@ -2230,6 +2504,13 @@ void ExecuteEntry(int direction, double confidence)
 
    double slDistance = MathAbs(refPrice - baseSL);
    double lot = CalcLotSize(slDistance);
+   if(g_patternSizeBoost != 1.0)
+     {
+      double boosted = NormalizeLot(lot * g_patternSizeBoost);
+      Log(StringFormat("PATTERN BOOST: proven pattern %s -> size x%.2f (%.2f -> %.2f lots)",
+          PatternIdToString(g_currentPatternId), g_patternSizeBoost, lot, boosted));
+      lot = boosted;
+     }
 
    MqlDateTime dt; TimeToStruct(TimeCurrent(), dt);
 
@@ -2304,6 +2585,7 @@ void ExecuteEntry(int direction, double confidence)
       g_bkEntryHour[slot] = dt.hour;
       g_bkTicket[slot] = (req.action == TRADE_ACTION_DEAL) ? res.order : 0; // pendings reconciled to a ticket once filled
       for(int f = 0; f < NUM_FACTORS; f++) g_bkFactorVote[slot][f] = g_factorVote[f];
+      g_bkPatternId[slot] = g_currentPatternId;
 
       if(req.action == TRADE_ACTION_PENDING)
          RegisterPending(res.order, slot);
@@ -2576,6 +2858,8 @@ void ManageOpenPositions()
          if(InpWriteTradeJournalCSV)
             WriteTradeJournalRow(g_bkDirection[i]==1?"BUY":"SELL", g_bkVolume[i], g_bkAvgPrice[i], 0.0, pnl, g_bkRegime[i], g_bkConfidenceAtEntry[i], g_bkEntryHour[i]);
          OnClosedBasketLearn(i, pnl, g_bkInitialRiskUSD[i], pnl > 0.0);
+         if(g_bkInitialRiskUSD[i] > 0.0)
+            PatternLearn(g_bkPatternId[i], pnl / g_bkInitialRiskUSD[i]);
          g_bkActive[i] = false;
          continue;
         }
@@ -2928,6 +3212,12 @@ void UpdateDashboard()
    txt += StringFormat("Counters: bars=%d signals=%d sent=%d filled=%d rejected=%d closed=%d shadow=%d\n",
           g_barsProcessed, g_signalsGenerated, g_ordersSent, g_ordersFilled, g_ordersRejected, g_positionsClosed, g_shadowGateWouldHaveTraded);
 
+   double patAvg = (g_currentPatternId >= 0 && g_patCount[g_currentPatternId] > 0)
+                   ? g_patRSum[g_currentPatternId] / g_patCount[g_currentPatternId] : 0.0;
+   txt += StringFormat("PATTERN: %s n=%d avgR=%.2f boost=x%.2f | serialP=%.2f volF=%.2f\n",
+          g_currentPatternId >= 0 ? PatternIdToString(g_currentPatternId) : "n/a",
+          g_currentPatternId >= 0 ? g_patCount[g_currentPatternId] : 0, patAvg,
+          g_patternSizeBoost, g_serialP, HourVolFactor());
    txt += StringFormat("OODA: cycle=%I64d loops=%I64d last=%s (%s)\n",
           g_oodaCycle, g_oodaTimedCycles, DecisionToString(g_lastDecision), g_lastDecisionReason);
    if(g_oodaTimedCycles > 0)
@@ -3028,6 +3318,12 @@ void PrintEndOfRunReport()
       Log(StringFormat("  %-28s : %d", BlockReasonToString((ENUM_BLOCK_REASON)r), g_blockCounts[r]));
       if(g_blockCounts[r] > topCount) { topCount = g_blockCounts[r]; topReason = r; }
      }
+
+   Log("--- Pattern expectancy table (regime-group x session x direction) ---");
+   for(int p = 0; p < NUM_PATTERNS; p++)
+      if(g_patCount[p] > 0)
+         Log(StringFormat("  %-22s samples=%-4d avgR=%+.2f %s", PatternIdToString(p), g_patCount[p],
+             g_patRSum[p] / g_patCount[p], g_patBlocked[p] ? "[SUPPRESSED]" : ""));
 
    Log("--- Hourly expectancy learner state ---");
    for(int h = 0; h < 24; h++)

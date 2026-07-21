@@ -1,4 +1,4 @@
-# IAX v7.0 "GODMODE+ / OODA" — Technical Notes
+# IAX v7 "GODMODE+ / OODA" — Technical Notes (v7.1)
 
 EA file: `MQL5/Experts/IAX_v7/IAX_v7_GODMODE_PLUS_OODA.mq5`.
 
@@ -38,6 +38,46 @@ Orient→Decide→Act runs on every **closed signal bar**, exactly like v6 — p
 
 Everything else — profiles, factors, geometry, governors, learning, validation stages, Stage-1 self-test — is unchanged from v6; tune it per the v6 doc's guide. If you enable tempo, treat it as one of your 3–5 optimisation parameters and validate on a disjoint date range like everything else.
 
-## 4. Status
+## 4. v7.1 — Pattern arithmetic layer
 
-Like v6, this build has **not** been compiled in MetaEditor or backtested here — compile it, run the Stage-1 lifecycle self-test in the Strategy Tester, and clear the v6 doc's Grade-A acceptance criteria before any live use.
+v7.1 adds a layer that models the measured statistical arithmetic of XAUUSD itself and adapts the EA's behavior to it. Everything is **measured online with sample-size guards** — no pattern is trusted before it has proven itself over enough closed trades, and none of it is a profit promise.
+
+### 4.1 Pattern-expectancy learner
+
+Every entry is tagged with a **pattern id** — one of 60 buckets: 6 regime groups (strong-trend, normal-trend, weak-trend, range/compression, breakout/expansion, exhaustion/reversal) × 5 sessions × 2 directions. On basket close, the realized result in R (clamped to ±3 so one outlier can't define a pattern) is accumulated per bucket. Once a bucket has ≥ `InpPatternMinSamples` (default 15) trades:
+
+- average R < `InpPatternBlockAvgR` (default −0.05) → the pattern is **suppressed** (new block reason `PATTERN_NEGATIVE_EXPECTANCY`) until its average recovers;
+- average R ≥ `InpPatternBoostAvgR` (default +0.30) → entries in that pattern are **sized up** by `InpPatternBoostFactor` (default ×1.25, broker-lot-normalised).
+
+The full table (samples, avgR, suppressed flag) persists across restarts and is printed in the end-of-run report — this is the "take profits from the patterns" mechanism: stop feeding losing patterns, lean into statistically proven ones.
+
+### 4.2 Hour-of-day volatility profile
+
+Gold's day has a shape — quiet Asia, London-open expansion, NY-overlap peak. The EA learns an EWMA ATR per hour bucket and scales geometry by `hourATR / overallATR` (clamped 0.6–1.5): TP targets what the hour statistically delivers (a TP beyond the hour's typical range is arithmetically unreachable; one far below wastes edge against spread), SL scales half as hard to keep R geometry sane. (`InpUseHourVolProfile`)
+
+### 4.3 Serial-correlation bias
+
+Over the last 40 closed-bar pairs, the EA measures `P(consecutive returns share a sign)`. Above 0.55 the market currently has **continuation** character; below 0.45, **alternation** (mean-reversion). Continuation-type signals (momentum/trend driving the direction) get ×1.08 confidence in a continuation market and ×0.92 in an alternating one; reversal-type signals (sweep/wick against momentum) the mirror image. (`InpUseSerialBias`)
+
+### 4.4 Round-number TP snapping
+
+Reversals cluster at .00/.50 levels. If the TP path barely punches through such a wall (within the round-level pad), the TP is snapped to just **in front** of the wall — take the profit before the level where the reversal statistically happens, instead of betting on the breach. Entry-side wall avoidance already existed in the HTF zone map; this closes the exit side. (`InpSnapTPBeforeRound`)
+
+### 4.5 New inputs (all in the "PATTERN ARITHMETIC" group)
+
+| Input | Default | Meaning |
+|---|---|---|
+| `InpPatternLearnerOn` | true | Enable the 60-bucket pattern-expectancy learner |
+| `InpPatternMinSamples` | 15 | Trades required before a bucket's expectancy is trusted |
+| `InpPatternBlockAvgR` | −0.05 | Suppress a pattern below this average R |
+| `InpPatternBoostAvgR` | +0.30 | Boost size above this average R |
+| `InpPatternBoostFactor` | 1.25 | Size multiplier for proven patterns |
+| `InpUseHourVolProfile` | true | Hour-of-day ATR geometry scaling |
+| `InpUseSerialBias` | true | Continuation/alternation confidence tilt |
+| `InpSnapTPBeforeRound` | true | TP snapping in front of .00/.50 walls |
+
+The dashboard shows the live pattern bucket (samples, avgR, active boost), serialP, and the current hour's vol factor.
+
+## 5. Status
+
+Like v6, this build has **not** been compiled in MetaEditor or backtested here — compile it, run the Stage-1 lifecycle self-test in the Strategy Tester, and clear the v6 doc's Grade-A acceptance criteria before any live use. Note the pattern learner needs trade history to act: on a fresh account it is neutral (no suppressions, no boosts) until buckets reach their sample minimums — backtests are how you pre-charge and evaluate it.
