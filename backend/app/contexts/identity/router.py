@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core import audit
 from app.core.db import get_db
 from app.core.deps import AuthContext, get_auth, require
 from app.core.security import generate_totp_secret, otpauth_uri, verify_totp
@@ -107,3 +108,27 @@ def create_shop(payload: ShopIn, auth: AuthContext = Depends(get_auth),
 def list_shops(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)):
     shops = db.scalars(select(Shop).where(Shop.tenant_id == auth.tenant_id)).all()
     return [ShopOut(id=s.id, name=s.name, address=s.address) for s in shops]
+
+
+@router.delete("/shops/{shop_id}", status_code=204,
+               dependencies=[Depends(require("shops.delete"))])
+def delete_shop(shop_id: str, auth: AuthContext = Depends(get_auth),
+                db: Session = Depends(get_db)):
+    """Close a branch (owner only). Historical sales keep their shop_id for the
+    audit trail; staff assigned there are unassigned."""
+    from app.contexts.hr.models import Employee
+
+    shop = db.get(Shop, shop_id)
+    if shop is None or shop.tenant_id != auth.tenant_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Branch not found")
+    remaining = db.scalar(
+        select(func.count()).select_from(Shop).where(Shop.tenant_id == auth.tenant_id))
+    if remaining <= 1:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "Cannot delete the only branch")
+    for emp in db.scalars(select(Employee).where(Employee.shop_id == shop_id)).all():
+        emp.shop_id = None
+    db.delete(shop)
+    audit.record(db, tenant_id=auth.tenant_id, actor_id=auth.user_id, action="delete",
+                 entity="shop", entity_id=shop_id, data={"name": shop.name})
+    db.commit()

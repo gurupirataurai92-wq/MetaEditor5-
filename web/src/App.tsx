@@ -7,13 +7,14 @@ import Inventory from './components/Inventory'
 import Login from './components/Login'
 import { LogoWordmark } from './components/Logo'
 import Monitor from './components/Monitor'
+import Payments from './components/Payments'
 import Pos from './components/Pos'
 import Sales from './components/Sales'
 import Staff from './components/Staff'
 import Toasts from './components/Toasts'
 
 type Page = 'dashboard' | 'monitor' | 'branches' | 'staff' | 'pos' | 'sales'
-          | 'inventory' | 'assistant'
+          | 'inventory' | 'payments' | 'assistant'
 
 const NAV: Record<Page, { label: string; icon: string; perm: string }> = {
   dashboard: { label: 'Dashboard', icon: '📊', perm: 'reports.read' },
@@ -23,6 +24,7 @@ const NAV: Record<Page, { label: string; icon: string; perm: string }> = {
   pos: { label: 'Point of Sale', icon: '🛒', perm: 'sales.create' },
   sales: { label: 'Sales', icon: '🧾', perm: 'sales.read' },
   inventory: { label: 'Inventory', icon: '📦', perm: 'stock.create' },
+  payments: { label: 'Payments', icon: '💳', perm: 'payments.update' },
   assistant: { label: 'AI Assistant', icon: '✨', perm: 'analytics.read' },
 }
 
@@ -30,11 +32,11 @@ const NAV: Record<Page, { label: string; icon: string; perm: string }> = {
 // the permission check below is the safety net (and the API enforces again).
 const ROLE_NAV: Record<string, Page[]> = {
   owner: ['dashboard', 'monitor', 'branches', 'staff', 'pos', 'sales',
-          'inventory', 'assistant'],
-  manager: ['staff', 'monitor', 'inventory', 'pos', 'sales', 'assistant'],
+          'inventory', 'payments', 'assistant'],
+  manager: ['staff', 'monitor', 'inventory', 'pos', 'sales', 'payments', 'assistant'],
   cashier: ['pos', 'sales', 'inventory'],
   storekeeper: ['inventory', 'staff'],
-  accountant: ['dashboard', 'sales', 'assistant'],
+  accountant: ['dashboard', 'sales', 'payments', 'assistant'],
 }
 const ALL_PAGES = Object.keys(NAV) as Page[]
 
@@ -89,7 +91,7 @@ export default function App() {
           <button key={id} onClick={() => setPage(id)}
             className={`text-left px-3 py-2 rounded-lg text-sm transition-colors ${
               page === id
-                ? 'bg-brand/10 dark:bg-brand-dark/20 font-medium'
+                ? 'nav-active font-medium'
                 : 'hover:bg-black/5 dark:hover:bg-white/5'
             }`}>
             <span className="mr-2">{NAV[id].icon}</span>
@@ -117,6 +119,7 @@ export default function App() {
           {page === 'pos' && <Pos />}
           {page === 'sales' && <Sales />}
           {page === 'inventory' && <Inventory />}
+          {page === 'payments' && <Payments />}
           {page === 'assistant' && <Assistant />}
         </div>
       </main>

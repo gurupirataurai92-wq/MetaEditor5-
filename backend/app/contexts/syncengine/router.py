@@ -92,6 +92,7 @@ def _apply(db: Session, auth: AuthContext, op: SyncOpIn) -> None:
         sale, created = create_sale(
             db, tenant_id=auth.tenant_id, cashier_id=auth.user_id,
             payload=sale_in, allow_oversell=True,  # offline reality: accept & flag
+            default_shop_id=auth.shop_id,
         )
         if created:
             sale.synced_at = utcnow()

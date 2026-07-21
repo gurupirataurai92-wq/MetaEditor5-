@@ -3,7 +3,8 @@ import {
   Area, CartesianGrid, ComposedChart, Line,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
-import { Anomaly, api, Forecast, Pnl, SalesSummary } from '../api'
+import { Anomaly, api, BranchRow, Forecast, Pnl, SalesSummary } from '../api'
+import BranchSelect, { useShops } from './BranchSelect'
 
 const RANGES = [
   { id: '7d', label: 'Last 7 days', days: 7 },
@@ -53,13 +54,14 @@ function delta(current: string, previous: string): { text: string; up: boolean }
   return { text: `${pct >= 0 ? '▲' : '▼'} ${Math.abs(pct).toFixed(0)}% vs prev period`, up: pct >= 0 }
 }
 
-function StatTile({ label, value, deltaInfo }: {
+function StatTile({ label, value, deltaInfo, accent }: {
   label: string
   value: string
   deltaInfo?: { text: string; up: boolean } | null
+  accent?: string
 }) {
   return (
-    <div className="card p-5">
+    <div className="card stat-accent p-5" style={accent ? { ['--accent' as string]: accent } : undefined}>
       <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>{label}</div>
       <div className="text-3xl font-semibold mt-1">{value}</div>
       {deltaInfo && (
@@ -100,12 +102,15 @@ function Skeleton({ h }: { h: string }) {
 }
 
 export default function Dashboard({ onGoToPos }: { onGoToPos?: () => void }) {
+  const shops = useShops()
+  const [shopId, setShopId] = useState('')
   const [range, setRange] = useState<RangeId>('30d')
   const [pnl, setPnl] = useState<PnlFull | null>(null)
   const [prevPnl, setPrevPnl] = useState<PnlFull | null>(null)
   const [summary, setSummary] = useState<SalesSummary | null>(null)
   const [cash, setCash] = useState<CashFlow | null>(null)
   const [forecast, setForecast] = useState<Forecast | null>(null)
+  const [branches, setBranches] = useState<BranchRow[]>([])
   const [anomalies, setAnomalies] = useState<Anomaly[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -113,8 +118,9 @@ export default function Dashboard({ onGoToPos }: { onGoToPos?: () => void }) {
   useEffect(() => {
     const { from, to } = rangeDates(range)
     const prev = previousPeriod(from, to)
-    const q = `date_from=${from.toISOString()}&date_to=${to.toISOString()}`
-    const qPrev = `date_from=${prev.from.toISOString()}&date_to=${prev.to.toISOString()}`
+    const shop = shopId ? `&shop_id=${shopId}` : ''
+    const q = `date_from=${from.toISOString()}&date_to=${to.toISOString()}${shop}`
+    const qPrev = `date_from=${prev.from.toISOString()}&date_to=${prev.to.toISOString()}${shop}`
     setLoading(true)
     Promise.all([
       api.get<PnlFull>(`/reports/pnl?${q}`),
@@ -123,14 +129,16 @@ export default function Dashboard({ onGoToPos }: { onGoToPos?: () => void }) {
       api.get<CashFlow>(`/reports/cashflow?${q}`),
       api.get<Forecast>('/analytics/forecast?days_ahead=7&window=30'),
       api.get<Anomaly[]>('/analytics/anomalies'),
+      shopId ? Promise.resolve([]) : api.get<BranchRow[]>(
+        `/reports/branches?date_from=${from.toISOString()}&date_to=${to.toISOString()}`),
     ])
-      .then(([p, pp, s, c, f, a]) => {
+      .then(([p, pp, s, c, f, a, b]) => {
         setPnl(p); setPrevPnl(pp); setSummary(s); setCash(c)
-        setForecast(f); setAnomalies(a); setError('')
+        setForecast(f); setAnomalies(a); setBranches(b as BranchRow[]); setError('')
       })
       .catch((e) => setError((e as Error).message))
       .finally(() => setLoading(false))
-  }, [range])
+  }, [range, shopId])
 
   const chartData = useMemo(() => {
     if (!forecast) return []
@@ -155,8 +163,17 @@ export default function Dashboard({ onGoToPos }: { onGoToPos?: () => void }) {
   return (
     <div className="flex flex-col gap-4 max-w-6xl">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Business overview</h1>
-        <div className="flex gap-1 card p-1">
+        <div>
+          <h1 className="text-2xl font-semibold">Business overview</h1>
+          <p className="text-sm" style={{ color: 'var(--muted)' }}>
+            {shopId
+              ? shops.find((s) => s.id === shopId)?.name ?? 'Branch'
+              : shops.length > 1 ? 'All branches combined' : 'Your business'}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <BranchSelect shops={shops} value={shopId} onChange={setShopId} />
+          <div className="flex gap-1 card p-1">
           {RANGES.map((r) => (
             <button key={r.id} onClick={() => setRange(r.id)}
               className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
@@ -167,6 +184,7 @@ export default function Dashboard({ onGoToPos }: { onGoToPos?: () => void }) {
               {r.label}
             </button>
           ))}
+          </div>
         </div>
       </div>
 
@@ -198,13 +216,52 @@ export default function Dashboard({ onGoToPos }: { onGoToPos?: () => void }) {
       ) : (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatTile label="Net revenue" value={fmtMoney(pnl.revenue_net)}
+            <StatTile label="Net revenue" value={fmtMoney(pnl.revenue_net)} accent="var(--series-1)"
                       deltaInfo={prevPnl && delta(pnl.revenue_net, prevPnl.revenue_net)} />
-            <StatTile label="Net profit" value={fmtMoney(pnl.net_profit)}
+            <StatTile label="Net profit" value={fmtMoney(pnl.net_profit)} accent="var(--series-5)"
                       deltaInfo={prevPnl && delta(pnl.net_profit, prevPnl.net_profit)} />
-            <StatTile label="Sales" value={String(summary.sales_count)} />
-            <StatTile label="VAT collected" value={fmtMoney(pnl.vat_collected)} />
+            <StatTile label="Sales" value={String(summary.sales_count)} accent="var(--series-7)" />
+            <StatTile label="VAT collected" value={fmtMoney(pnl.vat_collected)} accent="var(--series-4)" />
           </div>
+
+          {!shopId && branches.length > 1 && (
+            <div className="card p-5">
+              <h2 className="font-medium mb-3">Performance by branch</h2>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  <thead>
+                    <tr className="text-left" style={{ color: 'var(--muted)' }}>
+                      <th className="py-1.5 font-medium">Branch</th>
+                      <th className="py-1.5 font-medium text-right">Sales</th>
+                      <th className="py-1.5 font-medium text-right">Revenue</th>
+                      <th className="py-1.5 font-medium text-right">Net profit</th>
+                      <th className="py-1.5 font-medium text-right"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {branches.map((b) => (
+                      <tr key={b.shop_id} className="border-t border-black/5 dark:border-white/5">
+                        <td className="py-2.5 font-medium">🏬 {b.name}</td>
+                        <td className="py-2.5 text-right">{b.sales_count}</td>
+                        <td className="py-2.5 text-right">{fmtMoney(b.revenue)}</td>
+                        <td className="py-2.5 text-right"
+                            style={{ color: Number(b.net_profit) >= 0 ? 'var(--delta-good)' : 'var(--status-critical)' }}>
+                          {fmtMoney(b.net_profit)}
+                        </td>
+                        <td className="py-2.5 text-right">
+                          <button onClick={() => setShopId(b.shop_id)}
+                                  className="text-xs underline underline-offset-2"
+                                  style={{ color: 'var(--series-1)' }}>
+                            View branch →
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           <div className="card p-5">
             <h2 className="font-medium mb-1">Revenue — last 30 days & 7-day forecast</h2>

@@ -15,7 +15,7 @@ payments (EcoCash, OneMoney, ZIPIT, PayNow).
 
 | Directory | Contents | Status |
 |---|---|---|
-| `backend/` | FastAPI modular monolith — identity/RBAC, inventory, POS, finance, sync engine, analytics/AI | ✅ Working, 38 passing tests |
+| `backend/` | FastAPI modular monolith — identity/RBAC, inventory, POS, finance, sync engine, analytics/AI | ✅ Working, 51 passing tests |
 | `web/` | React + TypeScript + Tailwind admin dashboard (dark mode, charts, POS, AI assistant) | ✅ Working, builds clean |
 | `mobile/` | Flutter offline-first app (SQLite replica, Lamport outbox, idempotent sync) | 🧩 Working skeleton |
 | `ml/` | Forecast training + rolling-origin backtest harness (MAPE/RMSE/MAE) | ✅ Runnable, zero-dep baseline |
@@ -40,13 +40,33 @@ payments (EcoCash, OneMoney, ZIPIT, PayNow).
    an auditable evidence trail ships with every answer. Forecasting, reorder
    points and anomaly/fraud detection run on lightweight, explainable models.
 
+## Open in VS Code
+
+This repo is a ready-to-open VS Code workspace. Clone it and open the folder
+(or the `sims-ai.code-workspace` file):
+
+```bash
+git clone https://github.com/gurupirataurai92-wq/MetaEditor5-.git sims-ai
+cd sims-ai
+code sims-ai.code-workspace      # or: code .
+```
+
+VS Code will offer the recommended extensions (Python, Ruff, Tailwind,
+Flutter). Then either:
+
+- **One command:** run `bash scripts/dev.sh` — it sets up the backend, starts
+  the API + dashboard, seeds demo data, and prints the three logins; or
+- **Built-in tasks** (`Terminal → Run Task…`): *SIMS: install backend*,
+  *SIMS: run backend*, *SIMS: run web dashboard*, *SIMS: seed demo data*; or
+- **Debug** (`Run and Debug`): *SIMS AI — Backend API* / *Backend tests*.
+
 ## Quick start (development)
 
 ```bash
 # Backend (SQLite dev mode — Postgres via SIMS_DATABASE_URL for prod)
 cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q          # 38 tests
+.venv/bin/python -m pytest -q          # 51 tests
 .venv/bin/uvicorn app.main:app --reload  # OpenAPI docs at /docs
 
 # Web dashboard (proxies /api to localhost:8000)
@@ -94,14 +114,32 @@ row-level security):
   on/off duty; plus Inventory and the Live Monitor. No branch creation,
   no owner financials.
 - **Till operator — serve customers.** Lands on the Point of Sale: sell,
-  take payments, print receipts, and add/retire products. No reports, no
+  take payments, add/retire products, and get a **printable receipt slot**
+  after every sale. Only ever sees their own receipts. No reports, no
   staffing, no void button.
 
-| Manager: Staff & Duty | Owner: Branches |
+### Branch-aware "god mode"
+
+Every sale and stock movement is stamped with the operator's **branch**, so
+the owner drills all the way down:
+
+- **Finance & inventory per branch.** A branch selector on the Dashboard,
+  Inventory and Live Monitor filters every figure to one shop; the Dashboard
+  also shows a **performance-by-branch** table (revenue / net profit / sales
+  per branch) for the whole-business roll-up.
+- **Owner** can open *and close* branches, and hire *or remove* staff.
+- **Manager** can hire/remove staff and **update goods prices** inline, but
+  cannot open/close branches or see owner financials.
+- **Payments editor.** Owner/manager/accountant can **correct a recorded
+  payment** after the fact (it was EcoCash, not cash) — every edit audited.
+- **Per-till-operator history.** Filter sales history by operator to review
+  exactly what each till rang up.
+
+| Owner: branch-aware dashboard | Owner: payments editor |
 |---|---|
-| ![Staff](docs/screenshots/manager-staff.png) | ![Branches](docs/screenshots/owner-branches.png) |
-| Till operator: POS | Live Monitor (god mode) |
-| ![Till](docs/screenshots/till-pos.png) | ![Monitor](docs/screenshots/monitor-dark.png) |
+| ![Dash](docs/screenshots/owner-dashboard-branches.png) | ![Payments](docs/screenshots/owner-payments.png) |
+| Manager: Staff & Duty | Till operator: receipt slot |
+| ![Staff](docs/screenshots/manager-staff.png) | ![Receipt](docs/screenshots/till-receipt.png) |
 
 ## Feature highlights
 

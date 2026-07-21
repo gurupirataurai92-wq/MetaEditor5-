@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Anomaly, api, SalesSummary, StockLevel } from '../api'
+import BranchSelect, { useShops } from './BranchSelect'
 
 const REFRESH_MS = 10_000
 
@@ -30,6 +31,8 @@ function timeAgo(iso: string): string {
 }
 
 export default function Monitor() {
+  const shops = useShops()
+  const [shopId, setShopId] = useState('')
   const [summary, setSummary] = useState<SalesSummary | null>(null)
   const [cashiers, setCashiers] = useState<CashierRow[]>([])
   const [feed, setFeed] = useState<FeedSale[]>([])
@@ -43,13 +46,14 @@ export default function Monitor() {
     async function refresh() {
       const dayStart = new Date()
       dayStart.setHours(0, 0, 0, 0)
-      const q = `date_from=${dayStart.toISOString()}`
+      const shop = shopId ? `&shop_id=${shopId}` : ''
+      const q = `date_from=${dayStart.toISOString()}${shop}`
       try {
         const [s, c, f, l, a] = await Promise.all([
           api.get<SalesSummary>(`/reports/sales-summary?${q}`),
           api.get<CashierRow[]>(`/reports/cashier-performance?${q}`),
-          api.get<FeedSale[]>('/sales?limit=12'),
-          api.get<StockLevel[]>('/stock/levels'),
+          api.get<FeedSale[]>(`/sales?limit=12${shopId ? `&shop_id=${shopId}` : ''}`),
+          api.get<StockLevel[]>(`/stock/levels${shopId ? `?shop_id=${shopId}` : ''}`),
           api.get<Anomaly[]>('/analytics/anomalies?window=7'),
         ])
         if (!alive) return
@@ -62,7 +66,7 @@ export default function Monitor() {
     refresh()
     const timer = setInterval(refresh, REFRESH_MS)
     return () => { alive = false; clearInterval(timer) }
-  }, [])
+  }, [shopId])
 
   const nameById = Object.fromEntries(cashiers.map((c) => [c.cashier_id, c.name]))
   const voidsToday = cashiers.reduce((n, c) => n + c.voids, 0)
@@ -82,11 +86,14 @@ export default function Monitor() {
             LIVE · auto-refresh {REFRESH_MS / 1000}s
           </span>
         </div>
-        {updatedAt && (
-          <span className="text-xs" style={{ color: 'var(--muted)' }}>
-            Updated {updatedAt.toLocaleTimeString()}
-          </span>
-        )}
+        <div className="flex items-center gap-3">
+          <BranchSelect shops={shops} value={shopId} onChange={setShopId} />
+          {updatedAt && (
+            <span className="text-xs" style={{ color: 'var(--muted)' }}>
+              Updated {updatedAt.toLocaleTimeString()}
+            </span>
+          )}
+        </div>
       </div>
 
       {!summary ? (

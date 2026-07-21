@@ -10,8 +10,12 @@ interface CartLine {
 interface SaleOut {
   id: string
   total: string
+  subtotal: string
   tax_amount: string
   currency: string
+  captured_at: string
+  lines: { product_name: string; qty: number; line_total: string }[]
+  payments: { method: string; amount: string }[]
 }
 
 const METHODS = ['cash', 'ecocash', 'onemoney', 'zipit', 'paynow', 'bank'] as const
@@ -125,16 +129,69 @@ export default function Pos() {
             </>
           )}
           {receipt && cart.length === 0 && (
-            <div className="text-sm mt-2">
-              <p style={{ color: 'var(--delta-good)' }}>✓ Sale completed</p>
-              <p style={{ color: 'var(--text-secondary)' }}>
-                Total ${Number(receipt.total).toFixed(2)} (VAT ${Number(receipt.tax_amount).toFixed(2)})
-              </p>
-              <a className="underline"
-                 href={`/api/v1/sales/${receipt.id}/receipt.pdf`}
-                 target="_blank" rel="noreferrer">
-                Download receipt (PDF)
-              </a>
+            <div className="mt-1 fade-in">
+              <div className="flex items-center gap-2 mb-3 text-sm font-medium"
+                   style={{ color: 'var(--delta-good)' }}>
+                <span className="text-lg">✓</span> Sale completed
+              </div>
+              {/* Receipt slot — a printable facsimile of the paper receipt */}
+              <div className="rounded-lg border border-dashed border-black/20 dark:border-white/20 p-4"
+                   style={{ background: 'var(--page)', fontFamily: 'ui-monospace, monospace' }}>
+                <div className="text-center">
+                  <div className="font-semibold">RECEIPT</div>
+                  <div className="text-xs" style={{ color: 'var(--muted)' }}>
+                    No. {receipt.id.slice(0, 8).toUpperCase()}
+                  </div>
+                  <div className="text-xs" style={{ color: 'var(--muted)' }}>
+                    {new Date(receipt.captured_at).toLocaleString()}
+                  </div>
+                </div>
+                <div className="border-t border-dashed my-2"
+                     style={{ borderColor: 'var(--baseline)' }} />
+                {receipt.lines.map((l, i) => (
+                  <div key={i} className="flex justify-between text-xs py-0.5">
+                    <span className="truncate">{l.product_name} ×{l.qty}</span>
+                    <span>{Number(l.line_total).toFixed(2)}</span>
+                  </div>
+                ))}
+                <div className="border-t border-dashed my-2"
+                     style={{ borderColor: 'var(--baseline)' }} />
+                <div className="flex justify-between text-xs">
+                  <span>Subtotal (ex VAT)</span><span>{Number(receipt.subtotal).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-xs">
+                  <span>VAT</span><span>{Number(receipt.tax_amount).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-sm font-semibold mt-1">
+                  <span>TOTAL {receipt.currency}</span>
+                  <span>{Number(receipt.total).toFixed(2)}</span>
+                </div>
+                <div className="text-center text-xs mt-3" style={{ color: 'var(--muted)' }}>
+                  Thank you! · Powered by SIMS AI
+                </div>
+              </div>
+              <div className="flex gap-2 mt-3">
+                <a href={`/api/v1/sales/${receipt.id}/receipt.pdf`}
+                   target="_blank" rel="noreferrer"
+                   onClick={(e) => {
+                     e.preventDefault()
+                     const w = window.open(`/api/v1/sales/${receipt.id}/receipt.pdf`, '_blank')
+                     w?.addEventListener('load', () => w.print())
+                   }}
+                   className="flex-1 text-center py-2 rounded-lg bg-brand dark:bg-brand-dark text-white text-sm font-medium">
+                  🖨 Print
+                </a>
+                <a href={`/api/v1/sales/${receipt.id}/receipt.pdf`}
+                   target="_blank" rel="noreferrer"
+                   className="flex-1 text-center py-2 rounded-lg border border-black/15 dark:border-white/15 text-sm">
+                  ⬇ PDF
+                </a>
+              </div>
+              <button onClick={() => setReceipt(null)}
+                      className="w-full mt-2 py-2 rounded-lg text-sm hover:bg-black/5 dark:hover:bg-white/5"
+                      style={{ color: 'var(--text-secondary)' }}>
+                New sale
+              </button>
             </div>
           )}
         </div>

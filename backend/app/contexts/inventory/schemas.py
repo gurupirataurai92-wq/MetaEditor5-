@@ -77,6 +77,7 @@ class StockMovementIn(BaseModel):
     product_id: str
     movement_type: str = Field(pattern="^(purchase|adjustment|return)$")
     qty: int
+    shop_id: str | None = None  # defaults to the operator's branch
     unit_cost: Decimal | None = None
     reference: str | None = None
     note: str | None = None

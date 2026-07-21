@@ -109,8 +109,9 @@ def create_movement(payload: StockMovementIn, auth: AuthContext = Depends(get_au
     product = service.get_product(db, auth.tenant_id, payload.product_id)
     if product is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found")
-    movement = StockMovement(tenant_id=auth.tenant_id, created_by=auth.user_id,
-                             **payload.model_dump())
+    data = payload.model_dump()
+    data["shop_id"] = data.get("shop_id") or auth.shop_id
+    movement = StockMovement(tenant_id=auth.tenant_id, created_by=auth.user_id, **data)
     db.add(movement)
     db.flush()
     audit.record(db, tenant_id=auth.tenant_id, actor_id=auth.user_id, action="create",
@@ -122,11 +123,16 @@ def create_movement(payload: StockMovementIn, auth: AuthContext = Depends(get_au
 
 @router.get("/stock/levels", response_model=list[StockLevelOut],
             dependencies=[Depends(require("stock.read"))])
-def stock_levels(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)):
+def stock_levels(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db),
+                 shop_id: str | None = None):
+    """Stock on hand per product. With ``shop_id``, scoped to one branch."""
+    movement_conditions = [StockMovement.tenant_id == auth.tenant_id]
+    if shop_id:
+        movement_conditions.append(StockMovement.shop_id == shop_id)
     on_hand_sq = (
         select(StockMovement.product_id,
                func.coalesce(func.sum(StockMovement.qty), 0).label("on_hand"))
-        .where(StockMovement.tenant_id == auth.tenant_id)
+        .where(*movement_conditions)
         .group_by(StockMovement.product_id)
         .subquery()
     )

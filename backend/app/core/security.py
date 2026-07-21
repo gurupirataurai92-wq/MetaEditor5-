@@ -31,12 +31,14 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 # ---------------------------------------------------------------------- JWT
-def create_access_token(*, user_id: str, tenant_id: str, role: str, permissions: list[str]) -> str:
+def create_access_token(*, user_id: str, tenant_id: str, role: str,
+                        permissions: list[str], shop_id: str | None = None) -> str:
     settings = get_settings()
     now = utcnow()
     payload = {
         "sub": user_id,
         "tid": tenant_id,
+        "shop": shop_id,          # operator's home branch (stamps their sales)
         "role": role,
         "perms": permissions,
         "type": "access",

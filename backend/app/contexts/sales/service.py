@@ -33,8 +33,14 @@ PAYMENT_TOLERANCE = Decimal("0.05")  # base-currency units
 
 
 def create_sale(db: Session, *, tenant_id: str, cashier_id: str, payload: SaleIn,
-                allow_oversell: bool = False) -> tuple[Sale, bool]:
-    """Create a sale; returns (sale, created). Replays return created=False."""
+                allow_oversell: bool = False,
+                default_shop_id: str | None = None) -> tuple[Sale, bool]:
+    """Create a sale; returns (sale, created). Replays return created=False.
+
+    The sale (and its stock movements) are stamped with the branch —
+    ``payload.shop_id`` if given, else the operator's home branch — so every
+    figure rolls up per-branch for owner reporting.
+    """
     sale_id = payload.id or new_id()
     existing = db.get(Sale, sale_id)
     if existing is not None:
@@ -114,8 +120,9 @@ def create_sale(db: Session, *, tenant_id: str, cashier_id: str, payload: SaleIn
         )
 
     note = f"OVERSOLD: {', '.join(oversold)}" if oversold else None
+    shop_id = payload.shop_id or default_shop_id
     sale = Sale(
-        id=sale_id, tenant_id=tenant_id, shop_id=payload.shop_id,
+        id=sale_id, tenant_id=tenant_id, shop_id=shop_id,
         customer_id=payload.customer_id, cashier_id=cashier_id,
         subtotal=money(total - tax_total), tax_amount=tax_total, total=total,
         currency=currency, base_currency=tenant.base_currency,
@@ -127,11 +134,12 @@ def create_sale(db: Session, *, tenant_id: str, cashier_id: str, payload: SaleIn
     db.add_all(lines)
     db.add_all(payments)
 
-    # Append the (immutable) stock ledger entries.
+    # Append the (immutable) stock ledger entries, stamped with the branch.
     for line in lines:
         db.add(StockMovement(
-            tenant_id=tenant_id, product_id=line.product_id, movement_type="sale",
-            qty=-line.qty, reference=sale_id, created_by=cashier_id,
+            tenant_id=tenant_id, shop_id=shop_id, product_id=line.product_id,
+            movement_type="sale", qty=-line.qty, reference=sale_id,
+            created_by=cashier_id,
         ))
 
     # Loyalty: one point per whole base-currency unit spent.
@@ -159,8 +167,9 @@ def void_sale(db: Session, *, tenant_id: str, actor_id: str, sale_id: str) -> Sa
     lines = db.scalars(select(SaleLine).where(SaleLine.sale_id == sale_id)).all()
     for line in lines:
         db.add(StockMovement(
-            tenant_id=tenant_id, product_id=line.product_id, movement_type="void",
-            qty=line.qty, reference=sale_id, created_by=actor_id,
+            tenant_id=tenant_id, shop_id=sale.shop_id, product_id=line.product_id,
+            movement_type="void", qty=line.qty, reference=sale_id,
+            created_by=actor_id,
         ))
     audit.record(db, tenant_id=tenant_id, actor_id=actor_id, action="void",
                  entity="sale", entity_id=sale_id, data={"total": str(sale.total)})

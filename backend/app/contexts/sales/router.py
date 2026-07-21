@@ -47,6 +47,7 @@ def create_sale(payload: SaleIn, response: Response,
                 auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)):
     sale, created = service.create_sale(
         db, tenant_id=auth.tenant_id, cashier_id=auth.user_id, payload=payload,
+        default_shop_id=auth.shop_id,
     )
     response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
     return _sale_out(db, sale)
@@ -55,10 +56,22 @@ def create_sale(payload: SaleIn, response: Response,
 @router.get("/sales", response_model=list[SaleOut],
             dependencies=[Depends(require("sales.read"))])
 def list_sales(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db),
-               limit: int = 50):
+               limit: int = 50, cashier_id: str | None = None,
+               shop_id: str | None = None):
+    """Recent sales. Filter by ``cashier_id`` for a per-till-operator history,
+    or ``shop_id`` for a per-branch view. A till operator only ever sees their
+    own sales, regardless of the filter."""
+    q = select(Sale).where(Sale.tenant_id == auth.tenant_id)
+    # A cashier is scoped to their own receipts; managers/owners may pick any.
+    effective_cashier = cashier_id
+    if auth.role == "cashier":
+        effective_cashier = auth.user_id
+    if effective_cashier:
+        q = q.where(Sale.cashier_id == effective_cashier)
+    if shop_id:
+        q = q.where(Sale.shop_id == shop_id)
     sales = db.scalars(
-        select(Sale).where(Sale.tenant_id == auth.tenant_id)
-        .order_by(Sale.captured_at.desc()).limit(min(limit, 200))
+        q.order_by(Sale.captured_at.desc()).limit(min(limit, 200))
     ).all()
     return [_sale_out(db, s) for s in sales]
 

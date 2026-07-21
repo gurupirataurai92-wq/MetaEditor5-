@@ -135,3 +135,26 @@ def update_employee(employee_id: str, payload: EmployeeUpdate,
 def list_employees(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)):
     rows = db.scalars(select(Employee).where(Employee.tenant_id == auth.tenant_id)).all()
     return [EmployeeOut.model_validate(e) for e in rows]
+
+
+@router.delete("/employees/{employee_id}", status_code=204,
+               dependencies=[Depends(require("employees.delete"))])
+def delete_employee(employee_id: str, auth: AuthContext = Depends(get_auth),
+                    db: Session = Depends(get_db)):
+    """Remove a staff member (owner or manager). Their login is deactivated so
+    they can no longer sign in; the personnel record is deleted. Their past
+    sales stay intact for the audit trail."""
+    from app.contexts.identity.models import User
+
+    employee = _get_employee(db, auth.tenant_id, employee_id)
+    if employee.user_id == auth.user_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot remove yourself")
+    if employee.user_id:
+        user = db.get(User, employee.user_id)
+        if user is not None:
+            user.is_active = False  # revoke login; history is preserved
+    audit.record(db, tenant_id=auth.tenant_id, actor_id=auth.user_id, action="delete",
+                 entity="employee", entity_id=employee_id,
+                 data={"full_name": employee.full_name})
+    db.delete(employee)
+    db.commit()

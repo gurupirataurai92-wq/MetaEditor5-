@@ -15,19 +15,36 @@ from app.contexts.sales.models import Payment, Sale, SaleLine
 
 
 def _committed_sales(db: Session, tenant_id: str,
-                     date_from: datetime | None, date_to: datetime | None) -> list[Sale]:
+                     date_from: datetime | None, date_to: datetime | None,
+                     shop_id: str | None = None) -> list[Sale]:
     q = select(Sale).where(Sale.tenant_id == tenant_id, Sale.status == "committed")
     if date_from:
         q = q.where(Sale.captured_at >= date_from)
     if date_to:
         q = q.where(Sale.captured_at <= date_to)
+    if shop_id:
+        q = q.where(Sale.shop_id == shop_id)
     return list(db.scalars(q).all())
+
+
+def _scoped_expenses(db: Session, tenant_id: str,
+                     date_from: datetime | None, date_to: datetime | None,
+                     shop_id: str | None):
+    q = select(Expense).where(Expense.tenant_id == tenant_id)
+    if date_from:
+        q = q.where(Expense.incurred_at >= date_from)
+    if date_to:
+        q = q.where(Expense.incurred_at <= date_to)
+    if shop_id:
+        q = q.where(Expense.shop_id == shop_id)
+    return db.scalars(q).all()
 
 
 def sales_summary(db: Session, tenant_id: str,
                   date_from: datetime | None = None,
-                  date_to: datetime | None = None) -> dict:
-    sales = _committed_sales(db, tenant_id, date_from, date_to)
+                  date_to: datetime | None = None,
+                  shop_id: str | None = None) -> dict:
+    sales = _committed_sales(db, tenant_id, date_from, date_to, shop_id)
     by_day: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     by_product: dict[str, dict] = {}
     revenue = Decimal("0")
@@ -64,8 +81,9 @@ def sales_summary(db: Session, tenant_id: str,
 
 def profit_and_loss(db: Session, tenant_id: str,
                     date_from: datetime | None = None,
-                    date_to: datetime | None = None) -> dict:
-    sales = _committed_sales(db, tenant_id, date_from, date_to)
+                    date_to: datetime | None = None,
+                    shop_id: str | None = None) -> dict:
+    sales = _committed_sales(db, tenant_id, date_from, date_to, shop_id)
     sale_ids = [s.id for s in sales]
     rate_by_sale = {s.id: s.exchange_rate for s in sales}
 
@@ -87,12 +105,7 @@ def profit_and_loss(db: Session, tenant_id: str,
         Decimal("0"),
     )
 
-    exp_q = select(Expense).where(Expense.tenant_id == tenant_id)
-    if date_from:
-        exp_q = exp_q.where(Expense.incurred_at >= date_from)
-    if date_to:
-        exp_q = exp_q.where(Expense.incurred_at <= date_to)
-    expenses = db.scalars(exp_q).all()
+    expenses = _scoped_expenses(db, tenant_id, date_from, date_to, shop_id)
     expense_total = sum((to_base(e.amount, e.exchange_rate) for e in expenses),
                         Decimal("0"))
 
@@ -119,7 +132,8 @@ def _expenses_by_category(expenses) -> list[dict]:
 
 def cashier_performance(db: Session, tenant_id: str,
                         date_from: datetime | None = None,
-                        date_to: datetime | None = None) -> list[dict]:
+                        date_to: datetime | None = None,
+                        shop_id: str | None = None) -> list[dict]:
     """Per-cashier sales count, base-currency revenue and void count —
     the manager's till-monitoring view."""
     from app.contexts.identity.models import User
@@ -129,6 +143,8 @@ def cashier_performance(db: Session, tenant_id: str,
         q = q.where(Sale.captured_at >= date_from)
     if date_to:
         q = q.where(Sale.captured_at <= date_to)
+    if shop_id:
+        q = q.where(Sale.shop_id == shop_id)
     sales = db.scalars(q).all()
 
     names = {
@@ -155,10 +171,33 @@ def cashier_performance(db: Session, tenant_id: str,
     ]
 
 
+def branch_breakdown(db: Session, tenant_id: str,
+                     date_from: datetime | None = None,
+                     date_to: datetime | None = None) -> list[dict]:
+    """Revenue, net profit and sales count per branch (owner cross-branch view)."""
+    from app.contexts.identity.models import Shop
+
+    shops = db.scalars(select(Shop).where(Shop.tenant_id == tenant_id)).all()
+    rows = []
+    for shop in shops:
+        pnl = profit_and_loss(db, tenant_id, date_from, date_to, shop.id)
+        summary = sales_summary(db, tenant_id, date_from, date_to, shop.id)
+        rows.append({
+            "shop_id": shop.id,
+            "name": shop.name,
+            "address": shop.address,
+            "revenue": pnl["revenue_gross"],
+            "net_profit": pnl["net_profit"],
+            "sales_count": summary["sales_count"],
+        })
+    return sorted(rows, key=lambda r: Decimal(r["revenue"]), reverse=True)
+
+
 def cash_flow(db: Session, tenant_id: str,
               date_from: datetime | None = None,
-              date_to: datetime | None = None) -> dict:
-    sales = _committed_sales(db, tenant_id, date_from, date_to)
+              date_to: datetime | None = None,
+              shop_id: str | None = None) -> dict:
+    sales = _committed_sales(db, tenant_id, date_from, date_to, shop_id)
     sale_ids = {s.id for s in sales}
     payments = (
         db.scalars(select(Payment).where(Payment.tenant_id == tenant_id)).all()
@@ -169,12 +208,7 @@ def cash_flow(db: Session, tenant_id: str,
         if p.sale_id in sale_ids:
             inflows[p.method] += to_base(p.amount, p.exchange_rate)
 
-    exp_q = select(Expense).where(Expense.tenant_id == tenant_id)
-    if date_from:
-        exp_q = exp_q.where(Expense.incurred_at >= date_from)
-    if date_to:
-        exp_q = exp_q.where(Expense.incurred_at <= date_to)
-    expenses = db.scalars(exp_q).all()
+    expenses = _scoped_expenses(db, tenant_id, date_from, date_to, shop_id)
 
     inflow_total = sum(inflows.values(), Decimal("0"))
     outflow_total = sum((to_base(e.amount, e.exchange_rate) for e in expenses),

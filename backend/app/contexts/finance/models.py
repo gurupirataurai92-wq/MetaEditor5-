@@ -34,6 +34,7 @@ class Expense(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    shop_id: Mapped[str | None] = mapped_column(String(36), index=True)  # branch
     category: Mapped[str] = mapped_column(String(64))  # rent|wages|transport|utilities|other
     description: Mapped[str | None] = mapped_column(String(255))
     amount: Mapped[Decimal] = mapped_column(Money)

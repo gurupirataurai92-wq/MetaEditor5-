@@ -17,6 +17,7 @@ class AuthContext:
     tenant_id: str
     role: str
     permissions: list[str]
+    shop_id: str | None = None  # operator's home branch, if assigned
 
 
 def get_auth(
@@ -32,6 +33,7 @@ def get_auth(
         tenant_id=payload["tid"],
         role=payload.get("role", ""),
         permissions=payload.get("perms", []),
+        shop_id=payload.get("shop"),
     )
 
 

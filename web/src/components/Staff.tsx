@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
-import { api } from '../api'
+import { api, can } from '../api'
 import { toast } from '../toast'
 
 interface EmployeeRow {
@@ -55,6 +55,18 @@ export default function Staff() {
     try {
       await api.patch(`/employees/${emp.id}`, { on_duty: on })
       toast(`${emp.full_name} is now ${on ? 'ON' : 'OFF'} duty`)
+      refresh()
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    }
+  }
+
+  const [confirmDel, setConfirmDel] = useState<string | null>(null)
+  async function remove(emp: EmployeeRow) {
+    try {
+      await api.del(`/employees/${emp.id}`)
+      toast(`${emp.full_name} removed — their login is disabled`)
+      setConfirmDel(null)
       refresh()
     } catch (e) {
       toast((e as Error).message, 'error')
@@ -132,6 +144,7 @@ export default function Staff() {
                 <th className="py-1.5 font-medium">Branch</th>
                 <th className="py-1.5 font-medium">Status</th>
                 <th className="py-1.5 font-medium text-right">Duty</th>
+                {can('employees.delete') && <th className="py-1.5 font-medium text-right">Manage</th>}
               </tr>
             </thead>
             <tbody>
@@ -161,6 +174,21 @@ export default function Staff() {
                       {emp.on_duty ? 'Clock out' : 'Clock in'}
                     </button>
                   </td>
+                  {can('employees.delete') && (
+                    <td className="py-2.5 text-right whitespace-nowrap">
+                      {confirmDel === emp.id ? (
+                        <>
+                          <button onClick={() => remove(emp)} className="mr-2 text-xs font-medium"
+                                  style={{ color: 'var(--status-critical)' }}>Confirm</button>
+                          <button onClick={() => setConfirmDel(null)} className="text-xs"
+                                  style={{ color: 'var(--text-secondary)' }}>Cancel</button>
+                        </>
+                      ) : (
+                        <button onClick={() => setConfirmDel(emp.id)} className="text-xs"
+                                style={{ color: 'var(--status-critical)' }}>Remove</button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

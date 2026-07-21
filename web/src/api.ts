@@ -25,6 +25,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     setToken(null)
     window.location.reload()
   }
+  if (resp.status === 204) return undefined as T
   if (!resp.ok) {
     const detail = await resp.json().catch(() => ({ detail: resp.statusText }))
     throw new Error(typeof detail.detail === 'string' ? detail.detail : resp.statusText)
@@ -36,6 +37,32 @@ export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body: unknown) => request<T>('POST', path, body),
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
+  del: <T>(path: string) => request<T>('DELETE', path),
+}
+
+export interface Shop {
+  id: string
+  name: string
+  address: string | null
+}
+
+export interface BranchRow {
+  shop_id: string
+  name: string
+  address: string | null
+  revenue: string
+  net_profit: string
+  sales_count: number
+}
+
+export interface Payment {
+  id: string
+  sale_id: string
+  method: string
+  amount: string
+  currency: string
+  reference: string | null
+  created_at: string
 }
 
 // ---- shared response shapes -------------------------------------------------

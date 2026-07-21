@@ -15,6 +15,8 @@ from app.contexts.finance import reports
 from app.contexts.finance.service import resolve_rate
 from app.contexts.finance.models import ExchangeRate, Expense
 from app.contexts.identity.models import Tenant
+from app.contexts.sales.models import Payment, Sale
+from app.contexts.sales.schemas import PAYMENT_METHODS as PAYMENT_METHODS_RE
 
 router = APIRouter(tags=["finance"])
 
@@ -42,6 +44,7 @@ class ExpenseIn(BaseModel):
     currency: str = "USD"
     exchange_rate: Decimal | None = None
     description: str | None = None
+    shop_id: str | None = None  # defaults to the actor's branch
     incurred_at: datetime | None = None
 
 
@@ -52,6 +55,7 @@ class ExpenseOut(BaseModel):
     currency: str
     exchange_rate: Decimal
     description: str | None
+    shop_id: str | None
     incurred_at: datetime
 
     model_config = {"from_attributes": True}
@@ -100,7 +104,7 @@ def create_expense(payload: ExpenseIn, auth: AuthContext = Depends(get_auth),
         tenant_id=auth.tenant_id, category=payload.category,
         description=payload.description, amount=money(payload.amount),
         currency=payload.currency.upper(), exchange_rate=exchange_rate,
-        created_by=auth.user_id,
+        shop_id=payload.shop_id or auth.shop_id, created_by=auth.user_id,
         **({"incurred_at": payload.incurred_at} if payload.incurred_at else {}),
     )
     db.add(expense)
@@ -123,22 +127,27 @@ def list_expenses(auth: AuthContext = Depends(get_auth), db: Session = Depends(g
 
 
 # ---------------------------------------------------------------- reports
+# Every report accepts an optional shop_id → the owner drills into one branch;
+# omit it for the whole-business roll-up.
 @router.get("/reports/sales-summary", dependencies=[Depends(require("reports.read"))])
 def sales_summary(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db),
-                  date_from: datetime | None = None, date_to: datetime | None = None):
-    return reports.sales_summary(db, auth.tenant_id, date_from, date_to)
+                  date_from: datetime | None = None, date_to: datetime | None = None,
+                  shop_id: str | None = None):
+    return reports.sales_summary(db, auth.tenant_id, date_from, date_to, shop_id)
 
 
 @router.get("/reports/pnl", dependencies=[Depends(require("reports.read"))])
 def pnl(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db),
-        date_from: datetime | None = None, date_to: datetime | None = None):
-    return reports.profit_and_loss(db, auth.tenant_id, date_from, date_to)
+        date_from: datetime | None = None, date_to: datetime | None = None,
+        shop_id: str | None = None):
+    return reports.profit_and_loss(db, auth.tenant_id, date_from, date_to, shop_id)
 
 
 @router.get("/reports/cashflow", dependencies=[Depends(require("reports.read"))])
 def cashflow(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db),
-             date_from: datetime | None = None, date_to: datetime | None = None):
-    return reports.cash_flow(db, auth.tenant_id, date_from, date_to)
+             date_from: datetime | None = None, date_to: datetime | None = None,
+             shop_id: str | None = None):
+    return reports.cash_flow(db, auth.tenant_id, date_from, date_to, shop_id)
 
 
 @router.get("/reports/cashier-performance",
@@ -146,8 +155,71 @@ def cashflow(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db
 def cashier_performance(auth: AuthContext = Depends(get_auth),
                         db: Session = Depends(get_db),
                         date_from: datetime | None = None,
-                        date_to: datetime | None = None):
-    return reports.cashier_performance(db, auth.tenant_id, date_from, date_to)
+                        date_to: datetime | None = None,
+                        shop_id: str | None = None):
+    return reports.cashier_performance(db, auth.tenant_id, date_from, date_to, shop_id)
+
+
+@router.get("/reports/branches", dependencies=[Depends(require("reports.read"))])
+def branch_breakdown(auth: AuthContext = Depends(get_auth),
+                     db: Session = Depends(get_db),
+                     date_from: datetime | None = None,
+                     date_to: datetime | None = None):
+    """Per-branch revenue, profit and sales — the owner's cross-branch view."""
+    return reports.branch_breakdown(db, auth.tenant_id, date_from, date_to)
+
+
+# ---------------------------------------------------------------- payments
+# Owner/manager/accountant may correct how a payment was recorded (e.g. it was
+# EcoCash, not cash) after the fact. Every edit is audit-logged.
+class PaymentEdit(BaseModel):
+    method: str | None = Field(default=None, pattern=PAYMENT_METHODS_RE)
+    amount: Decimal | None = Field(default=None, gt=0)
+    reference: str | None = None
+
+
+class PaymentOutFull(BaseModel):
+    id: str
+    sale_id: str
+    method: str
+    amount: Decimal
+    currency: str
+    reference: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+@router.get("/payments", response_model=list[PaymentOutFull],
+            dependencies=[Depends(require("payments.read"))])
+def list_payments(auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db),
+                  shop_id: str | None = None, limit: int = 50):
+    q = select(Payment).where(Payment.tenant_id == auth.tenant_id)
+    if shop_id:
+        # Payments belong to sales; scope by the sale's branch.
+        q = q.join(Sale, Sale.id == Payment.sale_id).where(Sale.shop_id == shop_id)
+    rows = db.scalars(
+        q.order_by(Payment.created_at.desc()).limit(min(limit, 200))
+    ).all()
+    return [PaymentOutFull.model_validate(p) for p in rows]
+
+
+@router.patch("/payments/{payment_id}", response_model=PaymentOutFull,
+              dependencies=[Depends(require("payments.update"))])
+def edit_payment(payment_id: str, payload: PaymentEdit,
+                 auth: AuthContext = Depends(get_auth), db: Session = Depends(get_db)):
+    payment = db.get(Payment, payment_id)
+    if payment is None or payment.tenant_id != auth.tenant_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Payment not found")
+    changes = payload.model_dump(exclude_unset=True)
+    if "amount" in changes:
+        changes["amount"] = money(changes["amount"])
+    for field, value in changes.items():
+        setattr(payment, field, value)
+    audit.record(db, tenant_id=auth.tenant_id, actor_id=auth.user_id, action="update",
+                 entity="payment", entity_id=payment.id, data=changes)
+    db.commit()
+    return PaymentOutFull.model_validate(payment)
 
 
 # ------------------------------------------------------------------ audit

@@ -9,18 +9,39 @@ interface SaleRow {
   currency: string
   status: string
   captured_at: string
+  cashier_id: string
   payments: { method: string }[]
+}
+
+interface Operator {
+  user_id: string | null
+  full_name: string
 }
 
 export default function Sales() {
   const [sales, setSales] = useState<SaleRow[] | null>(null)
+  const [operators, setOperators] = useState<Operator[]>([])
+  const [operator, setOperator] = useState('')
   const [confirming, setConfirming] = useState<string | null>(null)
   const [error, setError] = useState('')
 
+  // Owner/manager can slice history by till operator; a cashier only ever
+  // sees their own receipts (the API enforces this regardless).
+  const canFilterByOperator = can('employees.read')
+
   function refresh() {
-    api.get<SaleRow[]>('/sales?limit=50').then(setSales).catch((e) => setError(e.message))
+    const q = operator ? `/sales?limit=100&cashier_id=${operator}` : '/sales?limit=100'
+    api.get<SaleRow[]>(q).then(setSales).catch((e) => setError(e.message))
   }
-  useEffect(refresh, [])
+  useEffect(refresh, [operator])
+
+  useEffect(() => {
+    if (canFilterByOperator) {
+      api.get<Operator[]>('/employees')
+        .then((rows) => setOperators(rows.filter((r) => r.user_id)))
+        .catch(() => setOperators([]))
+    }
+  }, [canFilterByOperator])
 
   async function voidSale(id: string) {
     try {
@@ -37,7 +58,18 @@ export default function Sales() {
 
   return (
     <div className="max-w-5xl flex flex-col gap-4">
-      <h1 className="text-2xl font-semibold">Sales history</h1>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <h1 className="text-2xl font-semibold">Sales history</h1>
+        {canFilterByOperator && operators.length > 0 && (
+          <select value={operator} onChange={(e) => setOperator(e.target.value)}
+            className="px-3 py-1.5 rounded-lg text-sm border border-black/15 dark:border-white/15 bg-transparent outline-none">
+            <option value="">All till operators</option>
+            {operators.map((o) => (
+              <option key={o.user_id!} value={o.user_id!}>{o.full_name}</option>
+            ))}
+          </select>
+        )}
+      </div>
 
       {sales === null ? (
         <div className="skeleton w-full" style={{ height: 300 }} />

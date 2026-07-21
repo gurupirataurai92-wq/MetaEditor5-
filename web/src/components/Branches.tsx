@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
-import { api } from '../api'
+import { api, can } from '../api'
 import { toast } from '../toast'
 
 interface Shop {
@@ -37,6 +37,18 @@ export default function Branches() {
       refresh()
     } catch (err) {
       setError((err as Error).message)
+    }
+  }
+
+  const [confirmDel, setConfirmDel] = useState<string | null>(null)
+  async function deleteBranch(id: string, label: string) {
+    try {
+      await api.del(`/shops/${id}`)
+      toast(`Branch "${label}" closed`)
+      setConfirmDel(null)
+      refresh()
+    } catch (e) {
+      toast((e as Error).message, 'error')
     }
   }
 
@@ -79,11 +91,29 @@ export default function Branches() {
                     </div>
                   </div>
                 </div>
-                <div className="mt-3 text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  {staff.length} staff assigned ·{' '}
-                  <span style={{ color: onDuty > 0 ? 'var(--delta-good)' : 'var(--muted)' }}>
-                    {onDuty} on duty now
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                    {staff.length} staff ·{' '}
+                    <span style={{ color: onDuty > 0 ? 'var(--delta-good)' : 'var(--muted)' }}>
+                      {onDuty} on duty
+                    </span>
                   </span>
+                  {can('shops.delete') && (
+                    confirmDel === shop.id ? (
+                      <span className="text-xs">
+                        <button onClick={() => deleteBranch(shop.id, shop.name)}
+                                className="font-medium mr-2"
+                                style={{ color: 'var(--status-critical)' }}>Confirm close</button>
+                        <button onClick={() => setConfirmDel(null)}
+                                style={{ color: 'var(--text-secondary)' }}>Cancel</button>
+                      </span>
+                    ) : (
+                      <button onClick={() => setConfirmDel(shop.id)}
+                              className="text-xs" style={{ color: 'var(--status-critical)' }}>
+                        Close branch
+                      </button>
+                    )
+                  )}
                 </div>
               </div>
             )

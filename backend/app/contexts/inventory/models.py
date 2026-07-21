@@ -64,6 +64,7 @@ class StockMovement(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    shop_id: Mapped[str | None] = mapped_column(String(36), index=True)  # branch
     product_id: Mapped[str] = mapped_column(String(36), index=True)
     movement_type: Mapped[str] = mapped_column(String(16))  # purchase|sale|adjustment|return|void
     qty: Mapped[int] = mapped_column(Integer)  # signed delta

@@ -26,8 +26,10 @@ DEFAULT_ROLES: dict[str, list[str]] = {
         "products.*", "categories.*", "stock.*", "suppliers.*", "sales.*",
         "customers.*", "expenses.*", "rates.*", "reports.*", "analytics.*",
         "employees.*", "sync.*", "audit.read", "shops.read", "users.read",
-        # Managers hire staff (creating each employee's own login).
-        "users.create",
+        # Managers hire and remove staff (creating each employee's own login),
+        # update goods prices, and correct recorded payments — but cannot open
+        # or delete branches (owner-only) or see owner-level financials.
+        "users.create", "payments.*",
     ],
     "cashier": [
         "sales.create", "sales.read", "customers.read", "customers.create",
@@ -115,7 +117,7 @@ def issue_tokens(db: Session, user: User) -> dict:
     role = get_role(db, user)
     access = create_access_token(
         user_id=user.id, tenant_id=user.tenant_id,
-        role=role.name, permissions=list(role.permissions),
+        role=role.name, permissions=list(role.permissions), shop_id=user.shop_id,
     )
     refresh = new_refresh_token()
     db.add(RefreshToken(
