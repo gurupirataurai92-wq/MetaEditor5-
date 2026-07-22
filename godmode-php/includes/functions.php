@@ -185,6 +185,40 @@ function next_invoice_number(): string
 }
 
 /* ============================================================
+   INVENTORY
+   ============================================================ */
+function inventory_stats(): array
+{
+    $items = rows('SELECT quantity, unit_cost, reorder_level FROM inventory_items');
+    $value = 0; $low = 0; $out = 0;
+    foreach ($items as $it) {
+        $value += (float) $it['quantity'] * (float) $it['unit_cost'];
+        if ((float) $it['quantity'] <= 0) $out++;
+        elseif ((float) $it['quantity'] <= (float) $it['reorder_level']) $low++;
+    }
+    return ['count' => count($items), 'value' => $value, 'low' => $low, 'out' => $out,
+            'alerts' => $low + $out];
+}
+function stock_status(array $it): array
+{
+    $qFloat = (float) $it['quantity'];
+    if ($qFloat <= 0) return ['OUT OF STOCK', 'b-red'];
+    if ($qFloat <= (float) $it['reorder_level']) return ['LOW — reorder', 'b-amber'];
+    return ['in stock', 'b-green'];
+}
+
+/* ============================================================
+   PAYMENTS (authorization / sign-off)
+   ============================================================ */
+function payment_stats(): array
+{
+    $pendCount = (int) scalar("SELECT COUNT(*) FROM payments WHERE status = 'pending'");
+    $pendAmt   = (float) scalar("SELECT COALESCE(SUM(amount),0) FROM payments WHERE status = 'pending'");
+    $signedAmt = (float) scalar("SELECT COALESCE(SUM(amount),0) FROM payments WHERE status = 'signed'");
+    return ['pendCount' => $pendCount, 'pendAmt' => $pendAmt, 'signedAmt' => $signedAmt];
+}
+
+/* ============================================================
    CASH FLOW SERIES (monthly income vs expense from the journal)
    ============================================================ */
 function cashflow_series(int $monthsBack): array

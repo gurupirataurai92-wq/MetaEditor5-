@@ -43,6 +43,8 @@ clear message telling you exactly what to do — it won't white-screen.
 | Auditing | `auditing.php` | Audit engagements (planning→closed) and a findings register |
 | Accounting | `accounting.php` | Double-entry journal → live income statement, balance sheet, trial balance |
 | Invoicing | `invoicing.php` + `invoice.php` | Invoices with line items; marking **paid** auto-posts a journal entry; printable |
+| Payments | `payments.php` | Every payment is requested, then **signed for** by a named signatory before it posts to the ledger; signed payments are locked as an audit trail |
+| Inventory | `inventory.php` | Stock register with automatic reorder / out-of-stock alerts, stock-in/out with a full movement log, and live stock valuation |
 | Microfinance | `microfinance.php` | Loan book, amortization schedules, repayments, PAR>30 monitoring |
 | Tax & Compliance | `tax.php` | Filing calendar with overdue / due-soon flags |
 | HR & Payroll | `hr.php` | Headcount and gross→net payroll |

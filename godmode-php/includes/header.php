@@ -28,6 +28,8 @@ $pageTitle = $pageTitle ?? 'God Mode';
       <a href="auditing.php"     class="<?= nav_active('auditing.php') ?>"><span class="ico">✓</span> Auditing</a>
       <a href="accounting.php"   class="<?= nav_active('accounting.php') ?>"><span class="ico">Σ</span> Accounting</a>
       <a href="invoicing.php"    class="<?= nav_active('invoicing.php') ?>"><span class="ico">▤</span> Invoicing</a>
+      <a href="payments.php"     class="<?= nav_active('payments.php') ?>"><span class="ico">✍</span> Payments</a>
+      <a href="inventory.php"    class="<?= nav_active('inventory.php') ?>"><span class="ico">▦</span> Inventory</a>
       <a href="microfinance.php" class="<?= nav_active('microfinance.php') ?>"><span class="ico">₵</span> Microfinance</a>
       <div class="nav-group">EXTENDED PRACTICE</div>
       <a href="tax.php"          class="<?= nav_active('tax.php') ?>"><span class="ico">§</span> Tax &amp; Compliance</a>

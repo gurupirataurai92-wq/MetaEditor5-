@@ -15,6 +15,9 @@ CREATE DATABASE IF NOT EXISTS godmode_consultant
 USE godmode_consultant;
 
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS payments;
+DROP TABLE IF EXISTS inventory_moves;
+DROP TABLE IF EXISTS inventory_items;
 DROP TABLE IF EXISTS invoice_items;
 DROP TABLE IF EXISTS invoices;
 DROP TABLE IF EXISTS findings;
@@ -186,6 +189,47 @@ CREATE TABLE ooda_log (
   decide    TEXT,
   act       TEXT,
   FOREIGN KEY (ooda_id) REFERENCES ooda(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ---------- Inventory ----------
+CREATE TABLE inventory_items (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  sku           VARCHAR(40) DEFAULT '',
+  name          VARCHAR(160) NOT NULL,
+  category      VARCHAR(80) DEFAULT '',
+  unit          VARCHAR(20) DEFAULT 'unit',
+  quantity      DECIMAL(14,2) DEFAULT 0,
+  unit_cost     DECIMAL(14,2) DEFAULT 0,
+  reorder_level DECIMAL(14,2) DEFAULT 0,
+  updated_at    DATE
+) ENGINE=InnoDB;
+
+CREATE TABLE inventory_moves (
+  id        INT AUTO_INCREMENT PRIMARY KEY,
+  item_id   INT NOT NULL,
+  move_type VARCHAR(10) NOT NULL,               -- in | out | set
+  qty       DECIMAL(14,2) NOT NULL,
+  note      VARCHAR(200) DEFAULT '',
+  moved_at  DATE,
+  FOREIGN KEY (item_id) REFERENCES inventory_items(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+-- ---------- Payments (with authorization / sign-off) ----------
+CREATE TABLE payments (
+  id             INT AUTO_INCREMENT PRIMARY KEY,
+  payee          VARCHAR(160) NOT NULL,
+  purpose        VARCHAR(220) DEFAULT '',
+  amount         DECIMAL(14,2) NOT NULL,
+  method         VARCHAR(20) DEFAULT 'bank',     -- cash | bank | mobile | cheque
+  client_id      INT NULL,
+  debit_account  INT NULL,                        -- what is being paid for
+  credit_account INT NULL,                        -- what it is paid from
+  status         VARCHAR(12) DEFAULT 'pending',   -- pending | signed | rejected
+  requested_at   DATE,
+  signed_by      VARCHAR(120) DEFAULT '',         -- authorizing signatory
+  signed_at      DATE NULL,
+  journal_id     INT NULL,                        -- ledger entry created on sign-off
+  FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
 -- ---------- Settings ----------

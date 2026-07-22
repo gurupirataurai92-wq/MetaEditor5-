@@ -24,6 +24,8 @@ $dueSoon = 0; $overdue = 0;
 foreach ($pending as $o) { $d = days_until($o['due_date']); if ($d < 0) $overdue++; elseif ($d <= 14) $dueSoon++; }
 
 $activeLoops = rows("SELECT * FROM ooda WHERE status = 'active'");
+$invy = inventory_stats();
+$pay  = payment_stats();
 $upcoming = rows("SELECT * FROM obligations WHERE status = 'pending' ORDER BY due_date ASC LIMIT 6");
 $STAGES = ['Observe', 'Orient', 'Decide', 'Act'];
 ?>
@@ -50,6 +52,10 @@ $STAGES = ['Observe', 'Orient', 'Decide', 'Act'];
   <div class="stat <?= $overdue ? 'bad' : ($dueSoon ? 'warn' : 'good') ?>"><div class="label">Compliance</div>
     <div class="value"><?= $overdue ? $overdue . ' overdue' : $dueSoon . ' due soon' ?></div>
     <div class="hint">next 14 days window</div></div>
+  <div class="stat <?= $pay['pendCount'] ? 'warn' : 'good' ?>"><div class="label">Payments to Sign</div>
+    <div class="value"><?= $pay['pendCount'] ?></div><div class="hint"><?= money($pay['pendAmt']) ?> awaiting sign-off</div></div>
+  <div class="stat <?= $invy['out'] ? 'bad' : ($invy['low'] ? 'warn' : 'good') ?>"><div class="label">Inventory Alerts</div>
+    <div class="value"><?= $invy['alerts'] ?></div><div class="hint"><?= $invy['out'] ?> out, <?= $invy['low'] ?> low · <?= money($invy['value']) ?> value</div></div>
   <div class="stat accent"><div class="label">Active OODA Loops</div><div class="value"><?= count($activeLoops) ?></div>
     <div class="hint">decision cycles in flight</div></div>
 </div>
