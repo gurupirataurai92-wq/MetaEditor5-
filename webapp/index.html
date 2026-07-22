@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Consultant God Mode — Business Command Center</title>
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">GM</div>
+      <div>
+        <div class="brand-name">GOD MODE</div>
+        <div class="brand-sub">Business Consultant OS</div>
+      </div>
+    </div>
+    <nav id="nav">
+      <a data-view="dashboard" class="active"><span class="ico">◈</span> Dashboard</a>
+      <a data-view="ooda"><span class="ico">⟳</span> OODA Engine</a>
+      <div class="nav-group">CORE PRACTICE</div>
+      <a data-view="consulting"><span class="ico">◎</span> Consulting / CRM</a>
+      <a data-view="auditing"><span class="ico">✓</span> Auditing</a>
+      <a data-view="accounting"><span class="ico">Σ</span> Accounting</a>
+      <a data-view="microfinance"><span class="ico">₵</span> Microfinance</a>
+      <div class="nav-group">EXTENDED PRACTICE</div>
+      <a data-view="tax"><span class="ico">§</span> Tax &amp; Compliance</a>
+      <a data-view="hr"><span class="ico">☰</span> HR &amp; Payroll</a>
+      <a data-view="risk"><span class="ico">⚠</span> Risk Register</a>
+      <a data-view="analysis"><span class="ico">%</span> Financial Analysis</a>
+    </nav>
+    <div class="sidebar-foot">
+      <button class="btn btn-ghost btn-sm" data-action="export-data">Export Data</button>
+      <button class="btn btn-ghost btn-sm" data-action="import-data">Import Data</button>
+      <input type="file" id="import-file" accept=".json" hidden>
+    </div>
+  </aside>
+  <main class="main" id="main"><!-- views render here --></main>
+</div>
+<div class="modal-backdrop" id="modal-backdrop" hidden>
+  <div class="modal" id="modal"></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+<script src="js/store.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
