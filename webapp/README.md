@@ -26,11 +26,23 @@ cd webapp && python3 -m http.server 8080
 | **Consulting / CRM** | Clients, engagements with fee pipeline (proposal → active → completed), and a SWOT board per client. |
 | **Auditing** | Audit engagements through planning → fieldwork → reporting → closed, plus a findings register with severity and remediation status. |
 | **Accounting** | Double-entry journal with a chart of accounts. Live income statement, balance sheet (with balance check) and trial balance. |
+| **Invoicing & Billing** | Numbered invoices with line items, draft→sent→paid flow, overdue detection, printable "paper" view, and automatic journal posting when marked paid. |
 | **Microfinance** | Loan book with flat or declining-balance amortization schedules, repayment tracking, auto-close on payoff, and PAR>30 monitoring. |
 | **Tax & Compliance** | Filing calendar with authorities, frequencies, overdue/due-soon flags feeding the dashboard. |
 | **HR & Payroll** | Headcount with gross → net payroll and deduction estimates. |
 | **Risk Register** | Likelihood × impact scoring (1–25), sorted by severity, with mitigation owner and status. |
-| **Financial Analysis** | Instant calculators: liquidity/leverage/profitability ratios, break-even, and NPV with simple payback. |
+| **Financial Analysis** | Instant calculators: liquidity/leverage/profitability ratios, break-even, NPV with simple payback, 5-year DCF business valuation, and EBITDA multiples. |
+
+## Power features
+
+- **Ctrl+K command palette** — search every client, invoice, loan, finding, risk,
+  deadline and OODA loop from anywhere, or fire quick actions ("New invoice").
+- **Client 360° health report** — one click per client scores audits, receivables,
+  compliance and risk into a 0–100 grade with printable output.
+- **Cash-flow chart** — monthly income vs expenses drawn live from the journal
+  (colorblind-validated palette, hover tooltips, table view).
+- **Print to PDF** — invoices and 360° reports print as clean paper documents.
+- **Currency switch** — display all amounts in any of 16 currencies.
 
 ## Data
 

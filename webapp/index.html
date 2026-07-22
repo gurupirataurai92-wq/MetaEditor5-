@@ -23,6 +23,7 @@
       <a data-view="consulting"><span class="ico">◎</span> Consulting / CRM</a>
       <a data-view="auditing"><span class="ico">✓</span> Auditing</a>
       <a data-view="accounting"><span class="ico">Σ</span> Accounting</a>
+      <a data-view="invoicing"><span class="ico">▤</span> Invoicing</a>
       <a data-view="microfinance"><span class="ico">₵</span> Microfinance</a>
       <div class="nav-group">EXTENDED PRACTICE</div>
       <a data-view="tax"><span class="ico">§</span> Tax &amp; Compliance</a>
@@ -31,13 +32,22 @@
       <a data-view="analysis"><span class="ico">%</span> Financial Analysis</a>
     </nav>
     <div class="sidebar-foot">
-      <button class="btn btn-ghost btn-sm" data-action="export-data">Export Data</button>
-      <button class="btn btn-ghost btn-sm" data-action="import-data">Import Data</button>
+      <button class="btn btn-ghost btn-sm" data-action="export-data">Export</button>
+      <button class="btn btn-ghost btn-sm" data-action="import-data">Import</button>
+      <button class="btn btn-ghost btn-sm" data-action="currency">¤</button>
       <input type="file" id="import-file" accept=".json" hidden>
     </div>
+    <div class="kbd-hint">Press <kbd>Ctrl</kbd>+<kbd>K</kbd> to search everything</div>
   </aside>
   <main class="main" id="main"><!-- views render here --></main>
 </div>
+<div class="cmdk-backdrop" id="cmdk" hidden>
+  <div class="cmdk">
+    <input id="cmdk-input" placeholder="Search clients, loans, invoices, risks… or type an action" autocomplete="off">
+    <div class="cmdk-results" id="cmdk-results"></div>
+  </div>
+</div>
+<div class="chart-tip" id="chart-tip" hidden></div>
 <div class="modal-backdrop" id="modal-backdrop" hidden>
   <div class="modal" id="modal"></div>
 </div>

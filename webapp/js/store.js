@@ -21,6 +21,7 @@
       { id: "e-oth",   name: "Other Expenses",       type: "Expense" }
     ],
     journal: [],
+    invoices: [],
     loans: [],
     obligations: [],
     employees: [],

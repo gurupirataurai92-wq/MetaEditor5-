@@ -174,6 +174,60 @@ textarea { resize: vertical; min-height: 64px; }
 .report-section { margin-bottom: 14px; }
 .report-section h4 { font-size: 12px; color: var(--accent-2); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
 
+/* ---------- Command palette ---------- */
+.kbd-hint { padding: 8px 14px 14px; font-size: 11px; color: var(--muted); }
+kbd { background: var(--panel-2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; font-family: var(--mono); font-size: 10px; }
+.cmdk-backdrop[hidden] { display: none; }
+.cmdk-backdrop { position: fixed; inset: 0; background: rgba(5,8,12,.72); z-index: 70; display: flex; justify-content: center; align-items: flex-start; padding: 12vh 16px; }
+.cmdk { width: 100%; max-width: 620px; background: var(--panel); border: 1px solid var(--accent); border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.55); }
+.cmdk input { border: none; border-bottom: 1px solid var(--border); border-radius: 0; padding: 15px 18px; font-size: 15px; background: var(--panel); }
+.cmdk input:focus { border-color: var(--border); }
+.cmdk-results { max-height: 46vh; overflow-y: auto; padding: 6px; }
+.cmdk-item { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 7px; cursor: pointer; font-size: 13.5px; }
+.cmdk-item.sel, .cmdk-item:hover { background: var(--panel-2); }
+.cmdk-item .tag { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); background: var(--bg-2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; flex-shrink: 0; min-width: 66px; text-align: center; }
+.cmdk-item .sub { color: var(--muted); font-size: 12px; margin-left: auto; }
+.cmdk-empty { padding: 18px; color: var(--muted); font-style: italic; text-align: center; }
+
+/* ---------- Cash-flow chart ---------- */
+.chart-legend { display: flex; gap: 18px; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
+.chart-legend .chip { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.cashflow-svg { width: 100%; height: auto; display: block; }
+.cashflow-svg .grid { stroke: rgba(38,50,65,.6); stroke-width: 1; }
+.cashflow-svg .axis-label { fill: var(--muted); font-size: 10px; font-family: var(--font); }
+.cashflow-svg .bar { cursor: pointer; }
+.cashflow-svg .bar:hover { filter: brightness(1.25); }
+.chart-tip[hidden] { display: none; }
+.chart-tip { position: fixed; z-index: 80; background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px; padding: 7px 11px; font-size: 12px; pointer-events: none; box-shadow: 0 6px 18px rgba(0,0,0,.4); }
+.chart-tip .t-val { font-weight: 700; font-variant-numeric: tabular-nums; }
+details.chart-data summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 10px; }
+
+/* ---------- Invoice paper preview ---------- */
+.paper { background: #ffffff; color: #1c2530; border-radius: 8px; padding: 28px 30px; font-size: 13px; }
+.paper h1 { font-size: 20px; letter-spacing: 2px; color: #1c2530; }
+.paper .muted { color: #5a6b7d; }
+.paper table { font-size: 12.5px; }
+.paper th { color: #5a6b7d; border-bottom: 1px solid #d7dee6; }
+.paper td { border-bottom: 1px solid #edf1f5; color: #1c2530; }
+.paper .paper-head { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+.paper .paper-total { text-align: right; font-size: 16px; font-weight: 700; margin-top: 14px; }
+.paper .badge { border: 1px solid currentColor; background: transparent; }
+
+/* ---------- Health score ---------- */
+.health-ring { font-size: 40px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
+.health-grade { font-size: 13px; letter-spacing: 2px; font-weight: 700; }
+
+/* ---------- Print (invoice / report) ---------- */
+@media print {
+  body:has(.modal-backdrop:not([hidden])) .app,
+  body:has(.modal-backdrop:not([hidden])) .toast,
+  body:has(.modal-backdrop:not([hidden])) .chart-tip { display: none !important; }
+  .modal-backdrop { position: static !important; padding: 0 !important; background: #fff !important; backdrop-filter: none !important; }
+  .modal { max-width: 100% !important; border: none !important; background: #fff !important; color: #000; box-shadow: none !important; }
+  .modal-actions, .no-print { display: none !important; }
+  .paper { border-radius: 0; padding: 0; }
+}
+
 .mt { margin-top: 14px; }
 .muted { color: var(--muted); }
 .pos { color: var(--good); } .neg { color: var(--bad); }
