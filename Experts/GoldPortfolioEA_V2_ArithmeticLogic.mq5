@@ -17,7 +17,7 @@
 //======================================================================
 // INPUT PARAMETERS
 //======================================================================
-input string Watchlist          = "EURUSD,GBPUSD,USDJPY,USDCHF,AUDUSD,NZDUSD,USDCAD,XAUUSD,XAGUSUSD,BTCUSD,ETHUSD,USOIL,UKOIL";
+input string Watchlist          = "EURUSD,GBPUSD,USDJPY,USDCHF,AUDUSD,NZDUSD,USDCAD,XAUUSD,XAGUSD,BTCUSD,ETHUSD,USOIL,UKOIL";
 input double RiskPercent        = 1.0;
 input double MinAccountUSD      = 2.0;
 input int    MagicBase          = 20260714;
@@ -27,9 +27,8 @@ input bool   TradeNewYork       = true;
 input bool   TradeOffHours      = true;
 input double MinRiskRewardRatio = 1.5;      // DO NOT trade unless TP/SL ratio is at least 1.5:1
 input bool   RequireConfluence  = true;      // require 2+ confluence signals before entry
-input bool   EnableFibonacci    = true;      // trade fibonacci retracements as TP targets
 input bool   EnableKellySizing  = true;      // use Kelly Criterion for position sizing
-input bool   EnableSQLite       = true;
+input bool   EnableGoldLogic    = true;      // XAUUSD-specific: Asian-range filter + $10 round-number TP capping
 input bool   EnablePartialClose = true;
 input bool   EnablePyramid      = true;
 input bool   EnableCompounding  = true;
@@ -46,7 +45,6 @@ input double PyramidL2Mult      = 0.25;
 // NAMED CONSTANTS
 //======================================================================
 #define WEIGHTS_FILENAME            "EAWeights.bin"
-#define DB_FILENAME                 "QuantTickStorage.sqlite"
 #define ATR_PERIOD                  14
 #define ROLLING_HISTORY_SIZE        20
 #define NN_INPUTS                   5
@@ -84,10 +82,12 @@ input double PyramidL2Mult      = 0.25;
 #define BREAKEVEN_BUFFER_POINTS     1
 #define MOMENTUM_TP_R_MULT          1.0
 #define MOMENTUM_TP_CONF_MIN        0.80
-#define TICK_LOG_BATCH_SIZE         10
-#define EQUITY_LOG_INTERVAL_SEC     60
-#define NN_CHECKPOINT_TRADE_INTERVAL 100
 #define GOLD_SYMBOL                 "XAUUSD"
+#define GOLD_ROUND_STEP             10.0   // gold respects $10 psychological levels
+#define GOLD_ROUND_BUFFER           0.30   // park TP $0.30 inside the round level, not on it
+#define ASIAN_START_HOUR_UTC        0
+#define ASIAN_END_HOUR_UTC          7
+#define INSIDE_RANGE_CONFLUENCE     3      // extra confluence demanded when gold is still inside the Asian range
 #define SL_MIN_POINTS               10
 #define WEIGHT_INIT_RANGE           0.5
 #define THRESH_ASIAN                0.96
@@ -199,11 +199,7 @@ matrix            g_W2(NN_HIDDEN, 1);
 vector            g_B1(NN_HIDDEN);
 vector            g_B2(1);
 
-int               g_dbHandle = INVALID_HANDLE;
-int               g_tickLogCounter = 0;
-
 datetime          g_lastRankTime      = 0;
-datetime          g_lastEquityLogTime = 0;
 datetime          g_sessionDay        = 0;
 
 double            g_globalSessionPnL     = 0.0;
@@ -263,8 +259,6 @@ PriceStructure GetPriceStructure(string symbol, ENUM_TIMEFRAMES tf, int lookback
    ps.Fib382 = ps.SwingHigh - ps.StructureRange * FIBONACCI_382;
    ps.Fib236 = ps.SwingHigh - ps.StructureRange * FIBONACCI_236;
 
-   // Support/Resistance (simple: current level proximity to swing highs/lows)
-   double lastPrice = bars[0].close;
    ps.ResistanceLevel = ps.SwingHigh;
    ps.SupportLevel    = ps.SwingLow;
 
@@ -277,8 +271,10 @@ int CountConfluence(string symbol, int htfBias, const PriceStructure &ps, double
 {
    int confluence = 0;
 
-   // Signal 1: price is within fib retracement zone (382-618)
-   if(currentPrice >= ps.Fib382 && currentPrice <= ps.Fib618) confluence++;
+   // Signal 1: price is within fib retracement zone. In price terms
+   // Fib618 is the LOWER bound and Fib382 the upper (fibs measured from
+   // the swing high downward), so the comparison must run that way.
+   if(currentPrice >= ps.Fib618 && currentPrice <= ps.Fib382) confluence++;
 
    // Signal 2: HTF trend agrees with entry direction
    if(htfBias != 0) confluence++;
@@ -297,19 +293,19 @@ int CountConfluence(string symbol, int htfBias, const PriceStructure &ps, double
 //======================================================================
 // KELLY CRITERION SIZING
 //======================================================================
-double CalculateKellyFraction(SymbolConfig &cfg, int count)
+// Fractional Kelly over the ROLLING window (win rate and sample count must
+// come from the same window - mixing all-time wins with a 20-trade count
+// overstates the edge as history accumulates).
+double CalculateKellyFraction(double rollingWinRate, int count)
 {
    if(count < WinRateMinTrades) return 0.25; // conservative during ramp-up
 
-   double wr = (double)cfg.TotalWins / (double)count;
+   double wr = rollingWinRate;
    double lr = 1.0 - wr;
 
-   // Kelly = (wr - lr) / 1.0 (assuming 1:1 risk/reward baseline; we adjust for actual RR)
-   // But Kelly can be > 1, so we take a fraction: f = k * 0.25 (fractional Kelly)
-   if(lr == 0.0) return 0.25; // protection
-   double k = (wr - lr) / 1.0;
-   if(k <= 0.0) return 0.10; // negative Kelly, use minimum
-   return MathMin(k * 0.25, 0.50); // max 50% of Kelly, capped at 0.5 overall
+   double k = wr - lr;              // Kelly for ~1:1 payoff baseline
+   if(k <= 0.0) return 0.10;        // negative edge estimate -> minimum sizing
+   return MathMin(k * 0.25, 0.50);  // quarter-Kelly, hard-capped at 0.5
 }
 
 //======================================================================
@@ -337,30 +333,88 @@ bool ValidateRiskReward(double entry, double sl, double tp, int direction)
 }
 
 //======================================================================
-// FIBONACCI-BASED TP PLACEMENT
+// RETRACEMENT GEOMETRY
+// The trade IS the arithmetic: enter a pullback inside the 38.2-61.8%
+// zone of the governing swing, invalidate beyond the 78.6% level, target
+// the swing extreme. Entering near 50% makes reward/risk ~1.75:1 by
+// construction (0.50 range vs ~0.29 range), which is what lets these
+// setups pass the MinRiskRewardRatio gate structurally instead of by luck.
+// Note on level orientation: fibs here are measured from the swing HIGH
+// downward, so in price terms Fib236 is the highest level and Fib786 the
+// lowest. For shorts the zone/invalidation mirror automatically
+// (high - 0.236R == low + 0.764R).
 //======================================================================
-double GetFibonacciTP(string symbol, int direction, double entry, const PriceStructure &ps)
+bool InRetracementZone(int direction, double price, const PriceStructure &ps)
 {
-   if(!ps.IsStructureValid) return 0.0;
+   if(!ps.IsStructureValid) return false;
+   // Zone bounds in price: Fib618 (lower) .. Fib382 (upper) for both sides
+   return (price >= ps.Fib618 && price <= ps.Fib382);
+}
 
+double GetStructureSL(int direction, const PriceStructure &ps, double buffer)
+{
+   // Invalidation just beyond the 78.6% retracement, not the full swing:
+   // keeps risk to ~0.29x of the range instead of up to 1.0x.
+   if(direction > 0) return ps.Fib786 - buffer;
+   return ps.Fib236 + buffer;
+}
+
+double GetStructureTP(int direction, const PriceStructure &ps)
+{
+   return (direction > 0) ? ps.ResistanceLevel : ps.SupportLevel;
+}
+
+//======================================================================
+// GOLD-SPECIFIC ARITHMETIC (XAUUSD)
+//======================================================================
+// $10 round-number capping: gold stalls at $10 psychological levels, and
+// TPs parked exactly on them often miss by cents. If a $10 multiple sits
+// between entry and TP, pull the TP $0.30 inside it.
+double ApplyGoldRoundNumberCap(int direction, double entry, double tp)
+{
    if(direction > 0)
    {
-      // Buying: target the next fib level above entry, or resistance
-      if(entry < ps.Fib236) return ps.Fib236;
-      if(entry < ps.Fib382) return ps.Fib382;
-      if(entry < ps.Fib500) return ps.Fib500;
-      if(entry < ps.Fib618) return ps.Fib618;
-      return ps.Fib786; // or resistance
+      double firstRoundAbove = MathCeil(entry / GOLD_ROUND_STEP) * GOLD_ROUND_STEP;
+      if(tp > firstRoundAbove) return firstRoundAbove - GOLD_ROUND_BUFFER;
    }
    else
    {
-      // Selling: target the next fib level below entry, or support
-      if(entry > ps.Fib786) return ps.Fib786;
-      if(entry > ps.Fib618) return ps.Fib618;
-      if(entry > ps.Fib500) return ps.Fib500;
-      if(entry > ps.Fib382) return ps.Fib382;
-      return ps.Fib236; // or support
+      double firstRoundBelow = MathFloor(entry / GOLD_ROUND_STEP) * GOLD_ROUND_STEP;
+      if(tp < firstRoundBelow) return firstRoundBelow + GOLD_ROUND_BUFFER;
    }
+   return tp;
+}
+
+// Asian-range context: gold ranges 00:00-07:00 UTC and trends after.
+// Once London/NY are open, trading AGAINST a resolved Asian-range
+// breakout is statistically poor - block those entries. Inside an
+// unresolved range, demand extra confluence (chop protection).
+// Returns: +1 bullish breakout, -1 bearish breakout, 0 unresolved/unknown.
+int GetAsianRangeBias(string symbol)
+{
+   // Bar times are in server time; shift the UTC session window accordingly.
+   int serverOffset = (int)(TimeTradeServer() - TimeGMT());
+   MqlDateTime dt;
+   TimeToStruct(TimeGMT(), dt);
+   datetime dayStartUTC = TimeGMT() - (dt.hour * 3600 + dt.min * 60 + dt.sec);
+   datetime fromServer = dayStartUTC + ASIAN_START_HOUR_UTC * 3600 + serverOffset;
+   datetime toServer   = dayStartUTC + ASIAN_END_HOUR_UTC * 3600 + serverOffset;
+
+   MqlRates bars[];
+   int copied = CopyRates(symbol, PERIOD_M15, fromServer, toServer, bars);
+   if(copied <= 0) return 0;
+
+   double asianHigh = bars[0].high, asianLow = bars[0].low;
+   for(int i = 1; i < copied; i++)
+   {
+      asianHigh = MathMax(asianHigh, bars[i].high);
+      asianLow  = MathMin(asianLow, bars[i].low);
+   }
+
+   double price = SymbolInfoDouble(symbol, SYMBOL_BID);
+   if(price > asianHigh) return 1;
+   if(price < asianLow)  return -1;
+   return 0;
 }
 
 //======================================================================
@@ -937,13 +991,13 @@ double CalculateLotSize(int idx, double activeRiskPct, double slDist, double &ri
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double riskAmt = equity * (activeRiskPct / 100.0);
 
-   // Apply Kelly fraction if enabled
+   // Apply Kelly fraction if enabled (persist to g_cfg, not the local copy)
    if(EnableKellySizing)
    {
       int count;
-      double wr = GetRollingWinRate(cfg, count);
-      cfg.KellyFraction = CalculateKellyFraction(cfg, count);
-      riskAmt *= cfg.KellyFraction;
+      double wr = GetRollingWinRate(g_cfg[idx], count);
+      g_cfg[idx].KellyFraction = CalculateKellyFraction(wr, count);
+      riskAmt *= g_cfg[idx].KellyFraction;
    }
 
    riskAmtOut = riskAmt;
@@ -1168,41 +1222,51 @@ void ProcessSymbol(int idx)
    int htfBias = GetHTFBias(sym);
    if(htfBias == 0) return;
 
-   // 3. Check confluence - multiple signals must align
-   int confluence = CountConfluence(sym, htfBias, ps, bid);
-   if(RequireConfluence && confluence < 2) return;
+   // 3. The retracement trade only exists inside the 38.2-61.8% zone -
+   //    outside it the SL/TP geometry below has no meaning.
+   if(!InRetracementZone(htfBias, bid, ps)) return;
 
-   // 4. M1 candle confirmation
+   // 4. Confluence - multiple signals must align
+   int confluence = CountConfluence(sym, htfBias, ps, bid);
+   int requiredConfluence = RequireConfluence ? 2 : 0;
+
+   // 4b. GOLD MODULE: Asian-range context during London/NY hours.
+   if(EnableGoldLogic && sym == GOLD_SYMBOL && session != SESSION_ASIAN && session != SESSION_OFFHOURS)
+   {
+      int asianBias = GetAsianRangeBias(sym);
+      if(asianBias != 0 && asianBias != htfBias) return; // never fade a resolved breakout
+      if(asianBias == 0)
+         requiredConfluence = MathMax(requiredConfluence, INSIDE_RANGE_CONFLUENCE); // unresolved range = chop risk
+   }
+   if(confluence < requiredConfluence) return;
+
+   // 5. M1 candle confirmation
    if(!M1CandleConfirmation(sym, htfBias)) return;
 
-   // 5. Microstructure signals (NN input)
+   // 6. Microstructure signals (NN input)
    double deltaScore   = GetTickDeltaScore(sym);
    double pressureProxy = GetCandlePressure(sym);
    double velocityScore = GetTickVelocityScore(g_cfg[idx], sym);
    double spreadRatio   = GetSpreadRatio(sym);
 
-   // 6. Neural net confidence gate
+   // 7. Neural net confidence gate
    double confidence = GetNNConfidence(g_cfg[idx], deltaScore, pressureProxy, velocityScore, (double)htfBias, spreadRatio);
    double threshold = GetSignalThreshold(session);
    if(confidence < threshold) return;
 
-   // 7. ARITHMETIC: Fibonacci TP (not arbitrary ATR multiple)
-   double fib_tp = EnableFibonacci ? GetFibonacciTP(sym, htfBias, bid, ps) : 0.0;
-   if(fib_tp <= 0.0 && !EnableFibonacci)
-   {
-      // Fallback: use structure-based TP
-      fib_tp = (htfBias > 0) ? ps.Fib618 : ps.Fib382;
-   }
-
-   // 8. SL placement: just beyond the swing that justifies the trade
-   double sl = (htfBias > 0) ? (ps.SupportLevel - SL_MIN_POINTS * g_cfg[idx].PointValue)
-                              : (ps.ResistanceLevel + SL_MIN_POINTS * g_cfg[idx].PointValue);
+   // 8. Retracement geometry: SL beyond the 78.6% invalidation,
+   //    TP at the swing extreme. Gold TP additionally capped inside
+   //    the first $10 round number so it isn't parked where everyone
+   //    else's orders cluster.
+   double sl = GetStructureSL(htfBias, ps, SL_MIN_POINTS * g_cfg[idx].PointValue);
+   double tp = GetStructureTP(htfBias, ps);
+   if(EnableGoldLogic && sym == GOLD_SYMBOL)
+      tp = ApplyGoldRoundNumberCap(htfBias, bid, tp);
 
    // 9. Validate risk/reward ratio BEFORE entry
-   if(!ValidateRiskReward(bid, sl, fib_tp, htfBias))
+   if(!ValidateRiskReward(bid, sl, tp, htfBias))
    {
-      PrintFormat("Entry rejected - [%s] RR ratio %.2f:1 < %.2f:1 required",
-                  sym, MathAbs(fib_tp - bid) / MathAbs(bid - sl), MinRiskRewardRatio);
+      PrintFormat("Entry rejected - [%s] RR ratio below %.2f:1 required", sym, MinRiskRewardRatio);
       return;
    }
 
@@ -1222,7 +1286,7 @@ void ProcessSymbol(int idx)
       return;
 
    // 12. OPEN
-   OpenPosition(idx, htfBias, lot, sl, fib_tp, riskAmt);
+   OpenPosition(idx, htfBias, lot, sl, tp, riskAmt);
 }
 
 //======================================================================
@@ -1485,7 +1549,7 @@ void UpdateSessionResetIfNeeded()
       g_sessionDay = today;
       g_globalSessionPnL = 0.0;
       for(int i = 0; i < g_symbolCount; i++) g_cfg[i].SessionPnL = 0.0;
-      g_sessionStartBalance = AccountInfoBalance(ACCOUNT_BALANCE);
+      g_sessionStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    }
 }
 
@@ -1579,10 +1643,10 @@ int OnInit()
    PrintFormat("[%s] Account: TIER %d (MaxTrades=%d)", okAccount ? "OK" : "FAIL", g_currentTier, g_maxTrades);
    PrintFormat("[%s] NN weights: %s", okNN ? "OK" : "FAIL", FileIsExist(WEIGHTS_FILENAME) ? "loaded" : "initialized");
    PrintFormat("[%s] Symbols scanned: %d available", okScan ? "OK" : "FAIL", availableCount);
-   PrintFormat("[%s] Risk/Reward enforcement: MIN %.2f:1", RequireConfluence ? "ON" : "OFF", MinRiskRewardRatio);
-   PrintFormat("[%s] Fibonacci TP placement: %s", EnableFibonacci ? "ON" : "OFF");
-   PrintFormat("[%s] Kelly Criterion sizing: %s", EnableKellySizing ? "ON" : "OFF");
-   PrintFormat("[%s] Confluence required: %d+ signals", RequireConfluence ? "ON" : "OFF", RequireConfluence ? 2 : 0);
+   PrintFormat("[OK] Risk/Reward enforcement: MIN %.2f:1", MinRiskRewardRatio);
+   PrintFormat("[OK] Kelly Criterion sizing: %s", EnableKellySizing ? "ON" : "OFF");
+   PrintFormat("[OK] Gold module (Asian range + round numbers): %s", EnableGoldLogic ? "ON" : "OFF");
+   PrintFormat("[OK] Confluence required: %d+ signals", RequireConfluence ? 2 : 0);
    Print("=========================================================");
 
    return INIT_SUCCEEDED;
