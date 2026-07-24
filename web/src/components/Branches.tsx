@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react'
-import { api, can } from '../api'
+import { api, can, getClaims } from '../api'
 import { toast } from '../toast'
 
 interface Shop {
@@ -60,6 +60,25 @@ export default function Branches() {
   return (
     <div className="max-w-4xl flex flex-col gap-4">
       <h1 className="text-2xl font-semibold">Branches</h1>
+
+      <div className="card p-5" style={{ backgroundImage: 'var(--brand-grad)', color: '#fff' }}>
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <div className="font-medium">🛍️ Your online store</div>
+            <div className="text-sm text-white/80">
+              Share this link — customers order from home; orders appear under Online Orders.
+            </div>
+          </div>
+          <button onClick={() => {
+                    const link = `${window.location.origin}/?store=${getClaims()?.tenant_id ?? ''}`
+                    navigator.clipboard?.writeText(link)
+                    toast('Store link copied')
+                  }}
+                  className="px-4 py-2 rounded-lg bg-white/20 hover:bg-white/30 text-sm font-medium">
+            🔗 Copy store link
+          </button>
+        </div>
+      </div>
 
       <form onSubmit={addBranch} className="card p-5 grid md:grid-cols-3 gap-3 items-end">
         <label className="text-sm">Branch name

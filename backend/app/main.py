@@ -18,6 +18,8 @@ from app.contexts.finance.router import router as finance_router
 from app.contexts.hr.router import router as hr_router
 from app.contexts.identity.router import router as identity_router
 from app.contexts.inventory.router import router as inventory_router
+from app.contexts.orders.router import public_router as storefront_router
+from app.contexts.orders.router import router as orders_router
 from app.contexts.sales.router import router as sales_router
 from app.contexts.syncengine.router import router as sync_router
 
@@ -49,7 +51,8 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     for router in (identity_router, inventory_router, sales_router,
-                   finance_router, sync_router, analytics_router, hr_router):
+                   finance_router, sync_router, analytics_router, hr_router,
+                   orders_router, storefront_router):
         app.include_router(router, prefix="/api/v1")
 
     @app.get("/health", tags=["system"])

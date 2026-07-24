@@ -26,6 +26,8 @@ export default function Pos() {
   const [cart, setCart] = useState<CartLine[]>([])
   const [method, setMethod] = useState<(typeof METHODS)[number]>('cash')
   const [receipt, setReceipt] = useState<SaleOut | null>(null)
+  const [picking, setPicking] = useState<Product | null>(null)  // qty picker
+  const [pickQty, setPickQty] = useState(1)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -42,13 +44,33 @@ export default function Pos() {
 
   const total = cart.reduce((sum, l) => sum + Number(l.product.sell_price) * l.qty, 0)
 
-  function add(product: Product) {
+  function add(product: Product, qty = 1) {
     setCart((c) => {
       const line = c.find((l) => l.product.id === product.id)
       return line
-        ? c.map((l) => (l.product.id === product.id ? { ...l, qty: l.qty + 1 } : l))
-        : [...c, { product, qty: 1 }]
+        ? c.map((l) => (l.product.id === product.id ? { ...l, qty: l.qty + qty } : l))
+        : [...c, { product, qty }]
     })
+  }
+
+  function openPicker(product: Product) {
+    setPicking(product)
+    setPickQty(1)
+  }
+
+  function confirmPick() {
+    if (picking) add(picking, pickQty)
+    setPicking(null)
+  }
+
+  // Scanning a barcode adds a single unit immediately (no picker needed).
+  function onSearchEnter() {
+    const q = search.trim().toLowerCase()
+    const hit = products.find((p) => p.barcode === q || p.sku.toLowerCase() === q)
+    if (hit) {
+      add(hit, 1)
+      setSearch('')
+    }
   }
 
   async function checkout() {
@@ -78,6 +100,7 @@ export default function Pos() {
           placeholder="Scan barcode or search products…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') onSearchEnter() }}
         />
         {error && <p className="mb-2 text-sm" style={{ color: 'var(--status-critical)' }}>{error}</p>}
         {products.length === 0 && (
@@ -90,7 +113,7 @@ export default function Pos() {
         )}
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           {visible.map((p) => (
-            <button key={p.id} onClick={() => add(p)}
+            <button key={p.id} onClick={() => openPicker(p)}
                     className="card p-4 text-left hover:border-brand dark:hover:border-brand-dark transition-colors">
               <div className="font-medium text-sm">{p.name}</div>
               <div className="text-xs mt-1" style={{ color: 'var(--muted)' }}>{p.sku}</div>
@@ -99,6 +122,48 @@ export default function Pos() {
           ))}
         </div>
       </div>
+
+      {/* Quantity picker — opens each time a product is clicked */}
+      {picking && (
+        <div className="fixed inset-0 z-40 grid place-items-center p-4"
+             style={{ background: 'rgba(0,0,0,0.45)' }}
+             onClick={() => setPicking(null)}>
+          <div className="card p-6 w-full max-w-xs fade-in" onClick={(e) => e.stopPropagation()}>
+            <div className="font-medium">{picking.name}</div>
+            <div className="text-sm mb-4" style={{ color: 'var(--muted)' }}>
+              ${Number(picking.sell_price).toFixed(2)} each
+            </div>
+            <div className="flex items-center justify-center gap-3">
+              <button onClick={() => setPickQty((q) => Math.max(1, q - 1))}
+                      className="w-11 h-11 rounded-lg border border-black/15 dark:border-white/15 text-xl">
+                −
+              </button>
+              <input type="number" min={1} value={pickQty}
+                     onChange={(e) => setPickQty(Math.max(1, Number(e.target.value) || 1))}
+                     autoFocus
+                     onKeyDown={(e) => { if (e.key === 'Enter') confirmPick() }}
+                     className="w-20 text-center text-xl font-semibold py-2 rounded-lg border border-black/15 dark:border-white/15 bg-transparent outline-none" />
+              <button onClick={() => setPickQty((q) => q + 1)}
+                      className="w-11 h-11 rounded-lg border border-black/15 dark:border-white/15 text-xl">
+                +
+              </button>
+            </div>
+            <div className="mt-4 text-center text-sm" style={{ color: 'var(--text-secondary)' }}>
+              Subtotal ${(Number(picking.sell_price) * pickQty).toFixed(2)}
+            </div>
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => setPicking(null)}
+                      className="flex-1 py-2 rounded-lg border border-black/15 dark:border-white/15 text-sm">
+                Cancel
+              </button>
+              <button onClick={confirmPick}
+                      className="flex-1 py-2 rounded-lg bg-brand dark:bg-brand-dark text-white text-sm font-medium">
+                Add {pickQty} to cart
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <aside className="w-80 shrink-0">
         <div className="card p-5 sticky top-6">

@@ -53,5 +53,6 @@ def init_db() -> None:
     from app.contexts.finance import models as finance_models  # noqa: F401
     from app.contexts.syncengine import models as sync_models  # noqa: F401
     from app.contexts.hr import models as hr_models  # noqa: F401
+    from app.contexts.orders import models as orders_models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

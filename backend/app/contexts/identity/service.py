@@ -27,23 +27,24 @@ DEFAULT_ROLES: dict[str, list[str]] = {
         "customers.*", "expenses.*", "rates.*", "reports.*", "analytics.*",
         "employees.*", "sync.*", "audit.read", "shops.read", "users.read",
         # Managers hire and remove staff (creating each employee's own login),
-        # update goods prices, and correct recorded payments — but cannot open
-        # or delete branches (owner-only) or see owner-level financials.
-        "users.create", "payments.*",
+        # update goods prices, correct recorded payments and manage online
+        # orders — but cannot open/delete branches or see owner financials.
+        "users.create", "payments.*", "orders.*",
     ],
     "cashier": [
         "sales.create", "sales.read", "customers.read", "customers.create",
-        # Till operators serve customers and may add/retire products
-        # and receive stock — but never see finance or reports.
+        # Till operators serve customers, may add/retire products and receive
+        # stock, and fulfil online orders — but never see finance or reports.
         "products.read", "products.create", "products.update",
         "stock.read", "stock.create", "sync.*",
+        "orders.read", "orders.update",
     ],
     "storekeeper": [
         "products.*", "categories.*", "stock.*", "suppliers.*", "sync.*",
     ],
     "accountant": [
         "reports.*", "expenses.*", "rates.*", "sales.read", "audit.read",
-        "analytics.*",
+        "analytics.*", "orders.read",
     ],
 }
 

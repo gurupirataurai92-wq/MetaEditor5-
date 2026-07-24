@@ -7,6 +7,7 @@ import Inventory from './components/Inventory'
 import Login from './components/Login'
 import { LogoWordmark } from './components/Logo'
 import Monitor from './components/Monitor'
+import Orders from './components/Orders'
 import Payments from './components/Payments'
 import Pos from './components/Pos'
 import Sales from './components/Sales'
@@ -14,7 +15,7 @@ import Staff from './components/Staff'
 import Toasts from './components/Toasts'
 
 type Page = 'dashboard' | 'monitor' | 'branches' | 'staff' | 'pos' | 'sales'
-          | 'inventory' | 'payments' | 'assistant'
+          | 'inventory' | 'orders' | 'payments' | 'assistant'
 
 const NAV: Record<Page, { label: string; icon: string; perm: string }> = {
   dashboard: { label: 'Dashboard', icon: '📊', perm: 'reports.read' },
@@ -22,6 +23,7 @@ const NAV: Record<Page, { label: string; icon: string; perm: string }> = {
   branches: { label: 'Branches', icon: '🏬', perm: 'shops.create' },
   staff: { label: 'Staff & Duty', icon: '👥', perm: 'employees.read' },
   pos: { label: 'Point of Sale', icon: '🛒', perm: 'sales.create' },
+  orders: { label: 'Online Orders', icon: '🛍️', perm: 'orders.read' },
   sales: { label: 'Sales', icon: '🧾', perm: 'sales.read' },
   inventory: { label: 'Inventory', icon: '📦', perm: 'stock.create' },
   payments: { label: 'Payments', icon: '💳', perm: 'payments.update' },
@@ -31,10 +33,10 @@ const NAV: Record<Page, { label: string; icon: string; perm: string }> = {
 // Three workspaces, one login. The order defines each role's landing page;
 // the permission check below is the safety net (and the API enforces again).
 const ROLE_NAV: Record<string, Page[]> = {
-  owner: ['dashboard', 'monitor', 'branches', 'staff', 'pos', 'sales',
+  owner: ['dashboard', 'monitor', 'branches', 'staff', 'pos', 'orders', 'sales',
           'inventory', 'payments', 'assistant'],
-  manager: ['staff', 'monitor', 'inventory', 'pos', 'sales', 'payments', 'assistant'],
-  cashier: ['pos', 'sales', 'inventory'],
+  manager: ['staff', 'monitor', 'inventory', 'pos', 'orders', 'sales', 'payments', 'assistant'],
+  cashier: ['pos', 'orders', 'sales', 'inventory'],
   storekeeper: ['inventory', 'staff'],
   accountant: ['dashboard', 'sales', 'payments', 'assistant'],
 }
@@ -117,6 +119,7 @@ export default function App() {
           {page === 'branches' && <Branches />}
           {page === 'staff' && <Staff />}
           {page === 'pos' && <Pos />}
+          {page === 'orders' && <Orders />}
           {page === 'sales' && <Sales />}
           {page === 'inventory' && <Inventory />}
           {page === 'payments' && <Payments />}

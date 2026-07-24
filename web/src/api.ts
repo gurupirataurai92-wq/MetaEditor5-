@@ -114,6 +114,7 @@ export interface Anomaly {
 // adapt (hide pages/actions) while the server remains the real enforcer.
 export interface Claims {
   sub: string
+  tenant_id: string
   role: string
   perms: string[]
 }
@@ -123,7 +124,10 @@ export function getClaims(): Claims | null {
   try {
     const b64 = accessToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
     const payload = JSON.parse(atob(b64))
-    return { sub: payload.sub, role: payload.role ?? '', perms: payload.perms ?? [] }
+    return {
+      sub: payload.sub, tenant_id: payload.tid ?? '',
+      role: payload.role ?? '', perms: payload.perms ?? [],
+    }
   } catch {
     return null
   }

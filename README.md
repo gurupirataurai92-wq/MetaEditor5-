@@ -15,7 +15,7 @@ payments (EcoCash, OneMoney, ZIPIT, PayNow).
 
 | Directory | Contents | Status |
 |---|---|---|
-| `backend/` | FastAPI modular monolith — identity/RBAC, inventory, POS, finance, sync engine, analytics/AI | ✅ Working, 51 passing tests |
+| `backend/` | FastAPI modular monolith — identity/RBAC, inventory, POS, finance, sync engine, analytics/AI, **online store** | ✅ Working, 58 passing tests |
 | `web/` | React + TypeScript + Tailwind admin dashboard (dark mode, charts, POS, AI assistant) | ✅ Working, builds clean |
 | `mobile/` | Flutter offline-first app (SQLite replica, Lamport outbox, idempotent sync) | 🧩 Working skeleton |
 | `ml/` | Forecast training + rolling-origin backtest harness (MAPE/RMSE/MAE) | ✅ Runnable, zero-dep baseline |
@@ -140,6 +140,23 @@ the owner drills all the way down:
 | ![Dash](docs/screenshots/owner-dashboard-branches.png) | ![Payments](docs/screenshots/owner-payments.png) |
 | Manager: Staff & Duty | Till operator: receipt slot |
 | ![Staff](docs/screenshots/manager-staff.png) | ![Receipt](docs/screenshots/till-receipt.png) |
+
+## Online store (customers order from home)
+
+Every business gets a **public storefront** — no login for customers. Share
+the link (`/?store=<businessId>`, one click from Branches or Online Orders)
+and customers browse the catalogue, adjust quantities, choose **delivery or
+pickup** and a **mobile-money method**, and place an order.
+
+Orders land in the staff **Online Orders** page (owner/manager/till operator):
+**pending → confirmed → fulfilled**, where *fulfilling* replays the order
+through the same engine as an in-store sale — so it flows into finance and
+per-branch inventory automatically. Prices and VAT are always computed
+server-side (a tampered client can't set its own price).
+
+| Customer storefront | Staff order management |
+|---|---|
+| ![Store](docs/screenshots/storefront.png) | ![Orders](docs/screenshots/staff-orders.png) |
 
 ## Feature highlights
 
