@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.next/
+out/
+*.tsbuildinfo
+*.log
+.env
+.env.local
+.DS_Store
+
+# generated media
+output/
+*.mp4
+*.wav
+!**/fixtures/**
