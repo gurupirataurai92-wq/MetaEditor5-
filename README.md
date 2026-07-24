@@ -15,7 +15,7 @@ payments (EcoCash, OneMoney, ZIPIT, PayNow).
 
 | Directory | Contents | Status |
 |---|---|---|
-| `backend/` | FastAPI modular monolith — identity/RBAC, inventory, POS, finance, sync engine, analytics/AI, **online store** | ✅ Working, 58 passing tests |
+| `backend/` | FastAPI modular monolith — identity/RBAC, inventory, POS, finance, sync engine, analytics/AI, **online store** | ✅ Working, 61 passing tests |
 | `web/` | React + TypeScript + Tailwind admin dashboard (dark mode, charts, POS, AI assistant) | ✅ Working, builds clean |
 | `mobile/` | Flutter offline-first app (SQLite replica, Lamport outbox, idempotent sync) | 🧩 Working skeleton |
 | `ml/` | Forecast training + rolling-origin backtest harness (MAPE/RMSE/MAE) | ✅ Runnable, zero-dep baseline |
@@ -161,8 +161,10 @@ server-side (a tampered client can't set its own price).
 ## Feature highlights
 
 Multi-shop tenancy · JWT + rotating refresh tokens + TOTP 2FA · role-based
-access control (owner/manager/cashier/storekeeper/accountant) · POS with
-EAN-13 barcode generation/lookup · VAT-inclusive ZIMRA tax extraction ·
+access control (owner/manager/cashier/storekeeper/accountant) · POS with an
+editable cart side-panel (per-line quantity steppers, remove, clear) and a
+quantity picker on product click · barcode add/scan (any symbology) or
+auto-generated EAN-13, unique per business · VAT-inclusive ZIMRA tax extraction ·
 split-currency payments (part USD cash, part ZWG EcoCash) · loyalty points ·
 PDF receipts (dependency-free generator) · P&L, cash-flow and sales reports ·
 demand forecast with confidence bands · reorder suggestions (safety-stock

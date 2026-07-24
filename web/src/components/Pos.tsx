@@ -63,6 +63,18 @@ export default function Pos() {
     setPicking(null)
   }
 
+  function setLineQty(productId: string, qty: number) {
+    setCart((c) => qty <= 0
+      ? c.filter((l) => l.product.id !== productId)
+      : c.map((l) => (l.product.id === productId ? { ...l, qty } : l)))
+  }
+
+  function removeLine(productId: string) {
+    setCart((c) => c.filter((l) => l.product.id !== productId))
+  }
+
+  const cartCount = cart.reduce((n, l) => n + l.qty, 0)
+
   // Scanning a barcode adds a single unit immediately (no picker needed).
   function onSearchEnter() {
     const q = search.trim().toLowerCase()
@@ -167,19 +179,52 @@ export default function Pos() {
 
       <aside className="w-80 shrink-0">
         <div className="card p-5 sticky top-6">
-          <h2 className="font-medium mb-3">Cart</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="font-medium">🛒 Goods to purchase</h2>
+            {cart.length > 0 && (
+              <button onClick={() => setCart([])} className="text-xs"
+                      style={{ color: 'var(--status-critical)' }}>Clear</button>
+            )}
+          </div>
           {cart.length === 0 && !receipt && (
-            <p className="text-sm" style={{ color: 'var(--muted)' }}>Tap a product to add it.</p>
+            <p className="text-sm" style={{ color: 'var(--muted)' }}>
+              Tap a product to add it. Scan a barcode to add instantly.
+            </p>
           )}
           {cart.map((l) => (
-            <div key={l.product.id} className="flex justify-between items-center text-sm py-1">
-              <span>{l.product.name} × {l.qty}</span>
-              <span>${(Number(l.product.sell_price) * l.qty).toFixed(2)}</span>
+            <div key={l.product.id} className="py-2 border-b border-black/5 dark:border-white/5">
+              <div className="flex justify-between items-start text-sm">
+                <span className="font-medium leading-tight">{l.product.name}</span>
+                <button onClick={() => removeLine(l.product.id)}
+                        className="ml-2 text-xs" style={{ color: 'var(--muted)' }}
+                        aria-label="Remove">✕</button>
+              </div>
+              <div className="flex items-center justify-between mt-1.5">
+                <div className="flex items-center gap-1.5">
+                  <button onClick={() => setLineQty(l.product.id, l.qty - 1)}
+                          className="w-7 h-7 rounded border border-black/15 dark:border-white/15">−</button>
+                  <input type="number" min={1} value={l.qty}
+                         onChange={(e) => setLineQty(l.product.id, Math.max(1, Number(e.target.value) || 1))}
+                         className="w-10 text-center py-0.5 rounded border border-black/15 dark:border-white/15 bg-transparent text-sm"
+                         style={{ fontVariantNumeric: 'tabular-nums' }} />
+                  <button onClick={() => setLineQty(l.product.id, l.qty + 1)}
+                          className="w-7 h-7 rounded border border-black/15 dark:border-white/15">+</button>
+                  <span className="text-xs ml-1" style={{ color: 'var(--muted)' }}>
+                    × ${Number(l.product.sell_price).toFixed(2)}
+                  </span>
+                </div>
+                <span className="text-sm font-medium">
+                  ${(Number(l.product.sell_price) * l.qty).toFixed(2)}
+                </span>
+              </div>
             </div>
           ))}
           {cart.length > 0 && (
             <>
-              <div className="border-t border-black/10 dark:border-white/10 mt-3 pt-3 flex justify-between font-semibold">
+              <div className="mt-3 pt-1 flex justify-between text-xs" style={{ color: 'var(--muted)' }}>
+                <span>{cartCount} item{cartCount === 1 ? '' : 's'}</span>
+              </div>
+              <div className="flex justify-between font-semibold text-lg">
                 <span>Total</span>
                 <span>${total.toFixed(2)}</span>
               </div>

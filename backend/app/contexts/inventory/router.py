@@ -47,12 +47,21 @@ def list_categories(auth: AuthContext = Depends(get_auth), db: Session = Depends
              dependencies=[Depends(require("products.create"))])
 def create_product(payload: ProductIn, auth: AuthContext = Depends(get_auth),
                    db: Session = Depends(get_db)):
-    if payload.barcode and not is_valid_ean13(payload.barcode):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid EAN-13 barcode")
+    # A scanned barcode may be any symbology (EAN-13, UPC-A, EAN-8, Code-128),
+    # so accept whatever the scanner read; only auto-generate a valid EAN-13
+    # when none is supplied. Barcodes must be unique within the business.
+    barcode = (payload.barcode or "").strip() or generate_ean13()
+    if len(barcode) > 20:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Barcode too long")
+    clash = db.scalar(select(Product).where(Product.tenant_id == auth.tenant_id,
+                                            Product.barcode == barcode))
+    if clash is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            f"Barcode already used by {clash.name}")
     product = Product(
         tenant_id=auth.tenant_id,
         sku=payload.sku or f"SKU-{new_id()[:8].upper()}",
-        barcode=payload.barcode or generate_ean13(),
+        barcode=barcode,
         **payload.model_dump(exclude={"sku", "barcode"}),
     )
     db.add(product)
@@ -92,6 +101,14 @@ def update_product(product_id: str, payload: ProductUpdate,
     if product is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found")
     changes = payload.model_dump(exclude_unset=True)
+    if changes.get("barcode"):
+        changes["barcode"] = changes["barcode"].strip()
+        clash = db.scalar(select(Product).where(
+            Product.tenant_id == auth.tenant_id,
+            Product.barcode == changes["barcode"], Product.id != product_id))
+        if clash is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"Barcode already used by {clash.name}")
     for field, value in changes.items():
         setattr(product, field, value)
     product.lamport += 1

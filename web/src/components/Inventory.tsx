@@ -13,6 +13,7 @@ interface ProductRow {
   id: string
   name: string
   sku: string
+  barcode: string | null
   sell_price: string
   cost_price: string
   is_active: boolean
@@ -28,7 +29,9 @@ export default function Inventory() {
   const [sell, setSell] = useState('')
   const [cost, setCost] = useState('')
   const [qty, setQty] = useState('')
+  const [barcode, setBarcode] = useState('')
   const [editPrice, setEditPrice] = useState<{ id: string; value: string } | null>(null)
+  const [editBarcode, setEditBarcode] = useState<{ id: string; value: string } | null>(null)
   const [error, setError] = useState('')
 
   const canEditPrice = can('products.update')
@@ -49,6 +52,7 @@ export default function Inventory() {
     try {
       const product = await api.post<{ id: string }>('/products', {
         name, sell_price: sell, cost_price: cost || '0',
+        ...(barcode.trim() ? { barcode: barcode.trim() } : {}),
       })
       if (Number(qty) > 0) {
         await api.post('/stock/movements', {
@@ -56,8 +60,9 @@ export default function Inventory() {
           ...(shopId ? { shop_id: shopId } : {}),
         })
       }
-      setName(''); setSell(''); setCost(''); setQty('')
-      toast('Product added with auto-generated barcode')
+      setName(''); setSell(''); setCost(''); setQty(''); setBarcode('')
+      toast(barcode.trim() ? 'Product added with your barcode'
+                           : 'Product added with auto-generated barcode')
       refresh()
     } catch (err) {
       setError((err as Error).message)
@@ -70,6 +75,18 @@ export default function Inventory() {
       await api.patch(`/products/${editPrice.id}`, { sell_price: editPrice.value })
       toast('Price updated')
       setEditPrice(null)
+      refresh()
+    } catch (e) {
+      toast((e as Error).message, 'error')
+    }
+  }
+
+  async function saveBarcode() {
+    if (!editBarcode) return
+    try {
+      await api.patch(`/products/${editBarcode.id}`, { barcode: editBarcode.value.trim() })
+      toast('Barcode assigned')
+      setEditBarcode(null)
       refresh()
     } catch (e) {
       toast((e as Error).message, 'error')
@@ -101,7 +118,7 @@ export default function Inventory() {
         <BranchSelect shops={shops} value={shopId} onChange={setShopId} />
       </div>
 
-      <form onSubmit={addProduct} className="card p-5 grid md:grid-cols-5 gap-3 items-end">
+      <form onSubmit={addProduct} className="card p-5 grid md:grid-cols-6 gap-3 items-end">
         <label className="text-sm md:col-span-2">Product name
           <input className={`${input} w-full mt-1`} value={name}
                  onChange={(e) => setName(e.target.value)} required /></label>
@@ -114,8 +131,12 @@ export default function Inventory() {
         <label className="text-sm">Opening qty
           <input className={`${input} w-full mt-1`} value={qty} type="number"
                  onChange={(e) => setQty(e.target.value)} /></label>
-        <button className="md:col-span-5 justify-self-start px-4 py-2 rounded-lg bg-brand dark:bg-brand-dark text-white text-sm font-medium">
-          Add product (barcode auto-generated)
+        <label className="text-sm">Barcode <span style={{ color: 'var(--muted)' }}>(scan / optional)</span>
+          <input className={`${input} w-full mt-1`} value={barcode}
+                 placeholder="auto if blank"
+                 onChange={(e) => setBarcode(e.target.value)} /></label>
+        <button className="md:col-span-6 justify-self-start px-4 py-2 rounded-lg bg-brand dark:bg-brand-dark text-white text-sm font-medium">
+          Add product (scan a barcode or leave blank to auto-generate)
         </button>
       </form>
       {error && <p className="text-sm" style={{ color: 'var(--status-critical)' }}>{error}</p>}
@@ -142,6 +163,7 @@ export default function Inventory() {
           <thead>
             <tr className="text-left" style={{ color: 'var(--muted)' }}>
               <th className="py-1 font-medium">Product</th>
+              <th className="py-1 font-medium">Barcode</th>
               <th className="py-1 font-medium text-right">Price</th>
               <th className="py-1 font-medium text-right">On hand</th>
               <th className="py-1 font-medium text-right">Reorder</th>
@@ -155,6 +177,33 @@ export default function Inventory() {
               return (
                 <tr key={l.product_id} className="border-t border-black/5 dark:border-white/5">
                   <td className="py-2">{l.name}</td>
+                  <td className="py-2">
+                    {editBarcode?.id === l.product_id ? (
+                      <span className="whitespace-nowrap">
+                        <input autoFocus value={editBarcode.value}
+                               placeholder="scan or type"
+                               onChange={(e) => setEditBarcode({ id: l.product_id, value: e.target.value })}
+                               onKeyDown={(e) => { if (e.key === 'Enter') saveBarcode() }}
+                               className="w-32 px-2 py-0.5 rounded border border-black/15 dark:border-white/15 bg-transparent" />
+                        <button onClick={saveBarcode} className="ml-1 text-xs font-medium"
+                                style={{ color: 'var(--delta-good)' }}>✓</button>
+                        <button onClick={() => setEditBarcode(null)} className="ml-1 text-xs"
+                                style={{ color: 'var(--text-secondary)' }}>✕</button>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="font-mono text-xs" style={{ color: 'var(--text-secondary)' }}>
+                          {p?.barcode ?? '—'}
+                        </span>
+                        {canEditPrice && (
+                          <button onClick={() => setEditBarcode({
+                                    id: l.product_id, value: p?.barcode ?? '' })}
+                                  className="text-xs" style={{ color: 'var(--series-1)' }}
+                                  title="Assign / change barcode">✎</button>
+                        )}
+                      </span>
+                    )}
+                  </td>
                   <td className="py-2 text-right">
                     {editPrice?.id === l.product_id ? (
                       <input autoFocus type="number" step="0.01" value={editPrice.value}
