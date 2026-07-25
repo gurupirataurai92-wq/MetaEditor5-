@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/includes/functions.php';
+require_once __DIR__ . '/includes/odds_feed.php';
 require_admin($pdo);
 $__page = 'Admin';
 
@@ -34,6 +35,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->prepare('UPDATE events SET status = "settled", result = ? WHERE id = ?')
                 ->execute([$result, $eventId]);
             flash('Settled ' . $ev['home'] . ' vs ' . $ev['away'] . ' as ' . strtoupper($result) . '.', 'success');
+        }
+
+        if ($do === 'sync_odds') {
+            $res = odds_feed_sync($pdo);
+            flash("Odds feed synced — fetched {$res['fetched']}, added {$res['inserted']}, refreshed {$res['updated']} lines.", 'success');
         }
 
         if ($do === 'add_event') {
@@ -72,6 +78,21 @@ require __DIR__ . '/includes/header.php';
   <div class="stat"><b><?= $stats['bets'] ?></b><span>Bets</span></div>
   <div class="stat"><b><?= money($stats['staked']) ?></b><span>Total staked</span></div>
   <div class="stat"><b class="<?= $ggr >= 0 ? 'pos' : 'neg' ?>"><?= money($ggr) ?></b><span>House gross (GGR)</span></div>
+</div>
+
+<h2 class="section-title">Odds feed</h2>
+<div class="card">
+  <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <div style="flex:1;min-width:220px">
+      <p>Pull the latest fixtures &amp; odds from the provider stub. New matches are added; existing open lines are refreshed (the demo jitters odds so you can see the line move).</p>
+      <p class="muted" style="font-size:.82rem">Automate it with <code>php bin/sync_odds.php</code> on a cron. Swap <code>includes/odds_feed.php</code> for a real Sportradar/BetConstruct call in production.</p>
+    </div>
+    <form method="post">
+      <?= csrf_field() ?>
+      <input type="hidden" name="do" value="sync_odds">
+      <button class="btn btn--gold">🔄 Sync odds feed</button>
+    </form>
+  </div>
 </div>
 
 <h2 class="section-title">Settle open events</h2>

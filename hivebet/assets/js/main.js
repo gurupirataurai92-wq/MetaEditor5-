@@ -14,4 +14,15 @@
       if (target) target.value = chip.getAttribute('data-stake');
     });
   });
+
+  // Mobile nav drawer toggle
+  var toggle = document.getElementById('navToggle');
+  var menu = document.getElementById('mobileMenu');
+  if (toggle && menu) {
+    toggle.addEventListener('click', function () {
+      var open = menu.classList.toggle('open');
+      toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      toggle.textContent = open ? '✕' : '☰';
+    });
+  }
 })();

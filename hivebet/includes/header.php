@@ -35,6 +35,7 @@ $__page = $__page ?? 'HiveBet';
   </nav>
 
   <div class="nav__account">
+    <button class="nav__toggle" id="navToggle" aria-label="Open menu" aria-expanded="false">☰</button>
     <?php if ($__user): ?>
       <a href="wallet.php" class="wallet-pill" title="Your balance">
         <span class="wallet-pill__coin">🍯</span>
@@ -56,6 +57,26 @@ $__page = $__page ?? 'HiveBet';
     <?php endif; ?>
   </div>
 </header>
+
+<nav class="mobile-menu" id="mobileMenu">
+  <a href="sports.php">⚽ Sports</a>
+  <a href="aviator.php">✈️ Aviator</a>
+  <a href="lucky.php">🎯 Lucky Numbers</a>
+  <a href="financial.php">📈 Gold Market</a>
+  <a href="jackpot.php">🏆 Jackpot</a>
+  <a href="leaderboard.php">👑 Leaders</a>
+  <div class="mm-sep"></div>
+  <?php if ($__user): ?>
+    <a href="lobby.php">🐝 My Lobby</a>
+    <a href="wallet.php">🍯 Wallet · <?= money($__user['balance']) ?></a>
+    <a href="history.php">📜 Bet History</a>
+    <?php if ($__user['is_admin']): ?><a href="admin.php">🛠️ Admin</a><?php endif; ?>
+    <a href="logout.php">↩ Log out</a>
+  <?php else: ?>
+    <a href="login.php">Log in</a>
+    <a href="register.php">🍯 Join the Hive</a>
+  <?php endif; ?>
+</nav>
 
 <?php foreach (get_flashes() as $f): ?>
   <div class="flash flash--<?= e($f['type']) ?>"><?= e($f['msg']) ?></div>

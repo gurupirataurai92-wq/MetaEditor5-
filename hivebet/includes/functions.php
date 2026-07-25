@@ -204,3 +204,43 @@ function crash_point(string $seed): float {
     $point = 0.99 / (1 - $r);             // heavy-tailed distribution
     return min(round($point, 2), 1000.00);
 }
+
+/* ------------------------------------------------------------------ *
+ *  Live Aviator helpers (server is the authority on the crash).
+ *  The multiplier grows as m(t) = e^(RATE * seconds_elapsed); the
+ *  crash point is committed up-front (hash shown to the player) and
+ *  revealed after the round so it is provably fair.
+ * ------------------------------------------------------------------ */
+const AVIATOR_RATE = 0.20;   // multiplier growth per second
+
+function aviator_multiplier(float $elapsedSeconds): float {
+    return exp(AVIATOR_RATE * max($elapsedSeconds, 0));
+}
+
+/** Mark a live Aviator bet as lost — idempotent (only touches a pending bet). */
+function aviator_bust(PDO $pdo, array $round): void {
+    $stmt = $pdo->prepare('SELECT status FROM bets WHERE id = ?');
+    $stmt->execute([$round['bet']]);
+    if ($stmt->fetchColumn() === 'pending') {
+        $pdo->prepare('UPDATE bets SET status = "lost", result = ?, settled_at = NOW() WHERE id = ?')
+            ->execute(['Flew away at ' . number_format($round['crash'], 2) . '×', $round['bet']]);
+    }
+}
+
+/** Cash a live Aviator bet out at $mult — idempotent, returns payout (0 if already settled). */
+function aviator_cash_out(PDO $pdo, array $round, float $mult): float {
+    $stmt = $pdo->prepare('SELECT status, stake, user_id FROM bets WHERE id = ?');
+    $stmt->execute([$round['bet']]);
+    $bet = $stmt->fetch();
+    if (!$bet || $bet['status'] !== 'pending') return 0.0;
+
+    $payout = round((float)$bet['stake'] * $mult, 2);
+    $pdo->prepare(
+        'UPDATE bets SET status = "cashed_out", odds = ?, potential_payout = ?, payout = ?,
+                result = ?, settled_at = NOW() WHERE id = ?'
+    )->execute([$mult, $payout, $payout, 'Cashed out at ' . number_format($mult, 2) . '×', $round['bet']]);
+
+    wallet_move($pdo, (int)$bet['user_id'], 'payout', $payout, 'aviator',
+                'Aviator cash-out at ' . number_format($mult, 2) . '×');
+    return $payout;
+}

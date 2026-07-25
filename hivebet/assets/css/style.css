@@ -208,3 +208,25 @@ body::before{
 .method:hover{border-color:var(--gold)}
 .method input{accent-color:var(--gold)}
 .method__emoji{font-size:1.6rem}
+
+/* ---------- extra badge ---------- */
+.badge--cashed_out{background:#12331f;color:var(--green)}
+
+/* ---------- mobile nav ---------- */
+.nav__toggle{display:none;background:transparent;border:1px solid var(--line);color:var(--text);
+  width:44px;height:40px;border-radius:10px;font-size:1.25rem;cursor:pointer;
+  align-items:center;justify-content:center}
+.mobile-menu{display:none;flex-direction:column;gap:6px;padding:12px 18px 18px;
+  background:rgba(13,11,6,.98);border-bottom:1px solid var(--line);
+  position:sticky;top:0;z-index:45}
+.mobile-menu.open{display:flex}
+.mobile-menu a{padding:12px 14px;border-radius:11px;color:var(--text);font-weight:600;
+  background:var(--panel);border:1px solid var(--line)}
+.mobile-menu a:hover{background:var(--panel-2);border-color:var(--gold)}
+.mobile-menu .mm-sep{height:1px;background:var(--line);margin:4px 0}
+@media(max-width:820px){
+  .nav__toggle{display:inline-flex}
+}
+@media(min-width:821px){
+  .mobile-menu{display:none !important}
+}

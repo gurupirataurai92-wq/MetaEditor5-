@@ -22,6 +22,11 @@ try {
         ]
     );
 } catch (PDOException $e) {
+    if (PHP_SAPI === 'cli') {
+        fwrite(STDERR, "Database connection failed: " . $e->getMessage() . "\n"
+            . "Start MySQL (XAMPP) and import sql/hivebet.sql via phpMyAdmin.\n");
+        exit(1);
+    }
     http_response_code(500);
     die(
         '<div style="font-family:system-ui;max-width:640px;margin:60px auto;padding:24px;'

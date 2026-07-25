@@ -33,6 +33,28 @@ Shared code: `config/db.php` (PDO connection), `includes/functions.php`
 
 Database: `sql/hivebet.sql` (schema + demo data).
 
+### Live Aviator (real-time cash-out)
+`aviator.php` runs a **server-authoritative** round: the crash point is committed
+before take-off (the page shows the SHA-256 of the round seed) and only the server
+decides the outcome. The browser (`assets/js/aviator.js`) animates the climbing
+multiplier and polls `api/aviator_status.php`; **Cash Out** posts to
+`api/aviator_cashout.php`, which awards `stake × current multiplier` if you beat
+the crash. After the round the seed is revealed so you can verify it — provably
+fair. Endpoints live in `api/` and settle through the same wallet ledger.
+
+### Odds-feed integration stub
+`includes/odds_feed.php` is where a real sports-data provider (Sportradar,
+BetConstruct, The Odds API…) plugs in. `odds_feed_fetch()` returns a normalised
+slate (the demo jitters the odds so the line visibly moves); `odds_feed_sync()`
+upserts it into `events`. Run it two ways:
+- **Admin panel:** the *Sync odds feed* button on `admin.php`.
+- **Cron:** `php bin/sync_odds.php` (the file header has cron / Task Scheduler
+  examples). A real key would come from `getenv('ODDS_API_KEY')`.
+
+### Mobile navigation
+On phones (≤820px) the top links collapse into a ☰ button that opens a full
+drawer (`#mobileMenu` in `includes/header.php`, toggled in `assets/js/main.js`).
+
 ---
 
 ## Run it on XAMPP (5 steps)
