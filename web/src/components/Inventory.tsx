@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from 'react'
 import { api, can, StockLevel } from '../api'
+import BarcodeScanner from './BarcodeScanner'
 import BranchSelect, { useShops } from './BranchSelect'
 import { toast } from '../toast'
 
@@ -32,6 +33,8 @@ export default function Inventory() {
   const [barcode, setBarcode] = useState('')
   const [editPrice, setEditPrice] = useState<{ id: string; value: string } | null>(null)
   const [editBarcode, setEditBarcode] = useState<{ id: string; value: string } | null>(null)
+  // 'form' scans into the new-product code field; 'edit:<id>' assigns to a row.
+  const [scanTarget, setScanTarget] = useState<null | 'form' | string>(null)
   const [error, setError] = useState('')
 
   const canEditPrice = can('products.update')
@@ -49,10 +52,13 @@ export default function Inventory() {
   async function addProduct(e: FormEvent) {
     e.preventDefault()
     setError('')
+    if (!barcode.trim()) {
+      setError('Please enter or scan the product code')
+      return
+    }
     try {
       const product = await api.post<{ id: string }>('/products', {
-        name, sell_price: sell, cost_price: cost || '0',
-        ...(barcode.trim() ? { barcode: barcode.trim() } : {}),
+        name, sell_price: sell, cost_price: cost || '0', barcode: barcode.trim(),
       })
       if (Number(qty) > 0) {
         await api.post('/stock/movements', {
@@ -61,8 +67,7 @@ export default function Inventory() {
         })
       }
       setName(''); setSell(''); setCost(''); setQty(''); setBarcode('')
-      toast(barcode.trim() ? 'Product added with your barcode'
-                           : 'Product added with auto-generated barcode')
+      toast('Product added')
       refresh()
     } catch (err) {
       setError((err as Error).message)
@@ -108,6 +113,15 @@ export default function Inventory() {
 
   return (
     <div className="max-w-4xl flex flex-col gap-4">
+      {scanTarget && (
+        <BarcodeScanner title="Scan product code"
+          onClose={() => setScanTarget(null)}
+          onDetect={(code) => {
+            if (scanTarget === 'form') setBarcode(code)
+            else setEditBarcode({ id: scanTarget, value: code })
+            setScanTarget(null)
+          }} />
+      )}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Inventory</h1>
@@ -131,12 +145,17 @@ export default function Inventory() {
         <label className="text-sm">Opening qty
           <input className={`${input} w-full mt-1`} value={qty} type="number"
                  onChange={(e) => setQty(e.target.value)} /></label>
-        <label className="text-sm">Barcode <span style={{ color: 'var(--muted)' }}>(scan / optional)</span>
-          <input className={`${input} w-full mt-1`} value={barcode}
-                 placeholder="auto if blank"
-                 onChange={(e) => setBarcode(e.target.value)} /></label>
+        <label className="text-sm">Product code <span style={{ color: 'var(--status-critical)' }}>*</span>
+          <div className="flex gap-1 mt-1">
+            <input className={`${input} w-full`} value={barcode} required
+                   placeholder="scan or type"
+                   onChange={(e) => setBarcode(e.target.value)} />
+            <button type="button" onClick={() => setScanTarget('form')}
+                    title="Scan with camera"
+                    className="px-3 rounded-lg border border-black/15 dark:border-white/15">📷</button>
+          </div></label>
         <button className="md:col-span-6 justify-self-start px-4 py-2 rounded-lg bg-brand dark:bg-brand-dark text-white text-sm font-medium">
-          Add product (scan a barcode or leave blank to auto-generate)
+          Add product
         </button>
       </form>
       {error && <p className="text-sm" style={{ color: 'var(--status-critical)' }}>{error}</p>}
@@ -185,6 +204,8 @@ export default function Inventory() {
                                onChange={(e) => setEditBarcode({ id: l.product_id, value: e.target.value })}
                                onKeyDown={(e) => { if (e.key === 'Enter') saveBarcode() }}
                                className="w-32 px-2 py-0.5 rounded border border-black/15 dark:border-white/15 bg-transparent" />
+                        <button onClick={() => setScanTarget(l.product_id)} className="ml-1 text-xs"
+                                title="Scan with camera">📷</button>
                         <button onClick={saveBarcode} className="ml-1 text-xs font-medium"
                                 style={{ color: 'var(--delta-good)' }}>✓</button>
                         <button onClick={() => setEditBarcode(null)} className="ml-1 text-xs"

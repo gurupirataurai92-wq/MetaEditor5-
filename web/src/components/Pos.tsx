@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { api, Product } from '../api'
+import BarcodeScanner from './BarcodeScanner'
 import { toast } from '../toast'
 
 interface CartLine {
@@ -28,6 +29,7 @@ export default function Pos() {
   const [receipt, setReceipt] = useState<SaleOut | null>(null)
   const [picking, setPicking] = useState<Product | null>(null)  // qty picker
   const [pickQty, setPickQty] = useState(1)
+  const [scanning, setScanning] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -77,11 +79,33 @@ export default function Pos() {
 
   // Scanning a barcode adds a single unit immediately (no picker needed).
   function onSearchEnter() {
-    const q = search.trim().toLowerCase()
-    const hit = products.find((p) => p.barcode === q || p.sku.toLowerCase() === q)
+    addByCode(search.trim())
+  }
+
+  // Resolve a scanned/typed code to a product and add it. Falls back to an API
+  // barcode lookup for products not held locally.
+  async function addByCode(raw: string) {
+    const code = raw.trim()
+    if (!code) return
+    const hit = products.find(
+      (p) => p.barcode === code || p.sku.toLowerCase() === code.toLowerCase())
     if (hit) {
       add(hit, 1)
       setSearch('')
+      toast(`Added ${hit.name}`)
+      return
+    }
+    try {
+      const found = await api.get<Product[]>(`/products?barcode=${encodeURIComponent(code)}`)
+      if (found.length > 0) {
+        add(found[0], 1)
+        setSearch('')
+        toast(`Added ${found[0].name}`)
+      } else {
+        toast(`No product with code ${code}`, 'error')
+      }
+    } catch {
+      toast('Lookup failed', 'error')
     }
   }
 
@@ -107,13 +131,19 @@ export default function Pos() {
     <div className="flex gap-4 max-w-6xl">
       <div className="flex-1">
         <h1 className="text-2xl font-semibold mb-4">Point of Sale</h1>
-        <input
-          className="w-full px-3 py-2 mb-4 rounded-lg border border-black/15 dark:border-white/15 bg-transparent outline-none"
-          placeholder="Scan barcode or search products…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') onSearchEnter() }}
-        />
+        <div className="flex gap-2 mb-4">
+          <input
+            className="flex-1 px-3 py-2 rounded-lg border border-black/15 dark:border-white/15 bg-transparent outline-none"
+            placeholder="Scan barcode or search products…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') onSearchEnter() }}
+          />
+          <button onClick={() => setScanning(true)}
+                  className="px-4 rounded-lg bg-brand dark:bg-brand-dark text-white text-sm font-medium whitespace-nowrap">
+            📷 Scan
+          </button>
+        </div>
         {error && <p className="mb-2 text-sm" style={{ color: 'var(--status-critical)' }}>{error}</p>}
         {products.length === 0 && (
           <div className="card p-10 text-center">
@@ -134,6 +164,12 @@ export default function Pos() {
           ))}
         </div>
       </div>
+
+      {scanning && (
+        <BarcodeScanner title="Scan a product"
+          onClose={() => setScanning(false)}
+          onDetect={(code) => { setScanning(false); addByCode(code) }} />
+      )}
 
       {/* Quantity picker — opens each time a product is clicked */}
       {picking && (

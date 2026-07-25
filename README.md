@@ -162,9 +162,11 @@ server-side (a tampered client can't set its own price).
 
 Multi-shop tenancy · JWT + rotating refresh tokens + TOTP 2FA · role-based
 access control (owner/manager/cashier/storekeeper/accountant) · POS with an
-editable cart side-panel (per-line quantity steppers, remove, clear) and a
-quantity picker on product click · barcode add/scan (any symbology) or
-auto-generated EAN-13, unique per business · VAT-inclusive ZIMRA tax extraction ·
+editable cart side-panel (per-line quantity steppers, remove, clear), a
+quantity picker on product click, and a **camera barcode reader** (native
+BarcodeDetector with USB/manual fallback) · a **required product code** on
+every new product (scan or type), unique per business · VAT-inclusive ZIMRA
+tax extraction ·
 split-currency payments (part USD cash, part ZWG EcoCash) · loyalty points ·
 PDF receipts (dependency-free generator) · P&L, cash-flow and sales reports ·
 demand forecast with confidence bands · reorder suggestions (safety-stock
