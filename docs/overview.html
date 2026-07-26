@@ -1,0 +1,533 @@
+<title>SIMS AI — System Overview</title>
+<style>
+  :root {
+    --paper: #f6f8fb;
+    --surface: #ffffff;
+    --surface-2: #eef3f8;
+    --ink: #0c1622;
+    --muted: #566372;
+    --faint: #8595a5;
+    --hairline: rgba(12, 22, 34, 0.10);
+    --hairline-strong: rgba(12, 22, 34, 0.16);
+    --blue: #2a78d6;
+    --teal: #0f9d72;
+    --brand: linear-gradient(102deg, #2a78d6 0%, #0f9d72 100%);
+    --good: #0a9250;
+    --warn: #b9790a;
+    --crit: #cf4436;
+    --shadow: 0 1px 2px rgba(12,22,34,.05), 0 8px 30px -18px rgba(12,22,34,.25);
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #080d14;
+      --surface: #101823;
+      --surface-2: #16212e;
+      --ink: #eef3f8;
+      --muted: #97a7b7;
+      --faint: #6c7d8e;
+      --hairline: rgba(255, 255, 255, 0.10);
+      --hairline-strong: rgba(255, 255, 255, 0.16);
+      --blue: #4f96ec;
+      --teal: #1fc08c;
+      --brand: linear-gradient(102deg, #4f96ec 0%, #1fc08c 100%);
+      --good: #22b866;
+      --warn: #d8971f;
+      --crit: #e2645a;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 40px -20px rgba(0,0,0,.7);
+    }
+  }
+  :root[data-theme="light"] {
+    --paper: #f6f8fb; --surface: #ffffff; --surface-2: #eef3f8; --ink: #0c1622;
+    --muted: #566372; --faint: #8595a5; --hairline: rgba(12,22,34,.10);
+    --hairline-strong: rgba(12,22,34,.16); --blue: #2a78d6; --teal: #0f9d72;
+    --brand: linear-gradient(102deg,#2a78d6 0%,#0f9d72 100%);
+    --good:#0a9250; --warn:#b9790a; --crit:#cf4436;
+    --shadow: 0 1px 2px rgba(12,22,34,.05), 0 8px 30px -18px rgba(12,22,34,.25);
+  }
+  :root[data-theme="dark"] {
+    --paper: #080d14; --surface: #101823; --surface-2: #16212e; --ink: #eef3f8;
+    --muted: #97a7b7; --faint: #6c7d8e; --hairline: rgba(255,255,255,.10);
+    --hairline-strong: rgba(255,255,255,.16); --blue: #4f96ec; --teal: #1fc08c;
+    --brand: linear-gradient(102deg,#4f96ec 0%,#1fc08c 100%);
+    --good:#22b866; --warn:#d8971f; --crit:#e2645a;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 12px 40px -20px rgba(0,0,0,.7);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  section { padding: 62px 0; border-top: 1px solid var(--hairline); }
+  section:first-of-type { border-top: none; }
+
+  h1, h2, h3 { margin: 0; text-wrap: balance; letter-spacing: -0.02em; font-weight: 800; }
+  p { margin: 0; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--teal);
+    font-weight: 600;
+  }
+  .sect-head { display: flex; flex-direction: column; gap: 10px; margin-bottom: 34px; max-width: 62ch; }
+  .sect-head h2 { font-size: clamp(1.5rem, 3.4vw, 2.15rem); line-height: 1.12; }
+  .sect-head p { color: var(--muted); font-size: 1.02rem; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  /* ---- brand mark ---- */
+  .mark { width: 40px; height: 40px; border-radius: 11px; display: block; flex: none; }
+  .wordmark { display: flex; align-items: center; gap: 12px; }
+  .wordmark .name { font-weight: 800; font-size: 1.18rem; letter-spacing: -0.01em; line-height: 1; }
+  .wordmark .tag { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.12em;
+                   text-transform: uppercase; color: var(--faint); margin-top: 3px; }
+
+  /* ---- top bar ---- */
+  .topbar { position: sticky; top: 0; z-index: 20; backdrop-filter: saturate(1.4) blur(8px);
+            background: color-mix(in srgb, var(--paper) 82%, transparent);
+            border-bottom: 1px solid var(--hairline); }
+  .topbar .wrap { display: flex; align-items: center; justify-content: space-between; height: 66px; }
+  .topbar .status { font-family: var(--mono); font-size: 0.72rem; color: var(--muted);
+                    display: inline-flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good);
+         box-shadow: 0 0 0 4px color-mix(in srgb, var(--good) 22%, transparent); }
+
+  /* ---- hero ---- */
+  .hero { padding-top: 64px; }
+  .hero .kicker { margin-bottom: 22px; }
+  .hero h1 { font-size: clamp(2.3rem, 6.2vw, 4.05rem); line-height: 1.02; letter-spacing: -0.035em; }
+  .hero h1 em { font-style: normal; background: var(--brand); -webkit-background-clip: text;
+                background-clip: text; color: transparent; }
+  .hero .lede { margin-top: 22px; font-size: clamp(1.05rem, 2.1vw, 1.28rem); color: var(--muted);
+                max-width: 60ch; }
+  .rule { height: 3px; width: 120px; border-radius: 3px; background: var(--brand); margin: 30px 0 0; }
+
+  .statband {
+    margin-top: 46px; display: grid; grid-template-columns: repeat(6, 1fr);
+    border: 1px solid var(--hairline); border-radius: 16px; overflow: hidden;
+    background: var(--surface); box-shadow: var(--shadow);
+  }
+  .stat { padding: 20px 18px; border-left: 1px solid var(--hairline); }
+  .stat:first-child { border-left: none; }
+  .stat .v { font-family: var(--mono); font-weight: 600; font-size: 1.34rem; letter-spacing: -0.02em;
+             font-variant-numeric: tabular-nums; line-height: 1; }
+  .stat .k { margin-top: 8px; font-size: 0.78rem; color: var(--muted); line-height: 1.35; }
+  .stat .v.grad { background: var(--brand); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+  /* ---- generic cards ---- */
+  .grid { display: grid; gap: 18px; }
+  .g3 { grid-template-columns: repeat(3, 1fr); }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
+  .card {
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 15px;
+    padding: 24px; box-shadow: var(--shadow); transition: transform .18s ease, border-color .18s ease;
+  }
+  .card:hover { transform: translateY(-3px); border-color: var(--hairline-strong); }
+  .card .idx { font-family: var(--mono); font-size: 0.72rem; color: var(--faint); letter-spacing: .1em; }
+  .card h3 { font-size: 1.12rem; margin: 12px 0 8px; letter-spacing: -0.02em; }
+  .card p { color: var(--muted); font-size: 0.95rem; }
+  .card .lead { color: var(--teal); font-weight: 600; font-size: 0.82rem; margin-top: 14px;
+                font-family: var(--mono); letter-spacing: .02em; }
+
+  /* problem cards get a top severity sweep */
+  .constraint { position: relative; overflow: hidden; }
+  .constraint::before { content: ""; position: absolute; inset: 0 0 auto 0; height: 3px; background: var(--brand); opacity: .9; }
+
+  /* ---- workspaces ---- */
+  .ws { display: grid; gap: 18px; grid-template-columns: repeat(3, 1fr); }
+  .role { background: var(--surface); border: 1px solid var(--hairline); border-radius: 15px;
+          overflow: hidden; box-shadow: var(--shadow); display: flex; flex-direction: column; }
+  .role .band { padding: 18px 22px; color: #fff; background: var(--brand); }
+  .role .band .who { font-weight: 800; letter-spacing: -0.01em; font-size: 1.06rem; }
+  .role .band .land { font-family: var(--mono); font-size: 0.7rem; letter-spacing: .1em;
+                      text-transform: uppercase; opacity: .9; margin-top: 4px; }
+  .role.mgr .band { background: linear-gradient(102deg, #1c6fc4, #158a6b); }
+  .role.till .band { background: linear-gradient(102deg, #155fa8, #0f9d72); }
+  .role ul { margin: 0; padding: 18px 22px 22px; list-style: none; display: flex; flex-direction: column; gap: 9px; }
+  .role li { font-size: 0.92rem; color: var(--ink); padding-left: 18px; position: relative; }
+  .role li::before { content: ""; position: absolute; left: 0; top: 8px; width: 7px; height: 7px;
+                     border-radius: 2px; background: var(--teal); }
+  .role li b { font-weight: 700; }
+
+  /* ---- architecture ---- */
+  .arch-scroll { overflow-x: auto; }
+  .arch { min-width: 640px; display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .arch-label { font-family: var(--mono); font-size: 0.68rem; letter-spacing: .16em; text-transform: uppercase;
+                color: var(--faint); margin-bottom: 10px; display: block; text-align: center; }
+  .layer { width: 100%; background: var(--surface); border: 1px solid var(--hairline); border-radius: 14px;
+           padding: 18px 20px; box-shadow: var(--shadow); }
+  .chips { display: flex; flex-wrap: wrap; gap: 9px; justify-content: center; }
+  .chip { font-size: 0.84rem; padding: 7px 13px; border-radius: 9px; background: var(--surface-2);
+          border: 1px solid var(--hairline); color: var(--ink); white-space: nowrap; }
+  .chip.b { border-color: color-mix(in srgb, var(--blue) 40%, transparent); }
+  .connector { width: 2px; height: 26px; background: linear-gradient(var(--hairline-strong), var(--hairline-strong)); }
+  .layer.core { border-color: color-mix(in srgb, var(--blue) 45%, transparent); position: relative; }
+  .layer.core::after { content: "FastAPI · modular monolith"; position: absolute; top: -10px; left: 20px;
+                       font-family: var(--mono); font-size: 0.64rem; letter-spacing: .12em; text-transform: uppercase;
+                       background: var(--surface); padding: 0 8px; color: var(--teal); }
+  .arch-split { width: 100%; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .arch-split .layer { height: 100%; }
+
+  /* ---- capabilities ---- */
+  .caps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .cap { background: var(--surface); border: 1px solid var(--hairline); border-radius: 14px; padding: 20px 22px;
+         box-shadow: var(--shadow); }
+  .cap h3 { font-size: 0.82rem; font-family: var(--mono); letter-spacing: .12em; text-transform: uppercase;
+            color: var(--teal); margin-bottom: 12px; }
+  .cap ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 7px; }
+  .cap li { font-size: 0.9rem; color: var(--muted); }
+  .cap li b { color: var(--ink); font-weight: 600; }
+
+  /* ---- stack ---- */
+  .stack { display: flex; flex-wrap: wrap; gap: 10px; }
+  .tech { font-family: var(--mono); font-size: 0.84rem; padding: 9px 14px; border-radius: 10px;
+          border: 1px solid var(--hairline); background: var(--surface); }
+  .tech span { color: var(--teal); }
+
+  footer { border-top: 1px solid var(--hairline); padding: 40px 0 64px; color: var(--muted); }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 16px 40px; align-items: baseline; justify-content: space-between; }
+  footer b { color: var(--ink); }
+  footer .mono { font-family: var(--mono); font-size: 0.8rem; }
+
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; border-radius: 4px; }
+
+  /* reveal */
+  .reveal { opacity: 0; transform: translateY(14px); }
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal { animation: rise .7s cubic-bezier(.2,.7,.2,1) forwards; }
+    .d1 { animation-delay: .05s; } .d2 { animation-delay: .12s; } .d3 { animation-delay: .19s; }
+    .d4 { animation-delay: .26s; }
+  }
+  @media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; } }
+  @keyframes rise { to { opacity: 1; transform: none; } }
+
+  @media (max-width: 860px) {
+    .statband { grid-template-columns: repeat(3, 1fr); }
+    .stat:nth-child(4) { border-left: none; }
+    .g3, .ws, .caps { grid-template-columns: 1fr; }
+    .g2 { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 560px) {
+    .statband { grid-template-columns: repeat(2, 1fr); }
+    .stat:nth-child(3) { border-left: none; }
+    .arch-split { grid-template-columns: 1fr; }
+  }
+</style>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="simsg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a78d6"/><stop offset="1" stop-color="#12a67a"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<header class="topbar">
+  <div class="wrap">
+    <div class="wordmark">
+      <svg class="mark" viewBox="0 0 64 64" role="img" aria-label="SIMS AI logo">
+        <rect width="64" height="64" rx="14" fill="url(#simsg)"/>
+        <g fill="#fff">
+          <rect x="14" y="34" width="8" height="16" rx="2"/>
+          <rect x="28" y="26" width="8" height="24" rx="2"/>
+          <rect x="42" y="16" width="8" height="34" rx="2"/>
+          <circle cx="46" cy="10" r="4" fill="#ffd75e"/>
+        </g>
+      </svg>
+      <div>
+        <div class="name">SIMS AI</div>
+        <div class="tag">Business Ecosystem</div>
+      </div>
+    </div>
+    <div class="status"><span class="dot"></span> 61 tests green · deployment-ready</div>
+  </div>
+</header>
+
+<main>
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap">
+      <div class="eyebrow kicker reveal d1">Smart Informal Business Management Ecosystem · Zimbabwe</div>
+      <h1 class="reveal d1">Enterprise retail software, built for how&nbsp;Zimbabwe <em>actually trades</em>.</h1>
+      <p class="lede reveal d2">
+        SIMS AI runs the whole business — till to boardroom — for informal and small enterprises.
+        Offline-first so it keeps selling when the power and the line go down, multi-currency for a
+        ZiG-and-USD economy, mobile-money-native, and quietly intelligent about your own numbers.
+      </p>
+      <div class="rule reveal d2"></div>
+
+      <div class="statband reveal d3">
+        <div class="stat"><div class="v grad">3</div><div class="k">Role workspaces from one login</div></div>
+        <div class="stat"><div class="v num">4</div><div class="k">Client surfaces: Android · PWA · Dashboard · Store</div></div>
+        <div class="stat"><div class="v">ZiG<span style="color:var(--faint)"> + </span>USD</div><div class="k">Multi-currency, captured at transaction time</div></div>
+        <div class="stat"><div class="v num">61</div><div class="k">Automated tests, all passing</div></div>
+        <div class="stat"><div class="v">Offline</div><div class="k">First — sells with no network</div></div>
+        <div class="stat"><div class="v" style="font-size:1rem">EcoCash·ZIPIT·PayNow</div><div class="k">Mobile-money settlement, plus bank</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONSTRAINTS -->
+  <section>
+    <div class="wrap">
+      <div class="sect-head">
+        <span class="eyebrow">Designed for the constraints</span>
+        <h2>Ordinary business software breaks here. This was built for it.</h2>
+        <p>Three realities of trading in Zimbabwe shaped every architectural decision — they aren't edge cases, they're the design brief.</p>
+      </div>
+      <div class="grid g3">
+        <div class="card constraint reveal d1">
+          <div class="idx">01 — INFRASTRUCTURE</div>
+          <h3>The power and the line drop out</h3>
+          <p>Grid and mobile data are intermittent. A cloud-only till that freezes when the connection dies is useless at the counter.</p>
+          <div class="lead">→ Offline-first, syncs on reconnect</div>
+        </div>
+        <div class="card constraint reveal d2">
+          <div class="idx">02 — CURRENCY</div>
+          <h3>The money won't sit still</h3>
+          <p>ZiG and USD circulate together at rates that move week to week. Store only a currency label and last month's takings become meaningless.</p>
+          <div class="lead">→ Transaction-time rate capture</div>
+        </div>
+        <div class="card constraint reveal d3">
+          <div class="idx">03 — PAYMENTS</div>
+          <h3>Value moves by phone, not card</h3>
+          <p>EcoCash, OneMoney, ZIPIT and PayNow do the work that card rails do elsewhere — including split payments across two currencies.</p>
+          <div class="lead">→ Mobile-money-native settlement</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ENGINEERING -->
+  <section>
+    <div class="wrap">
+      <div class="sect-head">
+        <span class="eyebrow">The engineering that matters</span>
+        <h2>Three decisions do the heavy lifting.</h2>
+        <p>Not a feature list — the design choices that make the rest trustworthy.</p>
+      </div>
+      <div class="grid g3">
+        <div class="card reveal d1">
+          <div class="idx">CONTRIBUTION Ⅰ</div>
+          <h3>Money keeps its meaning</h3>
+          <p>Every monetary event stores amount, currency, base currency and the exchange rate as at that moment — exact decimals, never floats. A sale made at yesterday's rate stays true after any devaluation.</p>
+          <div class="lead">Transaction-time multi-currency</div>
+        </div>
+        <div class="card reveal d2">
+          <div class="idx">CONTRIBUTION Ⅱ</div>
+          <h3>A sale is never lost or double-counted</h3>
+          <p>Sales and stock moves are immutable, client-keyed events. Retries de-duplicate; two offline tills selling the last unit are both kept and flagged. Stock-on-hand is a fold over the ledger, so it can't drift.</p>
+          <div class="lead">Offline-first event sync</div>
+        </div>
+        <div class="card reveal d3">
+          <div class="idx">CONTRIBUTION Ⅲ</div>
+          <h3>AI that answers from your own books</h3>
+          <p>Ask “why did profit fall last month?” and the assistant retrieves your real figures first, then explains them — grounded, tenant-isolated, with an evidence trail. It never invents a number.</p>
+          <div class="lead">Retrieval-grounded assistant</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WORKSPACES -->
+  <section>
+    <div class="wrap">
+      <div class="sect-head">
+        <span class="eyebrow">One login, three workspaces</span>
+        <h2>The system shows each person only their job.</h2>
+        <p>Role-based access decides the landing page and the powers — enforced in the token, again at the API, and once more by database row-level security.</p>
+      </div>
+      <div class="ws">
+        <div class="role owner reveal d1">
+          <div class="band"><div class="who">Owner</div><div class="land">Full access · lands on finance</div></div>
+          <ul>
+            <li>Finance &amp; inventory <b>per branch</b> and combined</li>
+            <li>Open &amp; <b>close branches</b>, add or remove staff</li>
+            <li><b>Live till monitor</b> — every sale as it happens</li>
+            <li>Correct recorded payments; full audit trail</li>
+            <li>Forecasts, anomalies &amp; the AI assistant</li>
+          </ul>
+        </div>
+        <div class="role mgr reveal d2">
+          <div class="band"><div class="who">Manager</div><div class="land">Staff &amp; stock · lands on team</div></div>
+          <ul>
+            <li>Hire &amp; remove staff — <b>own confidential password</b></li>
+            <li>Assign branches, clock people <b>on / off duty</b></li>
+            <li><b>Update goods prices</b> and manage inventory</li>
+            <li>Handle online orders; live monitor</li>
+            <li>No branch creation, no owner financials</li>
+          </ul>
+        </div>
+        <div class="role till reveal d3">
+          <div class="band"><div class="who">Till operator</div><div class="land">The counter · lands on POS</div></div>
+          <ul>
+            <li>POS with an <b>editable cart</b> &amp; quantity picker</li>
+            <li><b>Camera / scanner barcode</b> add-to-cart</li>
+            <li>Split-currency &amp; mobile-money payments</li>
+            <li>Printed receipts; fulfil online orders</li>
+            <li>Sees only its own sales — no reports</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section>
+    <div class="wrap">
+      <div class="sect-head">
+        <span class="eyebrow">System architecture</span>
+        <h2>One modular core, many surfaces.</h2>
+        <p>A modular monolith with clean domain boundaries — simple to run, ready to split a service out when load demands it.</p>
+      </div>
+      <div class="arch-scroll">
+        <div class="arch">
+          <span class="arch-label">Client surfaces</span>
+          <div class="layer">
+            <div class="chips">
+              <span class="chip b">Android app · Flutter</span>
+              <span class="chip b">Progressive Web App</span>
+              <span class="chip b">React admin dashboard</span>
+              <span class="chip b">Public customer storefront</span>
+            </div>
+          </div>
+          <div class="connector"></div>
+          <div class="layer" style="max-width:360px">
+            <div class="chips"><span class="chip">NGINX · TLS gateway</span></div>
+          </div>
+          <div class="connector"></div>
+          <div class="layer core">
+            <div class="chips">
+              <span class="chip">Identity &amp; RBAC</span>
+              <span class="chip">Inventory</span>
+              <span class="chip">Sales &amp; POS</span>
+              <span class="chip">Finance &amp; Tax</span>
+              <span class="chip">Orders</span>
+              <span class="chip">Sync engine</span>
+              <span class="chip">Analytics &amp; AI</span>
+            </div>
+          </div>
+          <div class="connector"></div>
+          <div class="arch-split">
+            <div class="layer">
+              <span class="arch-label">Data tier</span>
+              <div class="chips">
+                <span class="chip">PostgreSQL · row-level security</span>
+                <span class="chip">Redis</span>
+                <span class="chip">Object store &amp; backups</span>
+              </div>
+            </div>
+            <div class="layer">
+              <span class="arch-label">External services</span>
+              <div class="chips">
+                <span class="chip">EcoCash · OneMoney · ZIPIT · PayNow</span>
+                <span class="chip">SMS &amp; Email</span>
+                <span class="chip">LLM · Claude-ready</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CAPABILITIES -->
+  <section>
+    <div class="wrap">
+      <div class="sect-head">
+        <span class="eyebrow">What it does</span>
+        <h2>The whole operation, in one place.</h2>
+      </div>
+      <div class="caps">
+        <div class="cap reveal d1"><h3>Sell</h3><ul>
+          <li><b>Offline-first POS</b> with editable cart</li>
+          <li>Barcode scan — camera or hardware</li>
+          <li>Split &amp; multi-currency payments</li>
+          <li>Printed &amp; PDF receipts</li>
+          <li>Void with compensating ledger entries</li>
+        </ul></div>
+        <div class="cap reveal d1"><h3>Stock</h3><ul>
+          <li>Inventory tracked <b>per branch</b></li>
+          <li>Required product code, unique per shop</li>
+          <li>AI reorder suggestions (safety stock)</li>
+          <li>Batches, expiry &amp; low-stock alerts</li>
+          <li>Suppliers &amp; purchase orders</li>
+        </ul></div>
+        <div class="cap reveal d2"><h3>Money</h3><ul>
+          <li>P&amp;L, cash-flow &amp; sales reports</li>
+          <li>VAT-inclusive <b>ZIMRA tax</b> extraction</li>
+          <li>Payments editor with audit trail</li>
+          <li>Per-branch &amp; whole-business roll-up</li>
+          <li>Exchange-rate history</li>
+        </ul></div>
+        <div class="cap reveal d2"><h3>People</h3><ul>
+          <li>Owner / manager / cashier roles</li>
+          <li>Confidential staff passwords</li>
+          <li>On / off-duty &amp; branch assignment</li>
+          <li>Per-till-operator sales history</li>
+          <li>JWT + rotating refresh · TOTP 2FA</li>
+        </ul></div>
+        <div class="cap reveal d3"><h3>Intelligence</h3><ul>
+          <li>Demand forecast with confidence band</li>
+          <li>Fraud &amp; anomaly detection</li>
+          <li>Grounded AI business assistant</li>
+          <li>Live monitor &amp; alerts</li>
+          <li>Immutable audit log</li>
+        </ul></div>
+        <div class="cap reveal d3"><h3>Reach</h3><ul>
+          <li>Public <b>online storefront</b>, no login</li>
+          <li>Delivery or pickup, per branch</li>
+          <li>Mobile-money checkout</li>
+          <li>Orders → confirmed → fulfilled as a sale</li>
+          <li>Shareable store link</li>
+        </ul></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STACK -->
+  <section>
+    <div class="wrap">
+      <div class="sect-head">
+        <span class="eyebrow">Built with</span>
+        <h2>A defensible, one-choice-per-layer stack.</h2>
+      </div>
+      <div class="stack">
+        <span class="tech"><span>API</span> · FastAPI · Python</span>
+        <span class="tech"><span>DB</span> · PostgreSQL · RLS</span>
+        <span class="tech"><span>Web</span> · React · TypeScript · Tailwind</span>
+        <span class="tech"><span>Mobile</span> · Flutter</span>
+        <span class="tech"><span>ML</span> · scikit-learn · Prophet</span>
+        <span class="tech"><span>Cache</span> · Redis</span>
+        <span class="tech"><span>Infra</span> · Docker · NGINX</span>
+        <span class="tech"><span>Auth</span> · JWT · TOTP 2FA</span>
+        <span class="tech"><span>AI</span> · RAG · Claude-ready</span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <b>SIMS AI</b> — Smart Informal Business Management Ecosystem.<br>
+      A university final-year project and a deployable product, engineered for Zimbabwe's informal sector.
+    </div>
+    <div class="mono">
+      offline-first · multi-currency · AI-augmented<br>
+      61 tests green · deployment-ready
+    </div>
+  </div>
+</footer>
