@@ -5,9 +5,8 @@
 --    2. phpMyAdmin  ->  Import  ->  choose this file  ->  Go
 --  It creates the `hivebet` database and everything the app needs.
 --
---  Demo logins created below:
---    admin  / admin123   (full admin panel)
---    beeplayer / play123  (normal player, starts with demo credits)
+--  Seeds three accounts: owner, staff, beeplayer (passwords are bcrypt-hashed
+--  below and delivered privately — change them immediately after import).
 --  PLAY-MONEY DEMO ONLY. No real gambling. 18+. See README.md.
 -- =====================================================================
 
@@ -110,7 +109,7 @@ CREATE TABLE jackpots (
 --  Demo data
 -- =====================================================================
 
--- owner123 / staff123 / play123 (bcrypt). Change these before any real deployment.
+-- bcrypt-hashed seed passwords (delivered privately). Change before any real deployment.
 INSERT INTO users (username, email, phone, password_hash, balance, role, is_admin) VALUES
 ('owner',     'owner@hivebet.local',  '+263770000000', '$2y$12$NNcaL7NMqRUwEAGvEaqEreKw0iCiMdPdcJ0I3o0DhUrkZBSPQkPX.', 0.00,    'owner',  1),
 ('staff',     'staff@hivebet.local',  '+263770000001', '$2y$12$NqqgS6M/m7YcqUR0CV2P.uraT.BClBYYWNuf85nOHnWboiQ8cv4jK', 0.00,    'staff',  1),

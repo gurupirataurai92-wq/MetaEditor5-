@@ -248,7 +248,7 @@
    "Database" = localStorage (per browser). The production build in
    the repo uses PHP + MySQL with bcrypt; this mirrors its behaviour.
    ============================================================ */
-const KEY = "hivebet_db_v1";
+const KEY = "hivebet_db_v2";
 const CUR = "HC"; // Hive Credits (play money)
 const $ = (s, r=document) => r.querySelector(s);
 
@@ -261,9 +261,9 @@ function seed(){
     seq: 100,
     session: null,
     users: [
-      mk({id:1, username:"owner",    email:"owner@hivebet.demo",  password:"owner123", role:"owner",  balance:0}),
-      mk({id:2, username:"staff",    email:"staff@hivebet.demo",  password:"staff123", role:"staff",  balance:0}),
-      mk({id:3, username:"beeplayer",email:"player@hivebet.demo", password:"play123",  role:"player", balance:2500}),
+      mk({id:1, username:"owner",    email:"owner@hivebet.demo",  password:"43a0d17178a9d26c9e0fe9a74b0b45e38d32f27aed887a008a54bf6e033bf7b9", role:"owner",  balance:0}),
+      mk({id:2, username:"staff",    email:"staff@hivebet.demo",  password:"10176e7b7b24d317acfcf8d2064cfd2f24e154f7b5a96603077d5ef813d6a6b6", role:"staff",  balance:0}),
+      mk({id:3, username:"beeplayer",email:"player@hivebet.demo", password:"432bda610a51ad873141f9a27c4970d8bbb89a98c853b4a04b2eb8e2eecdbd71", role:"player", balance:2500}),
     ],
     bets: [],
     tx: [{id:90,userId:3,type:"bonus",method:"demo",amount:2500,balanceAfter:2500,createdAt:now}],
@@ -284,6 +284,18 @@ function nextId(){ return ++DB.seq; }
 function me(){ return DB.users.find(u=>u.id===DB.session) || null; }
 const money = n => CUR+" "+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const esc = s => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+/* Passwords are never stored in the clear — we keep a one-way hash only.
+   (Production uses server-side bcrypt; this mirrors "never store plaintext".) */
+async function sha(str){
+  try{
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
+    return [...new Uint8Array(buf)].map(x=>x.toString(16).padStart(2,"0")).join("");
+  }catch(e){ // insecure context fallback (e.g. some file:// cases)
+    let h=0x811c9dc5; for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,0x01000193);}
+    return "fnv_"+(h>>>0).toString(16)+"_"+str.length;
+  }
+}
 
 /* ---------- ledger + bet engine (mirrors functions.php) ---------- */
 function walletMove(userId,type,amount,method,note){
@@ -450,7 +462,7 @@ function vLogin(){
       <button class="btn gold block">Log in</button>
     </form>
     <p class="switch">New here? <a data-go="register">Join the Hive</a></p>
-    <div class="note" style="margin-top:16px">Demo accounts — Owner <span class="kbd">owner / owner123</span> · Staff <span class="kbd">staff / staff123</span> · Player <span class="kbd">beeplayer / play123</span></div>
+    <div class="note" style="margin-top:16px">🔒 For privacy, login details are never shown on-screen. <a data-go="register" style="color:var(--gold);cursor:pointer">Create your own account</a> to explore, or ask the site owner for access.</div>
   </div>`;
 }
 function vRegister(){
@@ -837,14 +849,14 @@ document.addEventListener("input",e=>{
 });
 
 /* ---------- actions ---------- */
-function doLogin(f){
-  const id=f.identity.value.trim().toLowerCase(), pw=f.password.value;
+async function doLogin(f){
+  const id=f.identity.value.trim().toLowerCase(), pw=await sha(f.password.value);
   const u=DB.users.find(x=>x.username.toLowerCase()===id||x.email.toLowerCase()===id);
   if(!u||u.password!==pw){ $("#formerr").innerHTML='<div class="err">Incorrect login details. Try again.</div>'; return; }
   DB.session=u.id; save(); toast("Welcome back, "+u.username+"! 🐝","ok");
   go(u.role==="player"?"lobby":(u.role==="owner"?"owner":"staff"));
 }
-function doRegister(f){
+async function doRegister(f){
   const username=f.username.value.trim(), email=f.email.value.trim(), phone=f.phone.value.trim();
   const pw=f.password.value, pw2=f.password2.value; const errs=[];
   if(username.length<3) errs.push("Username must be at least 3 characters.");
@@ -854,7 +866,7 @@ function doRegister(f){
   if(DB.users.some(u=>u.username.toLowerCase()===username.toLowerCase())) errs.push("That username is already taken.");
   if(DB.users.some(u=>u.email.toLowerCase()===email.toLowerCase())) errs.push("That email is already registered.");
   if(errs.length){ $("#formerr").innerHTML='<div class="err">'+errs.map(esc).join("<br>")+'</div>'; return; }
-  const u={id:nextId(),username,email,phone,password:pw,role:"player",balance:1000,createdAt:Date.now()};
+  const u={id:nextId(),username,email,phone,password:await sha(pw),role:"player",balance:1000,createdAt:Date.now()};
   DB.users.push(u); DB.tx.unshift({id:nextId(),userId:u.id,type:"bonus",method:"demo",amount:1000,balanceAfter:1000,note:"Welcome bonus",createdAt:Date.now()});
   DB.session=u.id; save(); toast("Welcome to the hive, "+username+"! 🍯","ok"); go("lobby");
 }
@@ -904,7 +916,7 @@ function settleFixture(evId,res){
 }
 function setRole(id,role){ const u=DB.users.find(x=>x.id===id); if(!u)return; u.role=role; save(); toast(u.username+" is now "+role+".","ok"); render(); }
 function removeUser(id){ if(id===me().id)return; DB.users=DB.users.filter(u=>u.id!==id); save(); toast("Account removed.","ok"); render(); }
-function addStaff(){
+async function addStaff(){
   const user=$("#nsUser").value.trim(), email=$("#nsEmail").value.trim(), pass=$("#nsPass").value.trim(), role=$("#nsRole").value; const errs=[];
   if(user.length<3) errs.push("Username must be at least 3 characters.");
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) errs.push("Enter a valid email.");
@@ -912,7 +924,7 @@ function addStaff(){
   if(DB.users.some(u=>u.username.toLowerCase()===user.toLowerCase())) errs.push("Username already taken.");
   if(DB.users.some(u=>u.email.toLowerCase()===email.toLowerCase())) errs.push("Email already registered.");
   if(errs.length){ $("#staffErr").innerHTML='<div class="err">'+errs.map(esc).join("<br>")+'</div>'; return; }
-  DB.users.push({id:nextId(),username:user,email,phone:"",password:pass,role,balance:0,createdAt:Date.now()});
+  DB.users.push({id:nextId(),username:user,email,phone:"",password:await sha(pass),role,balance:0,createdAt:Date.now()});
   save(); toast(cap(role)+" account created for "+user+".","ok"); render();
 }
 

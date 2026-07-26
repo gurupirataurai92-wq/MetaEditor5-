@@ -68,10 +68,14 @@ drawer (`#mobileMenu` in `includes/header.php`, toggled in `assets/js/main.js`).
 3. **Import the database:** open <http://localhost/phpmyadmin> → **Import** →
    choose `hivebet/sql/hivebet.sql` → **Go**. This creates the `hivebet` database.
 4. **Open the app:** <http://localhost/hivebet/>
-5. **Log in** with a demo account:
-   - Owner: **owner** / **owner123** (Owner console + everything)
-   - Staff: **staff** / **staff123** (Staff dashboard)
-   - Player: **beeplayer** / **play123** (starts with demo credits)
+5. **Log in.** Three demo accounts are seeded — usernames **owner**, **staff**
+   and **beeplayer**. For security their passwords are **not published here**;
+   they're delivered privately (and are bcrypt-hashed in the database). Change
+   them immediately, e.g. in phpMyAdmin run:
+   ```sql
+   UPDATE users SET password_hash = '<paste output of the line below>' WHERE username = 'owner';
+   -- generate a hash:  php -r "echo password_hash('YOUR_NEW_PASSWORD', PASSWORD_DEFAULT);"
+   ```
 
 Or click **Join the Hive** to register — new accounts get 1,000 free demo credits.
 

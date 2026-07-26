@@ -1,0 +1,41 @@
+name: Deploy HiveBet demo to GitHub Pages
+
+# Publishes the self-contained browser demo (hivebet/demo) as a live website.
+# One-time setup: repo Settings → Pages → Build and deployment → Source: "GitHub Actions".
+# After that (or if the enablement step below succeeds), every push here goes live at:
+#   https://<owner>.github.io/<repo>/
+
+on:
+  push:
+    branches: [claude/betting-platform-brainstorm-oey35d, main]
+    paths: ["hivebet/demo/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Upload demo as site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: hivebet/demo
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

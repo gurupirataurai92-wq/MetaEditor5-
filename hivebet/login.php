@@ -34,6 +34,6 @@ require __DIR__ . '/includes/header.php';
     <button class="btn btn--gold btn--block">Log in</button>
   </form>
   <p class="auth-switch">New here? <a href="register.php">Join the Hive</a></p>
-  <div class="disclaimer">Demo accounts — <b>admin / admin123</b> · <b>beeplayer / play123</b></div>
+  <div class="disclaimer">🔒 For your privacy, login details are never shown here. <a href="register.php" style="color:var(--gold)">Create an account</a>, or ask the site owner for access.</div>
 </div>
 <?php require __DIR__ . '/includes/footer.php'; ?>
