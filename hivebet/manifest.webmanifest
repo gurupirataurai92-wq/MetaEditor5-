@@ -1,0 +1,15 @@
+{
+  "name": "HiveBet — Betting Platform",
+  "short_name": "HiveBet",
+  "description": "Sports, Aviator, Lucky Numbers and Gold-Market bets — the sweetest odds in the hive.",
+  "start_url": "index.php",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0d0b06",
+  "theme_color": "#0d0b06",
+  "categories": ["games", "entertainment", "sports"],
+  "icons": [
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

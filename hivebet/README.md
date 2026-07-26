@@ -25,7 +25,8 @@ A multi-page betting platform built with **plain PHP + MySQL** so it runs on
 | `wallet.php` | Deposit/withdraw: EcoCash, card, agent, voucher, PayPal, demo |
 | `history.php` | Full bet history + win/loss/net stats |
 | `leaderboard.php` | Players ranked by net winnings |
-| `admin.php` | Settle events, add fixtures, view house GGR |
+| `staff.php` | **Employee dashboard** — players, activity, settle fixtures |
+| `admin.php` | **Owner console** — revenue (GGR), staff accounts, odds sync |
 
 Shared code: `config/db.php` (PDO connection), `includes/functions.php`
 (auth, wallet ledger, bet engine), `includes/header.php` + `footer.php`
@@ -68,10 +69,38 @@ drawer (`#mobileMenu` in `includes/header.php`, toggled in `assets/js/main.js`).
    choose `hivebet/sql/hivebet.sql` → **Go**. This creates the `hivebet` database.
 4. **Open the app:** <http://localhost/hivebet/>
 5. **Log in** with a demo account:
-   - Admin: **admin** / **admin123**
+   - Owner: **owner** / **owner123** (Owner console + everything)
+   - Staff: **staff** / **staff123** (Staff dashboard)
    - Player: **beeplayer** / **play123** (starts with demo credits)
 
 Or click **Join the Hive** to register — new accounts get 1,000 free demo credits.
+
+### Roles &amp; access
+Each account has a `role` — **player**, **staff** or **owner**:
+- **Players** play games, deposit/withdraw and see their own history.
+- **Staff (employees)** additionally get `staff.php`: player list + search, live
+  activity, and fixture settlement — but not revenue or account controls.
+- **Owners** get `admin.php` too: house revenue (GGR), odds-feed sync, and full
+  team management (create staff/owner accounts, change roles, remove accounts).
+The very first account you register becomes the **owner**; owners create the rest.
+Usernames and emails are unique — duplicate registration is rejected.
+
+### Install as a mobile app (PWA)
+HiveBet ships a web-app manifest (`manifest.webmanifest`) + service worker
+(`sw.js`), so it installs on phones and desktops as a standalone app:
+- **Android / desktop Chrome:** an **📲 Install app** button appears, or use the
+  browser's "Install" / "Add to Home Screen".
+- **iPhone (Safari):** Share → **Add to Home Screen**.
+It then opens full-screen with its own 🐝 icon, no app store required. (For the
+Play/App stores later, wrap this PWA with Capacitor or TWA. The SVG app icon is
+at `assets/icon.svg`; add 192px &amp; 512px PNGs for best Android results.)
+
+### Instant demo (no XAMPP needed)
+`demo/index.html` is a **self-contained** version of the whole platform — same
+games, unique account signup, and player/staff/owner dashboards — running entirely
+in the browser (it uses the browser's storage as its database). Double-click it, or
+open the hosted version, to try everything without installing XAMPP. The XAMPP app
+above is the real product with the MySQL backend and hashed passwords.
 
 ### Editing in VS Code
 Open the `hivebet` folder in VS Code (`code hivebet`). Recommended extensions:

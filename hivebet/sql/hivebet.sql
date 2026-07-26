@@ -34,7 +34,8 @@ CREATE TABLE users (
   phone         VARCHAR(30)  DEFAULT NULL,
   password_hash VARCHAR(255) NOT NULL,
   balance       DECIMAL(14,2) NOT NULL DEFAULT 0.00,
-  is_admin      TINYINT(1)   NOT NULL DEFAULT 0,
+  role          ENUM('player','staff','owner') NOT NULL DEFAULT 'player',
+  is_admin      TINYINT(1)   NOT NULL DEFAULT 0,   -- legacy flag: 1 for staff/owner
   created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
@@ -109,13 +110,14 @@ CREATE TABLE jackpots (
 --  Demo data
 -- =====================================================================
 
--- admin123 / play123 (bcrypt). Change these before any real deployment.
-INSERT INTO users (username, email, phone, password_hash, balance, is_admin) VALUES
-('admin',     'admin@hivebet.local',  '+263770000000', '$2y$12$mwyA6ltzBfPPI3uBjyV8ROj4dhrzq3eLkoLS8.E0EHLq2eHiZuXEW', 0.00,    1),
-('beeplayer', 'player@hivebet.local', '+263771111111', '$2y$12$dd.yOTFBr4k/D8RI7YgE9ey7xl5aKlAwAHJcvz7cjV17J5IDm6q3G', 2500.00, 0);
+-- owner123 / staff123 / play123 (bcrypt). Change these before any real deployment.
+INSERT INTO users (username, email, phone, password_hash, balance, role, is_admin) VALUES
+('owner',     'owner@hivebet.local',  '+263770000000', '$2y$12$NNcaL7NMqRUwEAGvEaqEreKw0iCiMdPdcJ0I3o0DhUrkZBSPQkPX.', 0.00,    'owner',  1),
+('staff',     'staff@hivebet.local',  '+263770000001', '$2y$12$NqqgS6M/m7YcqUR0CV2P.uraT.BClBYYWNuf85nOHnWboiQ8cv4jK', 0.00,    'staff',  1),
+('beeplayer', 'player@hivebet.local', '+263771111111', '$2y$12$dd.yOTFBr4k/D8RI7YgE9ey7xl5aKlAwAHJcvz7cjV17J5IDm6q3G', 2500.00, 'player', 0);
 
 INSERT INTO transactions (user_id, type, method, amount, balance_after, note) VALUES
-(2, 'bonus', 'demo', 2500.00, 2500.00, 'Welcome demo credits');
+(3, 'bonus', 'demo', 2500.00, 2500.00, 'Welcome demo credits');
 
 INSERT INTO events (category, league, home, away, odds_home, odds_draw, odds_away, starts_at, status) VALUES
 ('football','English Premier League','Arsenal','Chelsea',            2.10, 3.30, 3.40, DATE_ADD(NOW(), INTERVAL 2 HOUR), 'open'),

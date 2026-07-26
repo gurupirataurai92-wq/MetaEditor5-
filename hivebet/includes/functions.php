@@ -40,14 +40,31 @@ function require_login(): void {
     }
 }
 
-function require_admin(PDO $pdo): void {
-    require_login();
+function user_role(PDO $pdo): string {
     $u = current_user($pdo);
-    if (!$u || !$u['is_admin']) {
+    return $u['role'] ?? 'player';
+}
+
+/** Staff area: employees and owners. */
+function require_staff(PDO $pdo): void {
+    require_login();
+    if (!in_array(user_role($pdo), ['staff', 'owner'], true)) {
         http_response_code(403);
-        die('Admins only.');
+        die('Staff only.');
     }
 }
+
+/** Owner console: owners only. */
+function require_owner(PDO $pdo): void {
+    require_login();
+    if (user_role($pdo) !== 'owner') {
+        http_response_code(403);
+        die('Owners only.');
+    }
+}
+
+/** Legacy alias — owner-level access. */
+function require_admin(PDO $pdo): void { require_owner($pdo); }
 
 /* ------------------------------------------------------------------ *
  *  CSRF protection

@@ -6,10 +6,18 @@ $__page = $__page ?? 'HiveBet';
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title><?= e($__page) ?> · HiveBet 🐝</title>
 <link rel="stylesheet" href="assets/css/style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐝</text></svg>">
+<!-- Installable mobile app (PWA) -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0d0b06">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="HiveBet">
+<link rel="apple-touch-icon" href="assets/icon.svg">
 </head>
 <body>
 <div class="ticker">
@@ -47,7 +55,8 @@ $__page = $__page ?? 'HiveBet';
           <a href="lobby.php">My Lobby</a>
           <a href="history.php">Bet History</a>
           <a href="wallet.php">Wallet</a>
-          <?php if ($__user['is_admin']): ?><a href="admin.php">Admin</a><?php endif; ?>
+          <?php if (in_array($__user['role'] ?? 'player', ['staff','owner'], true)): ?><a href="staff.php">Staff dashboard</a><?php endif; ?>
+          <?php if (($__user['role'] ?? 'player') === 'owner'): ?><a href="admin.php">Owner console</a><?php endif; ?>
           <a href="logout.php">Log out</a>
         </div>
       </div>
@@ -70,7 +79,8 @@ $__page = $__page ?? 'HiveBet';
     <a href="lobby.php">🐝 My Lobby</a>
     <a href="wallet.php">🍯 Wallet · <?= money($__user['balance']) ?></a>
     <a href="history.php">📜 Bet History</a>
-    <?php if ($__user['is_admin']): ?><a href="admin.php">🛠️ Admin</a><?php endif; ?>
+    <?php if (in_array($__user['role'] ?? 'player', ['staff','owner'], true)): ?><a href="staff.php">🛠️ Staff dashboard</a><?php endif; ?>
+    <?php if (($__user['role'] ?? 'player') === 'owner'): ?><a href="admin.php">👑 Owner console</a><?php endif; ?>
     <a href="logout.php">↩ Log out</a>
   <?php else: ?>
     <a href="login.php">Log in</a>

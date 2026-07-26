@@ -1,0 +1,924 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0b06">
+</head>
+<body>
+<title>HiveBet — Play-Money Betting Platform</title>
+<meta name="description" content="HiveBet demo — accounts, games, and role-based dashboards for players, staff and owners.">
+<style>
+  :root{
+    --bg:#0d0b06; --bg2:#120e08; --panel:#1a1510; --panel2:#221b12; --line:#372d1a;
+    --gold:#ffc531; --gold2:#ffb000; --amber:#ff8a00; --honey:#ffd75e;
+    --green:#35d07f; --red:#ff5d5d; --blue:#6db6ff;
+    --text:#f6ecd8; --muted:#b6a888; --dim:#7d715a;
+    --radius:16px; --shadow:0 18px 44px rgba(0,0,0,.5); --glow:0 0 26px rgba(255,176,0,.35);
+    --sans:"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+  }
+  :root{color-scheme:dark;}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:var(--sans); color:var(--text); line-height:1.55;
+    background:
+      radial-gradient(1100px 560px at 82% -8%, rgba(255,176,0,.14), transparent 60%),
+      radial-gradient(820px 480px at -5% 8%, rgba(255,138,0,.10), transparent 55%),
+      var(--bg);
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:inherit;text-decoration:none}
+  button{font-family:inherit}
+  .tnum{font-variant-numeric:tabular-nums}
+
+  /* honeycomb texture */
+  body::before{content:"";position:fixed;inset:0;z-index:0;opacity:.045;pointer-events:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100' viewBox='0 0 56 100'%3E%3Cg fill='none' stroke='%23ffc531' stroke-width='2'%3E%3Cpath d='M28 0v33L0 50v33l28 17 28-17V50L28 33z'/%3E%3C/g%3E%3C/svg%3E");
+    background-size:56px 100px;}
+
+  /* ===== device-frame (App preview mode) ===== */
+  #root{position:relative;z-index:1;min-height:100vh}
+  body.appmode{background:#050403;display:flex;align-items:flex-start;justify-content:center;padding:30px 12px}
+  body.appmode #root{width:390px;min-height:780px;max-height:844px;height:844px;overflow:hidden;
+    border:11px solid #241c10;border-radius:44px;box-shadow:0 40px 80px rgba(0,0,0,.7),0 0 0 2px #3a2f1a;
+    background:var(--bg);display:flex;flex-direction:column}
+  body.appmode .shell{height:100%}
+  body.appmode .notch{display:block}
+  .notch{display:none;height:26px;flex:0 0 auto;position:relative}
+  .notch::after{content:"";position:absolute;top:7px;left:50%;transform:translateX(-50%);
+    width:120px;height:22px;background:#050403;border-radius:0 0 16px 16px}
+
+  .shell{display:flex;flex-direction:column;min-height:100vh}
+  body.appmode .shell{min-height:0;flex:1;overflow:hidden}
+
+  /* ===== ticker ===== */
+  .ticker{overflow:hidden;background:linear-gradient(90deg,var(--gold2),var(--amber));color:#241400;font-weight:800;font-size:.76rem;flex:0 0 auto}
+  .ticker span{display:inline-block;white-space:nowrap;padding:5px 0;animation:tick 30s linear infinite}
+  @keyframes tick{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+  @media(prefers-reduced-motion:reduce){.ticker span{animation:none}}
+
+  /* ===== top nav ===== */
+  .top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:16px;padding:12px 20px;
+    background:rgba(13,11,6,.86);backdrop-filter:blur(12px);border-bottom:1px solid var(--line);flex:0 0 auto}
+  body.appmode .top{position:static}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:1.28rem;letter-spacing:-.02em;cursor:pointer}
+  .brand .b{filter:drop-shadow(0 0 8px rgba(255,197,49,.6))}
+  .brand em{color:var(--gold);font-style:normal}
+  .navlinks{display:flex;gap:4px;margin-left:6px;flex-wrap:wrap}
+  .navlinks a{padding:8px 13px;border-radius:10px;color:var(--muted);font-weight:600;font-size:.92rem;cursor:pointer;transition:.15s}
+  .navlinks a:hover,.navlinks a.active{color:var(--text);background:var(--panel2)}
+  .navlinks a.role{color:var(--gold)}
+  .spacer{margin-left:auto}
+  .acct{display:flex;align-items:center;gap:12px}
+  .wpill{display:flex;align-items:center;gap:7px;padding:8px 14px;border-radius:999px;font-weight:800;color:var(--honey);
+    background:linear-gradient(135deg,#2a2110,#171009);border:1px solid var(--line);cursor:pointer}
+  .avatar{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;
+    background:linear-gradient(135deg,var(--gold),var(--amber));color:#231400;cursor:pointer;position:relative;user-select:none}
+  .menu{position:absolute;right:0;top:120%;min-width:190px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:6px;box-shadow:var(--shadow);display:none;flex-direction:column;z-index:40}
+  .menu.open{display:flex}
+  .menu .who{padding:8px 12px 10px;border-bottom:1px solid var(--line);margin-bottom:4px}
+  .menu .who b{display:block}
+  .menu a{padding:9px 12px;border-radius:8px;color:var(--muted);font-weight:600;cursor:pointer}
+  .menu a:hover{background:var(--panel2);color:var(--text)}
+
+  /* ===== buttons ===== */
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:11px 20px;border-radius:12px;
+    font-weight:800;cursor:pointer;border:1px solid transparent;font-size:.95rem;transition:transform .12s,box-shadow .2s,background .2s;color:var(--text);background:var(--panel2)}
+  .btn:active{transform:translateY(1px)}
+  .btn.gold{background:linear-gradient(135deg,var(--gold),var(--amber));color:#231400;box-shadow:var(--glow)}
+  .btn.gold:hover{box-shadow:0 0 34px rgba(255,176,0,.6)}
+  .btn.ghost{background:transparent;border-color:var(--line)}
+  .btn.ghost:hover{border-color:var(--gold);color:var(--gold)}
+  .btn.green{background:linear-gradient(135deg,#2bd47b,#12a45c);color:#03210f}
+  .btn.red{background:linear-gradient(135deg,#ff6b6b,#e23b3b);color:#2a0505}
+  .btn.block{width:100%}
+  .btn.sm{padding:7px 13px;font-size:.85rem;border-radius:10px}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+
+  /* ===== layout ===== */
+  main{flex:1 1 auto;position:relative}
+  body.appmode main{overflow-y:auto}
+  .wrap{max-width:1120px;margin:0 auto;padding:24px 18px 96px}
+  body.appmode .wrap{padding:16px 14px 90px}
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)}
+  .gauto{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+  @media(max-width:760px){.g2,.g3{grid-template-columns:1fr}.navlinks{display:none}}
+  body.appmode .g2,body.appmode .g3,body.appmode .gauto{grid-template-columns:1fr}
+  body.appmode .navlinks{display:none}
+
+  .card{background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);
+    border-radius:var(--radius);padding:20px;box-shadow:var(--shadow)}
+  .card h3{margin-bottom:10px}
+  .title{display:flex;align-items:center;gap:10px;margin:28px 0 14px;font-size:1.4rem;letter-spacing:-.02em;text-wrap:balance}
+  .title::before{content:"";width:6px;height:24px;border-radius:6px;background:linear-gradient(var(--gold),var(--amber))}
+  .muted{color:var(--muted)} .dim{color:var(--dim)} .center{text-align:center}
+  .pos{color:var(--green);font-weight:700} .neg{color:var(--red);font-weight:700}
+  .mt{margin-top:16px}.mt2{margin-top:26px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+
+  /* ===== hero ===== */
+  .hero{position:relative;overflow:hidden;border-radius:22px;margin-top:8px;padding:52px 36px;border:1px solid var(--line);
+    background:radial-gradient(560px 280px at 86% 18%,rgba(255,176,0,.26),transparent 60%),linear-gradient(135deg,#1d1409,#0f0b05)}
+  .hero h1{font-size:2.8rem;line-height:1.05;letter-spacing:-.03em;max-width:15ch;text-wrap:balance}
+  .grad{background:linear-gradient(90deg,var(--gold),var(--amber));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero p{color:var(--muted);font-size:1.1rem;margin:14px 0 22px;max-width:52ch}
+  .hero .bee{position:absolute;right:6%;top:50%;transform:translateY(-50%);font-size:7rem;filter:drop-shadow(0 0 30px rgba(255,197,49,.5));animation:float 4s ease-in-out infinite}
+  @keyframes float{0%,100%{transform:translateY(-54%)}50%{transform:translateY(-44%)}}
+  @media(prefers-reduced-motion:reduce){.hero .bee{animation:none}}
+  @media(max-width:760px){.hero{padding:38px 22px}.hero h1{font-size:2rem}.hero .bee{display:none}}
+  body.appmode .hero{padding:32px 20px}body.appmode .hero h1{font-size:1.9rem}body.appmode .hero .bee{display:none}
+
+  /* ===== stats ===== */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:20px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;text-align:center}
+  .stat b{display:block;font-size:1.5rem;color:var(--gold)}
+  .stat span{color:var(--muted);font-size:.82rem}
+  @media(max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}}
+  body.appmode .stats{grid-template-columns:repeat(2,1fr)}
+
+  /* ===== tiles ===== */
+  .tile{position:relative;display:block;padding:22px;border-radius:18px;overflow:hidden;cursor:pointer;
+    border:1px solid var(--line);background:linear-gradient(160deg,var(--panel2),var(--bg2));transition:transform .16s,border-color .2s,box-shadow .2s}
+  .tile:hover{transform:translateY(-4px);border-color:var(--gold);box-shadow:var(--glow)}
+  .tile .em{font-size:2.3rem;display:block;margin-bottom:10px}
+  .tile h4{font-size:1.15rem;letter-spacing:-.01em}
+  .tile p{color:var(--muted);font-size:.88rem;margin-top:5px}
+  .tag{position:absolute;top:12px;right:12px;font-size:.66rem;font-weight:800;padding:3px 9px;border-radius:999px;background:var(--gold);color:#231400}
+
+  /* ===== forms ===== */
+  .form{max-width:430px;margin:26px auto}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-weight:600;margin-bottom:6px;color:var(--muted);font-size:.9rem}
+  .field input,.field select{width:100%;padding:12px 13px;border-radius:11px;background:var(--bg2);border:1px solid var(--line);color:var(--text);font-size:1rem}
+  .field input:focus,.field select:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px rgba(255,197,49,.16)}
+  .err{background:#361414;border:1px solid #7d2929;color:#ffc7c7;padding:10px 14px;border-radius:11px;margin-bottom:12px;font-weight:600;font-size:.9rem}
+  .switch{text-align:center;color:var(--muted);margin-top:12px}
+  .switch a{color:var(--gold);font-weight:700;cursor:pointer}
+
+  /* ===== tables ===== */
+  .tblwrap{overflow-x:auto;border-radius:12px}
+  table{width:100%;border-collapse:collapse;font-size:.9rem}
+  th,td{padding:11px 13px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+  th{color:var(--muted);font-size:.74rem;text-transform:uppercase;letter-spacing:.05em}
+  tbody tr:hover td{background:var(--panel2)}
+  .badge{padding:3px 9px;border-radius:999px;font-size:.72rem;font-weight:800;display:inline-block}
+  .b-pending{background:#2a2410;color:var(--honey)} .b-won,.b-cashed_out{background:#12331f;color:var(--green)}
+  .b-lost{background:#331414;color:var(--red)} .b-void{background:#20242a;color:#9fb2c9}
+  .b-owner{background:#3a2410;color:var(--gold)} .b-staff{background:#12283a;color:var(--blue)} .b-player{background:#20242a;color:var(--muted)}
+
+  /* ===== events / odds ===== */
+  .event{display:flex;align-items:center;gap:14px;padding:14px;border-radius:14px;border:1px solid var(--line);background:var(--panel);margin-bottom:10px;flex-wrap:wrap}
+  .event .tm{flex:1;min-width:150px}
+  .pill{padding:5px 11px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);font-size:.76rem;font-weight:700;color:var(--muted);cursor:pointer}
+  .odds{min-width:70px;padding:11px 8px;border-radius:11px;border:1px solid var(--line);background:var(--bg2);color:var(--text);font-weight:800;text-align:center;cursor:pointer;transition:.14s}
+  .odds small{display:block;color:var(--muted);font-weight:600;font-size:.64rem}
+  .odds:hover,.odds.sel{border-color:var(--gold);color:var(--gold);background:var(--panel2)}
+
+  /* ===== aviator ===== */
+  .avbox{position:relative;height:280px;border-radius:18px;overflow:hidden;border:1px solid var(--line);
+    background:radial-gradient(560px 380px at 50% 120%,rgba(255,138,0,.28),transparent),#0a0803;display:flex;align-items:center;justify-content:center}
+  .avm{font-size:4rem;font-weight:900;color:var(--gold);text-shadow:0 0 30px rgba(255,176,0,.6)}
+  .avm.bust{color:var(--red);text-shadow:0 0 30px rgba(255,93,93,.6)}
+  .avp{position:absolute;font-size:2.2rem;left:8%;bottom:12%}
+  .avs{position:absolute;top:12px;left:16px;color:var(--muted);font-weight:700;font-size:.85rem}
+
+  /* ===== lucky balls ===== */
+  .balls{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}
+  .ball{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;cursor:pointer;
+    border:1px solid var(--line);background:var(--bg2);transition:.12s;user-select:none;font-size:.92rem}
+  .ball:hover{border-color:var(--gold)}
+  .ball.pick{background:linear-gradient(135deg,var(--gold),var(--amber));color:#231400;border-color:transparent;box-shadow:var(--glow)}
+  .ball.hit{background:var(--green);color:#03210f;border-color:transparent}
+
+  /* ===== toast ===== */
+  #toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);z-index:80;display:flex;flex-direction:column;gap:8px;align-items:center;opacity:0;transition:.25s;pointer-events:none}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  .toast{padding:12px 20px;border-radius:12px;font-weight:700;box-shadow:var(--shadow);border:1px solid var(--line);background:var(--panel);max-width:90vw}
+  .toast.ok{border-color:#1f6e46;color:#a9f0c8;background:#123021}
+  .toast.bad{border-color:#7d2929;color:#ffc7c7;background:#361414}
+
+  /* ===== bottom tab bar (mobile / app) ===== */
+  .tabbar{display:none;position:sticky;bottom:0;z-index:30;background:rgba(13,11,6,.94);backdrop-filter:blur(12px);
+    border-top:1px solid var(--line);padding:8px 6px calc(8px + env(safe-area-inset-bottom));justify-content:space-around;flex:0 0 auto}
+  .tabbar a{display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--muted);font-size:.64rem;font-weight:700;cursor:pointer;padding:4px 8px;border-radius:10px;flex:1;text-align:center}
+  .tabbar a .ti{font-size:1.25rem}
+  .tabbar a.active{color:var(--gold)}
+  @media(max-width:760px){.tabbar{display:flex}}
+  body.appmode .tabbar{display:flex;position:sticky}
+
+  /* ===== app preview toggle ===== */
+  #appToggle{position:fixed;right:16px;bottom:16px;z-index:90;padding:10px 16px;border-radius:999px;font-weight:800;cursor:pointer;
+    background:linear-gradient(135deg,var(--gold),var(--amber));color:#231400;border:none;box-shadow:var(--glow);font-size:.85rem}
+  @media(max-width:760px){#appToggle{display:none}}
+
+  .note{margin-top:22px;padding:13px 16px;border-radius:12px;border:1px dashed var(--line);color:var(--muted);font-size:.84rem;background:rgba(255,176,0,.04)}
+  .kbd{font-family:ui-monospace,Menlo,Consolas,monospace;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:.82rem;color:var(--honey)}
+  .method{display:flex;align-items:center;gap:11px;padding:12px;border-radius:12px;border:1px solid var(--line);background:var(--panel);cursor:pointer;margin-top:9px}
+  .method:hover{border-color:var(--gold)} .method input{accent-color:var(--gold)} .method .me{font-size:1.5rem}
+  .install{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  .phone{width:150px;height:300px;border:9px solid #241c10;border-radius:32px;flex:0 0 auto;overflow:hidden;box-shadow:var(--shadow);
+    background:linear-gradient(160deg,#1d1409,#0f0b05);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;padding:14px}
+  .phone .b{font-size:2.6rem;filter:drop-shadow(0 0 12px rgba(255,197,49,.6))}
+</style>
+
+<div id="root">
+  <div class="shell">
+    <div class="notch"></div>
+    <div class="ticker"><span id="tickspan"></span></div>
+    <header class="top">
+      <div class="brand" data-go="home"><span class="b">🐝</span> Hive<em>Bet</em></div>
+      <nav class="navlinks" id="navlinks"></nav>
+      <div class="spacer"></div>
+      <div class="acct" id="acct"></div>
+    </header>
+    <main><div class="wrap" id="view"></div></main>
+    <nav class="tabbar" id="tabbar"></nav>
+  </div>
+</div>
+<button id="appToggle">📱 App preview</button>
+<div id="toast"></div>
+
+<script>
+"use strict";
+/* ============================================================
+   HiveBet demo — self-contained SPA.
+   "Database" = localStorage (per browser). The production build in
+   the repo uses PHP + MySQL with bcrypt; this mirrors its behaviour.
+   ============================================================ */
+const KEY = "hivebet_db_v1";
+const CUR = "HC"; // Hive Credits (play money)
+const $ = (s, r=document) => r.querySelector(s);
+
+/* ---------- storage ---------- */
+function seed(){
+  const now = Date.now();
+  const mk = (o)=>Object.assign({phone:"",createdAt:now},o);
+  const ev = (id,lg,h,a,oh,od,oa,hrs)=>({id,league:lg,home:h,away:a,oh,od,oa,startsAt:now+hrs*36e5,status:"open",result:null});
+  return {
+    seq: 100,
+    session: null,
+    users: [
+      mk({id:1, username:"owner",    email:"owner@hivebet.demo",  password:"owner123", role:"owner",  balance:0}),
+      mk({id:2, username:"staff",    email:"staff@hivebet.demo",  password:"staff123", role:"staff",  balance:0}),
+      mk({id:3, username:"beeplayer",email:"player@hivebet.demo", password:"play123",  role:"player", balance:2500}),
+    ],
+    bets: [],
+    tx: [{id:90,userId:3,type:"bonus",method:"demo",amount:2500,balanceAfter:2500,createdAt:now}],
+    events: [
+      ev(11,"English Premier League","Arsenal","Chelsea",2.10,3.30,3.40,2),
+      ev(12,"English Premier League","Man City","Liverpool",1.95,3.60,3.80,5),
+      ev(13,"Castle Lager PSL","Highlanders","Dynamos",2.45,3.10,2.90,26),
+      ev(14,"Castle Lager PSL","FC Platinum","Chicken Inn",1.80,3.20,4.50,28),
+      ev(15,"UEFA Champions League","Real Madrid","Bayern",2.30,3.50,2.95,72),
+      ev(16,"NBA","Lakers","Celtics",1.90,null,1.90,6),
+    ],
+  };
+}
+let DB = load();
+function load(){ try{const r=localStorage.getItem(KEY); return r?JSON.parse(r):seed();}catch(e){return seed();} }
+function save(){ localStorage.setItem(KEY, JSON.stringify(DB)); }
+function nextId(){ return ++DB.seq; }
+function me(){ return DB.users.find(u=>u.id===DB.session) || null; }
+const money = n => CUR+" "+Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+/* ---------- ledger + bet engine (mirrors functions.php) ---------- */
+function walletMove(userId,type,amount,method,note){
+  const u = DB.users.find(x=>x.id===userId);
+  u.balance = Math.round((u.balance+amount)*100)/100;
+  if(u.balance<0){ u.balance-=amount; throw new Error("Insufficient balance."); }
+  DB.tx.unshift({id:nextId(),userId,type,method:method||null,amount,balanceAfter:u.balance,note:note||"",createdAt:Date.now()});
+  return u.balance;
+}
+function placeBet(userId,game,selection,stake,odds,eventId){
+  const u = DB.users.find(x=>x.id===userId);
+  if(stake<1) throw new Error("Minimum stake is "+money(1)+".");
+  if(u.balance<stake) throw new Error("Insufficient balance for this stake.");
+  walletMove(userId,"stake",-stake,game,selection);
+  const bet = {id:nextId(),userId,game,eventId:eventId||null,selection,stake,odds,
+               potential:Math.round(stake*odds*100)/100,status:"pending",result:null,payout:0,createdAt:Date.now()};
+  DB.bets.unshift(bet);
+  return bet;
+}
+function settleBet(bet,outcome,resultText){
+  bet.status=outcome; bet.result=resultText||null; bet.settledAt=Date.now();
+  if(outcome==="won"||outcome==="cashed_out"){ bet.payout=Math.round(bet.stake*bet.odds*100)/100; walletMove(bet.userId,"payout",bet.payout,bet.game,"Winnings: "+bet.selection); }
+  else if(outcome==="void"){ bet.payout=bet.stake; walletMove(bet.userId,"payout",bet.stake,bet.game,"Refund"); }
+}
+
+/* ---------- toast ---------- */
+let toastT;
+function toast(msg,kind){
+  const box=$("#toast"); box.innerHTML=`<div class="toast ${kind||""}">${esc(msg)}</div>`;
+  box.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>box.classList.remove("show"),3200);
+}
+
+/* ---------- router ---------- */
+let route = "home";
+const roles = {player:0,staff:1,owner:2};
+function go(r){
+  const guard={staff:["staff","owner"],owner:["owner"],lobby:["player","staff","owner"],wallet:["player","staff","owner"],history:["player","staff","owner"],
+               aviator:1,lucky:1,gold:1,sports:1};
+  const u=me();
+  const needLogin=["lobby","wallet","history","aviator","lucky","gold","staff","owner"];
+  if(needLogin.includes(r) && !u){ route="login"; render(); return; }
+  if(guard[r] && Array.isArray(guard[r]) && (!u || !guard[r].includes(u.role))){ toast("You don't have access to that area.","bad"); return; }
+  route=r; window.scrollTo(0,0); $("main").scrollTop=0; render();
+}
+
+/* ---------- shell chrome ---------- */
+function renderChrome(){
+  const u=me();
+  const links=[["sports","Sports"],["aviator","Aviator"],["lucky","Lucky"],["gold","Gold Market"],["sports","Jackpot"]];
+  const nav=[["sports","Sports"],["aviator","Aviator"],["lucky","Lucky Numbers"],["gold","Gold Market"],["leaderboard","Leaders"]];
+  let nl = nav.map(([r,t])=>`<a data-go="${r}" class="${route===r?'active':''}">${t}</a>`).join("");
+  if(u&&(u.role==="staff"||u.role==="owner")) nl+=`<a data-go="staff" class="role ${route==='staff'?'active':''}">Staff</a>`;
+  if(u&&u.role==="owner") nl+=`<a data-go="owner" class="role ${route==='owner'?'active':''}">Owner</a>`;
+  $("#navlinks").innerHTML=nl;
+
+  if(u){
+    $("#acct").innerHTML=`
+      <div class="wpill tnum" data-go="wallet" title="Wallet">🍯 ${money(u.balance)}</div>
+      <div class="avatar" id="avatarBtn">${esc(u.username[0].toUpperCase())}
+        <div class="menu" id="menu">
+          <div class="who"><b>${esc(u.username)}</b><span class="badge b-${u.role}">${u.role}</span></div>
+          <a data-go="lobby">My Lobby</a>
+          <a data-go="wallet">Wallet</a>
+          <a data-go="history">Bet History</a>
+          ${u.role!=="player"?'<a data-go="staff">Staff dashboard</a>':''}
+          ${u.role==="owner"?'<a data-go="owner">Owner console</a>':''}
+          <a id="logoutBtn">Log out</a>
+        </div>
+      </div>`;
+  } else {
+    $("#acct").innerHTML=`<a class="btn ghost sm" data-go="login">Log in</a><a class="btn gold sm" data-go="register">Join the Hive</a>`;
+  }
+
+  // bottom tabs
+  const tabs = u ? [["lobby","🏠","Home"],["sports","⚽","Sports"],["aviator","✈️","Aviator"],["wallet","🍯","Wallet"],
+                    (u.role!=="player"?["staff","🛠️","Staff"]:["history","📜","Bets"])]
+                 : [["home","🏠","Home"],["sports","⚽","Sports"],["aviator","✈️","Aviator"],["login","👤","Log in"],["register","✨","Join"]];
+  $("#tabbar").innerHTML=tabs.map(([r,i,t])=>`<a data-go="${r}" class="${route===r?'active':''}"><span class="ti">${i}</span>${t}</a>`).join("");
+}
+
+/* ============================================================
+   VIEWS
+   ============================================================ */
+function view(){
+  switch(route){
+    case "home": return vHome();
+    case "login": return vLogin();
+    case "register": return vRegister();
+    case "lobby": return vLobby();
+    case "sports": return vSports();
+    case "aviator": return vAviator();
+    case "lucky": return vLucky();
+    case "gold": return vGold();
+    case "wallet": return vWallet();
+    case "history": return vHistory();
+    case "leaderboard": return vLeaderboard();
+    case "staff": return vStaff();
+    case "owner": return vOwner();
+    default: return vHome();
+  }
+}
+
+function vHome(){
+  const players=DB.users.filter(u=>u.role==="player").length;
+  const bets=DB.bets.length;
+  const big=DB.bets.reduce((m,b)=>Math.max(m,b.payout),0);
+  const u=me();
+  return `
+  <section class="hero">
+    <span class="bee">🐝</span>
+    <h1>Where winners <span class="grad">swarm.</span></h1>
+    <p>Sports, live Aviator, Lucky Numbers and Gold-Market bets — one hive, sweet odds, instant play. Built for phone &amp; PC, with a real dashboard for staff and owners.</p>
+    <div class="row">
+      ${u?`<a class="btn gold" data-go="lobby">Enter the Hive →</a><a class="btn ghost" data-go="aviator">Fly Aviator ✈️</a>`
+          :`<a class="btn gold" data-go="register">Join &amp; get 1,000 free credits 🍯</a><a class="btn ghost" data-go="login">Log in</a>`}
+    </div>
+    <div class="stats">
+      <div class="stat"><b class="tnum">${players}</b><span>Players</span></div>
+      <div class="stat"><b class="tnum">${bets}</b><span>Bets placed</span></div>
+      <div class="stat"><b class="tnum">${money(big)}</b><span>Biggest win</span></div>
+      <div class="stat"><b class="tnum">${DB.users.length}</b><span>Accounts</span></div>
+    </div>
+  </section>
+
+  <h2 class="title">Pick your game</h2>
+  <div class="grid gauto">
+    ${tile("sports","⚽","Sports Betting","EPL, UCL &amp; the PSL — singles &amp; accumulators.","HOT")}
+    ${tile("aviator","✈️","Aviator","Cash out before the plane flies away.","LIVE")}
+    ${tile("lucky","🎯","Lucky Numbers","Pick 6, match &amp; win up to 1000×.","")}
+    ${tile("gold","📈","Gold Market","Bet UP or DOWN on gold moves.","NEW")}
+    ${tile("leaderboard","👑","Leaderboard","Climb the comb. Only the busiest bees win.","")}
+    ${tile("register","✨","Create account","Unique login, stored securely, instant play.","")}
+  </div>
+
+  <h2 class="title">Built for everyone in the hive</h2>
+  <div class="grid g3">
+    <div class="card"><h3>🎮 Players</h3><p class="muted">Sign up in seconds, deposit via EcoCash / card / agent, play every game, track bets &amp; climb the leaderboard.</p></div>
+    <div class="card"><h3>🛠️ Employees</h3><p class="muted">Staff get a dashboard to see players, monitor bets, settle fixtures and watch key numbers — no owner secrets exposed.</p></div>
+    <div class="card"><h3>👑 Owners</h3><p class="muted">Owners get everything staff see plus revenue (GGR), full user control and the power to create &amp; manage staff accounts.</p></div>
+  </div>
+
+  <h2 class="title">Get the mobile app</h2>
+  <div class="card install">
+    <div class="phone"><span class="b">🐝</span><b>HiveBet</b><span class="muted" style="font-size:.72rem">Tap · Bet · Win</span></div>
+    <div style="flex:1;min-width:220px">
+      <p>HiveBet runs in any phone or desktop browser, and installs as a <b>mobile app</b> — the production build ships as an installable PWA (“Add to Home Screen”) so it opens full-screen with its own icon, no app-store needed.</p>
+      <div class="row mt"><button class="btn gold" id="tryApp">📱 Preview the app</button><a class="btn ghost" data-go="register">Create an account</a></div>
+      <p class="dim mt" style="font-size:.8rem">Tip: on desktop, the <span class="kbd">📱 App preview</span> button (bottom-right) frames the whole site as a phone.</p>
+    </div>
+  </div>
+
+  <div class="note">🐝 <b>Demo build.</b> Virtual <b>Hive Credits</b> only — no real gambling, no cash payout. Strictly 18+. Accounts are saved in your browser for this demo; the production platform stores them in a MySQL database with hashed passwords.</div>`;
+}
+function tile(r,em,h,p,tag){ return `<a class="tile" data-go="${r}">${tag?`<span class="tag">${tag}</span>`:''}<span class="em">${em}</span><h4>${h}</h4><p>${p}</p></a>`; }
+
+/* ---------- auth ---------- */
+function vLogin(){
+  return `<div class="card form">
+    <h2>🐝 Log in</h2>
+    <div id="formerr"></div>
+    <form id="loginForm" class="mt">
+      <div class="field"><label>Username or email</label><input name="identity" autocomplete="username" required></div>
+      <div class="field"><label>Password</label><input name="password" type="password" autocomplete="current-password" required></div>
+      <button class="btn gold block">Log in</button>
+    </form>
+    <p class="switch">New here? <a data-go="register">Join the Hive</a></p>
+    <div class="note" style="margin-top:16px">Demo accounts — Owner <span class="kbd">owner / owner123</span> · Staff <span class="kbd">staff / staff123</span> · Player <span class="kbd">beeplayer / play123</span></div>
+  </div>`;
+}
+function vRegister(){
+  return `<div class="card form">
+    <h2>✨ Join the Hive</h2>
+    <p class="muted">Create an account and get <b>${money(1000)}</b> in free demo credits. Every username &amp; email must be unique.</p>
+    <div id="formerr" class="mt"></div>
+    <form id="regForm" class="mt">
+      <div class="field"><label>Username</label><input name="username" autocomplete="username" required></div>
+      <div class="field"><label>Email</label><input name="email" type="email" autocomplete="email" required></div>
+      <div class="field"><label>Phone (EcoCash number)</label><input name="phone" placeholder="+263 7X XXX XXXX"></div>
+      <div class="field"><label>Password</label><input name="password" type="password" autocomplete="new-password" required></div>
+      <div class="field"><label>Confirm password</label><input name="password2" type="password" autocomplete="new-password" required></div>
+      <button class="btn gold block">Create my account 🍯</button>
+    </form>
+    <p class="switch">Already buzzing? <a data-go="login">Log in</a></p>
+    <div class="note" style="margin-top:16px">By joining you confirm you are 18+. Play-money demo — no real gambling.</div>
+  </div>`;
+}
+
+/* ---------- player ---------- */
+function vLobby(){
+  const u=me();
+  const mine=DB.bets.filter(b=>b.userId===u.id);
+  const open=mine.filter(b=>b.status==="pending");
+  const won=mine.filter(b=>b.status==="won"||b.status==="cashed_out").reduce((s,b)=>s+b.payout,0);
+  return `
+  <div class="card" style="background:radial-gradient(480px 220px at 90% 0%,rgba(255,176,0,.18),transparent),linear-gradient(180deg,var(--panel),var(--bg2))">
+    <h2>Welcome back, ${esc(u.username)} 🐝</h2>
+    <p class="muted">Your hive is buzzing. Here's where things stand.</p>
+    <div class="stats" style="margin-top:16px">
+      <div class="stat"><b class="tnum">${money(u.balance)}</b><span>Balance</span></div>
+      <div class="stat"><b class="tnum">${open.length}</b><span>Open bets</span></div>
+      <div class="stat"><b class="tnum">${money(open.reduce((s,b)=>s+b.stake,0))}</b><span>Staked live</span></div>
+      <div class="stat"><b class="tnum">${money(won)}</b><span>Total winnings</span></div>
+    </div>
+    <div class="row mt"><a class="btn gold" data-go="wallet">Deposit / Withdraw 🍯</a><a class="btn ghost" data-go="history">Bet history</a></div>
+  </div>
+  <h2 class="title">Jump back in</h2>
+  <div class="grid gauto">
+    ${tile("sports","⚽","Sports","Back your team.","")}${tile("aviator","✈️","Aviator","Cash out in time.","")}
+    ${tile("lucky","🎯","Lucky Numbers","Pick &amp; win.","")}${tile("gold","📈","Gold Market","Up or down?","")}
+  </div>
+  <h2 class="title">Recent bets</h2>
+  <div class="card">${betsTable(mine.slice(0,6),false)||'<p class="muted center">No bets yet — pick a game above! 🐝</p>'}</div>`;
+}
+
+function betsTable(list,showUser){
+  if(!list.length) return "";
+  return `<div class="tblwrap"><table><thead><tr>${showUser?"<th>Player</th>":""}<th>Game</th><th>Selection</th><th>Stake</th><th>Odds</th><th>Payout</th><th>Status</th></tr></thead><tbody>`+
+    list.map(b=>{const un=showUser?`<td>${esc((DB.users.find(u=>u.id===b.userId)||{}).username||"—")}</td>`:"";
+      return `<tr>${un}<td>${esc(cap(b.game))}</td><td>${esc(b.selection)}${b.result?`<br><span class="dim" style="font-size:.76rem">${esc(b.result)}</span>`:""}</td>
+      <td class="tnum">${money(b.stake)}</td><td class="tnum">${b.odds.toFixed(2)}</td>
+      <td class="tnum ${b.payout>0?'pos':''}">${b.payout>0?money(b.payout):"—"}</td>
+      <td><span class="badge b-${b.status}">${esc(cap(b.status.replace("_"," ")))}</span></td></tr>`;}).join("")+
+    `</tbody></table></div>`;
+}
+const cap = s => s.charAt(0).toUpperCase()+s.slice(1);
+
+/* ---------- sports ---------- */
+let sportsSel = {}; // eventId -> pick
+function vSports(){
+  const evs=DB.events.filter(e=>e.status==="open");
+  return `<h2 class="title">⚽ Sports Betting</h2>
+  <p class="muted">Back the home win, draw or away side. Odds carry the house margin — that's the hive's honey.</p>
+  ${!me()?`<div class="note">Log in or <a data-go="register" style="color:var(--gold);font-weight:700;cursor:pointer">join</a> to place bets.</div>`:""}
+  <div class="card mt">${evs.map(e=>`
+    <div class="event" data-ev="${e.id}">
+      <div class="tm"><span class="pill">${esc(e.league)}</span><div style="margin-top:6px"><b>${esc(e.home)}</b> <span class="muted">vs</span> <b>${esc(e.away)}</b></div>
+        <div class="dim" style="font-size:.78rem">⏱ ${new Date(e.startsAt).toLocaleString([], {weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div></div>
+      <div class="row">
+        <div class="odds" data-pick="home" data-ev="${e.id}"><small>1 · Home</small>${e.oh.toFixed(2)}</div>
+        ${e.od?`<div class="odds" data-pick="draw" data-ev="${e.id}"><small>X · Draw</small>${e.od.toFixed(2)}</div>`:""}
+        <div class="odds" data-pick="away" data-ev="${e.id}"><small>2 · Away</small>${e.oa.toFixed(2)}</div>
+        <input class="tnum" type="number" min="1" step="0.01" value="10" data-stake="${e.id}" style="width:82px;padding:10px;border-radius:11px;background:var(--bg2);border:1px solid var(--line);color:var(--text)" aria-label="Stake">
+        <button class="btn gold sm" data-bet="${e.id}">Bet</button>
+      </div>
+    </div>`).join("")||'<p class="muted center">No open matches right now. 🐝</p>'}</div>
+  <div class="note">Pick an outcome (it highlights), set your stake, then press <b>Bet</b>. Winnings = stake × odds.</div>`;
+}
+
+/* ---------- aviator (client demo, provably-fair-style) ---------- */
+let av={running:false,raf:0,start:0,crash:0,stake:0,bet:null,rate:0.20};
+function crashPoint(){ const r=Math.random(); if(r<0.03) return 1.00; return Math.min(Math.round((0.99/(1-r))*100)/100,1000); }
+function vAviator(){
+  const u=me();
+  return `<h2 class="title">✈️ Aviator — live</h2>
+  <p class="muted">Place a stake, the plane takes off and the multiplier climbs. Hit <b>Cash Out</b> before it flies away to win <b>stake × multiplier</b>.</p>
+  <div class="grid g2 mt">
+    <div class="card">
+      <div class="avbox"><div class="avs" id="avs">Ready for take-off</div><div class="avm" id="avm">1.00×</div><div class="avp" id="avp">✈️</div></div>
+      <p class="center mt dim" id="avfair" style="font-size:.78rem"></p>
+    </div>
+    <div class="card">
+      <h3>Controls</h3>
+      <p class="muted">Balance: <b class="tnum" id="avbal">${money(u.balance)}</b></p>
+      <div class="field mt"><label>Stake (${CUR})</label><input class="tnum" type="number" id="avstake" min="1" step="0.01" value="10"></div>
+      <div class="row">${[5,10,25,50].map(v=>`<span class="pill" data-chip="${v}">${v}</span>`).join("")}</div>
+      <button class="btn gold block mt" id="avplay">🚀 Take off</button>
+      <button class="btn green block mt" id="avcash" style="display:none">💰 Cash out <span id="avcashm">1.00×</span></button>
+      <p class="muted mt" id="avmsg" style="font-size:.85rem"></p>
+      <p class="dim mt" style="font-size:.78rem">~3% of rounds bust instantly at 1.00× — that's the house edge.</p>
+    </div>
+  </div>
+  <div class="note">Client-side demo of the live crash game. The production build settles server-side (provably fair) — see the repo. Play money only.</div>`;
+}
+function avStop(){ av.running=false; cancelAnimationFrame(av.raf); }
+function avReset(txt){ avStop(); const p=$("#avplay"),c=$("#avcash"); if(!p)return; p.style.display=""; p.disabled=false; if(c)c.style.display="none"; const m=$("#avm"); if(m){m.classList.remove("bust");m.textContent="1.00×";} const s=$("#avs"); if(s)s.textContent=txt||"Ready for take-off"; const pl=$("#avp"); if(pl)pl.textContent="✈️"; }
+function avRender(mult,bust){ const m=$("#avm"); if(!m)return; m.textContent=mult.toFixed(2)+"×"; const cm=$("#avcashm"); if(cm)cm.textContent=mult.toFixed(2)+"×";
+  const prog=Math.min(Math.log(mult)/Math.log(20),1); const pl=$("#avp"); if(pl){pl.style.left=(8+prog*74)+"%";pl.style.bottom=(12+prog*60)+"%";}
+  if(bust){m.classList.add("bust"); if(pl)pl.textContent="💥";} else {m.classList.remove("bust"); if(pl)pl.textContent="✈️";} }
+function avLoop(t){ if(!av.running)return; const el=(t-av.start)/1000; const mult=Math.exp(av.rate*el);
+  if(mult>=av.crash){ avStop(); settleBet(av.bet,"lost","Flew away at "+av.crash.toFixed(2)+"×"); save(); avRender(av.crash,true); $("#avs").textContent="Flew away at "+av.crash.toFixed(2)+"×"; $("#avmsg").innerHTML='<span class="neg">💥 Busted — lost the stake.</span>'; $("#avfair").textContent="Crash point: "+av.crash.toFixed(2)+"×"; $("#avcash").style.display="none"; renderChrome(); setTimeout(()=>avReset(),2200); return; }
+  avRender(mult,false); av.raf=requestAnimationFrame(avLoop); }
+function avStart(){
+  const u=me(); const stake=parseFloat($("#avstake").value);
+  if(!(stake>=1)){ $("#avmsg").innerHTML='<span class="neg">Enter a stake of at least 1.</span>'; return; }
+  try{ av.bet=placeBet(u.id,"aviator","Aviator live round · stake "+money(stake),stake,1.0); }
+  catch(e){ $("#avmsg").innerHTML=`<span class="neg">${esc(e.message)}</span>`; return; }
+  av.crash=crashPoint(); av.stake=stake; av.running=true; av.start=performance.now(); save(); renderChrome();
+  $("#avbal").textContent=money(u.balance); $("#avmsg").textContent=""; $("#avfair").textContent="Round committed — cash out before the crash.";
+  $("#avplay").style.display="none"; const c=$("#avcash"); c.style.display=""; $("#avs").textContent="Flying…"; $("#avm").classList.remove("bust");
+  av.raf=requestAnimationFrame(avLoop);
+}
+function avCash(){
+  if(!av.running)return; avStop(); const el=(performance.now()-av.start)/1000; let mult=Math.exp(av.rate*el);
+  if(mult>=av.crash){ settleBet(av.bet,"lost","Flew away at "+av.crash.toFixed(2)+"×"); save(); avRender(av.crash,true); $("#avmsg").innerHTML='<span class="neg">💥 Too late — busted.</span>'; renderChrome(); setTimeout(()=>avReset(),2000); return; }
+  mult=Math.round(mult*100)/100; av.bet.odds=mult; settleBet(av.bet,"cashed_out","Cashed out at "+mult.toFixed(2)+"×"); save();
+  avRender(mult,false); $("#avs").textContent="Cashed out at "+mult.toFixed(2)+"×"; $("#avmsg").innerHTML=`<span class="pos">💰 Won ${money(av.bet.payout)}!</span>`;
+  $("#avbal").textContent=money(me().balance); renderChrome(); setTimeout(()=>avReset(),2000);
+}
+
+/* ---------- lucky numbers ---------- */
+let luckyPicks=[];
+const PAY={3:5,4:25,5:150,6:1000};
+function vLucky(){
+  const u=me(); luckyPicks=[];
+  return `<h2 class="title">🎯 Lucky Numbers</h2>
+  <p class="muted">Pick <b>6</b> numbers from 1–49. We draw 6. Match more to win bigger — up to <b>1000×</b>!</p>
+  <div class="grid g2 mt">
+    <div class="card"><h3>Your slip</h3>
+      <p class="muted">Balance: <b class="tnum" id="lkbal">${money(u.balance)}</b></p>
+      <p class="muted mt">Tap 6 numbers:</p>
+      <div class="balls" id="lkballs">${Array.from({length:49},(_,i)=>`<div class="ball" data-n="${i+1}">${i+1}</div>`).join("")}</div>
+      <div class="field mt"><label>Stake (${CUR})</label><input class="tnum" type="number" id="lkstake" min="1" step="0.01" value="10"></div>
+      <button class="btn gold block" id="lkplay" disabled>Draw! (<span id="lkcount">0</span>/6)</button>
+    </div>
+    <div class="card"><h3>Latest draw</h3><div id="lkresult"><p class="muted">No draw yet — make your picks! 🐝</p></div>
+      <div class="tblwrap mt"><table><thead><tr><th>Matches</th><th>Pays</th></tr></thead><tbody>
+        <tr><td>3</td><td>5×</td></tr><tr><td>4</td><td>25×</td></tr><tr><td>5</td><td>150×</td></tr><tr><td>6</td><td>1000×</td></tr>
+      </tbody></table></div>
+    </div>
+  </div>`;
+}
+function luckyDraw(){
+  const u=me(); const stake=parseFloat($("#lkstake").value);
+  if(luckyPicks.length!==6){ toast("Pick exactly 6 numbers.","bad"); return; }
+  const pool=Array.from({length:49},(_,i)=>i+1); for(let i=pool.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[pool[i],pool[j]]=[pool[j],pool[i]];}
+  const drawn=pool.slice(0,6).sort((a,b)=>a-b);
+  const hits=luckyPicks.filter(n=>drawn.includes(n)); const mult=PAY[hits.length]||0;
+  let bet; try{ bet=placeBet(u.id,"lucky","Picks: "+luckyPicks.slice().sort((a,b)=>a-b).join(","),stake,Math.max(mult,1)); }
+  catch(e){ toast(e.message,"bad"); return; }
+  bet.odds=Math.max(mult,1); settleBet(bet, mult>0?"won":"lost", "Drawn: "+drawn.join(",")+" — "+hits.length+" hits");
+  if(mult===0) bet.payout=0; save(); renderChrome(); $("#lkbal").textContent=money(me().balance);
+  $("#lkresult").innerHTML=`<p class="muted">Winning numbers:</p><div class="balls">${drawn.map(d=>`<div class="ball hit">${d}</div>`).join("")}</div>
+    <p class="muted">Your picks:</p><div class="balls">${luckyPicks.slice().sort((a,b)=>a-b).map(p=>`<div class="ball ${hits.includes(p)?'hit':''}">${p}</div>`).join("")}</div>
+    <p class="mt ${mult>0?'pos':'neg'}">${hits.length} hits · ${mult>0?"Won "+money(bet.payout)+" ("+mult+"×)":"No win"}</p>`;
+  toast(mult>0?`🎯 ${hits.length} hits! Won ${money(bet.payout)}!`:`Only ${hits.length} hits — try again.`, mult>0?"ok":"bad");
+}
+
+/* ---------- gold market ---------- */
+function goldPrice(){ const t=Math.floor(Date.now()/60000); return Math.round((2400+Math.sin(t/7)*18+Math.cos(t/3)*9)*100)/100; }
+function vGold(){
+  const u=me(); const p=goldPrice();
+  return `<h2 class="title">📈 Gold Market Bets</h2>
+  <p class="muted">Our signature game — bet whether gold (XAUUSD) ticks <b>UP</b> or <b>DOWN</b>. In production this settles from the same live MT5 feed that drives the GoldPortfolio trading bot. Win pays <b>1.90×</b>.</p>
+  <div class="grid g2 mt">
+    <div class="card center" style="background:radial-gradient(380px 200px at 50% 0%,rgba(255,176,0,.16),transparent),linear-gradient(180deg,var(--panel),var(--bg2))">
+      <p class="muted">XAUUSD · live demo price</p>
+      <div class="tnum" style="font-size:3rem;font-weight:900;color:var(--gold);text-shadow:var(--glow)" id="gprice">$${p.toLocaleString(undefined,{minimumFractionDigits:2})}</div>
+      <div class="row" style="justify-content:center"><span class="pill">Gold spot</span><span class="pill">Binary · 1.90×</span><span class="pill">Beat the Bot 🤖</span></div>
+      <div id="gresult"></div>
+    </div>
+    <div class="card"><h3>Your call</h3>
+      <p class="muted">Balance: <b class="tnum" id="gbal">${money(u.balance)}</b></p>
+      <div class="field mt"><label>Stake (${CUR})</label><input class="tnum" type="number" id="gstake" min="1" step="0.01" value="10"></div>
+      <div class="grid g2" style="gap:10px"><button class="btn green block" data-gold="up">▲ UP</button><button class="btn red block" data-gold="down">▼ DOWN</button></div>
+      <p class="dim mt" style="font-size:.8rem">Predict the next tick. The ~5% edge is the hive's margin.</p>
+    </div>
+  </div>`;
+}
+function goldBet(dir){
+  const u=me(); const stake=parseFloat($("#gstake").value); const open=goldPrice();
+  let bet; try{ bet=placeBet(u.id,"financial","XAUUSD "+dir.toUpperCase()+" from "+open.toFixed(2),stake,1.90); }
+  catch(e){ toast(e.message,"bad"); return; }
+  const close=Math.round((open+(Math.random()*2-1)*6.5)*100)/100; const wentUp=close>=open;
+  const won=(dir==="up"&&wentUp)||(dir==="down"&&!wentUp);
+  settleBet(bet, won?"won":"lost", "Open "+open.toFixed(2)+" → Close "+close.toFixed(2)); save(); renderChrome();
+  $("#gbal").textContent=money(me().balance);
+  $("#gresult").innerHTML=`<div class="card mt" style="background:var(--panel2)">
+    <p class="tnum">Open <b>$${open.toFixed(2)}</b> → Close <b>$${close.toFixed(2)}</b></p>
+    <p class="${wentUp?'pos':'neg'}" style="font-size:1.3rem">Gold went ${wentUp?"UP ▲":"DOWN ▼"}</p>
+    <p class="${won?'pos':'neg'}">You bet ${dir.toUpperCase()} — ${won?"won "+money(bet.payout):"lost "+money(stake)}</p></div>`;
+  toast(won?`📈 Right call! Won ${money(bet.payout)}!`:`📉 Gold went ${wentUp?"UP":"DOWN"}. Try again.`, won?"ok":"bad");
+}
+
+/* ---------- wallet ---------- */
+function vWallet(){
+  const u=me(); const tx=DB.tx.filter(t=>t.userId===u.id).slice(0,15);
+  const methods=[["ecocash","📱","EcoCash","Mobile money · via Paynow"],["card","💳","Visa / MasterCard","Local &amp; international"],
+    ["agent","🏪","Cash agent","Pay cash at a HiveBet agent"],["voucher","🎟️","Voucher PIN","Prepaid scratch voucher"],
+    ["paypal","🅿️","PayPal","Diaspora only (where permitted)"],["demo","⚡","Instant demo credit","Top up play credits now"]];
+  return `<h2 class="title">🍯 Wallet</h2>
+  <div class="card center" style="background:radial-gradient(380px 200px at 50% 0%,rgba(255,176,0,.16),transparent),linear-gradient(180deg,var(--panel),var(--bg2))">
+    <p class="muted">Available balance</p><div class="tnum" style="font-size:2.6rem;font-weight:900;color:var(--gold);text-shadow:var(--glow)" id="wbal">${money(u.balance)}</div>
+  </div>
+  <div class="grid g2 mt">
+    <div class="card"><h3>Deposit</h3>
+      <div class="field"><label>Amount (${CUR})</label><input class="tnum" type="number" id="depamt" min="1" step="0.01" value="50"></div>
+      <div id="depmethods">${methods.map((m,i)=>`<label class="method" ${m[0]==="demo"?'style="border-color:var(--gold)"':''}><input type="radio" name="depm" value="${m[0]}" ${i===0?"checked":""}><span class="me">${m[1]}</span><div><b>${m[2]}</b><br><span class="muted" style="font-size:.8rem">${m[3]}</span></div></label>`).join("")}</div>
+      <button class="btn gold block mt" id="depbtn">Deposit</button>
+      <p class="dim mt" style="font-size:.8rem">Only <b>demo</b> credits instantly. Real methods record a pending request — connect Paynow/Flutterwave in production.</p>
+    </div>
+    <div class="card"><h3>Withdraw</h3>
+      <div class="field"><label>Amount (${CUR})</label><input class="tnum" type="number" id="wdamt" min="1" step="0.01" value="20"></div>
+      <div class="field"><label>Payout method</label><select id="wdm"><option value="ecocash">EcoCash</option><option value="card">Bank card</option><option value="agent">Cash agent</option></select></div>
+      <button class="btn ghost block" id="wdbtn">Request withdrawal</button>
+      <p class="dim mt" style="font-size:.8rem">AML rule: winnings pay back to the deposit method. Withdrawals queue for review in production.</p>
+    </div>
+  </div>
+  <h2 class="title">Recent transactions</h2>
+  <div class="card"><div class="tblwrap"><table><thead><tr><th>When</th><th>Type</th><th>Method</th><th>Amount</th><th>Balance</th></tr></thead><tbody id="txbody">${txRows(tx)}</tbody></table></div></div>`;
+}
+function txRows(tx){ return tx.length?tx.map(t=>`<tr><td class="dim">${new Date(t.createdAt).toLocaleString([], {day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</td>
+  <td>${esc(cap(t.type))}</td><td class="muted">${esc(t.method||"—")}</td><td class="tnum ${t.amount>=0?'pos':'neg'}">${t.amount>=0?"+":""}${money(t.amount)}</td>
+  <td class="tnum">${money(t.balanceAfter)}</td></tr>`).join(""):'<tr><td colspan="5" class="muted center">No transactions yet.</td></tr>'; }
+
+/* ---------- history ---------- */
+function vHistory(){
+  const u=me(); const mine=DB.bets.filter(b=>b.userId===u.id);
+  const staked=mine.reduce((s,b)=>s+b.stake,0), paid=mine.reduce((s,b)=>s+b.payout,0), net=paid-staked;
+  const wins=mine.filter(b=>b.status==="won"||b.status==="cashed_out").length, losses=mine.filter(b=>b.status==="lost").length;
+  return `<h2 class="title">📜 Bet History</h2>
+  <div class="stats"><div class="stat"><b class="tnum">${mine.length}</b><span>Total bets</span></div>
+    <div class="stat"><b class="tnum">${wins}W / ${losses}L</b><span>Win / loss</span></div>
+    <div class="stat"><b class="tnum">${money(staked)}</b><span>Total staked</span></div>
+    <div class="stat"><b class="tnum ${net>=0?'pos':'neg'}">${net>=0?"+":""}${money(net)}</b><span>Net result</span></div></div>
+  <div class="card mt">${betsTable(mine,false)||'<p class="muted center">No bets yet — go place one! 🐝</p>'}</div>`;
+}
+
+/* ---------- leaderboard ---------- */
+function vLeaderboard(){
+  const rows=DB.users.filter(u=>u.role==="player").map(u=>{const bs=DB.bets.filter(b=>b.userId===u.id);
+    return {name:u.username,bets:bs.length,wins:bs.filter(b=>b.status==="won"||b.status==="cashed_out").length,net:bs.reduce((s,b)=>s+b.payout-b.stake,0)};})
+    .sort((a,b)=>b.net-a.net).slice(0,20);
+  return `<h2 class="title">👑 Leaderboard</h2><p class="muted">The busiest bees, ranked by net winnings.</p>
+  <div class="card mt"><div class="tblwrap"><table><thead><tr><th>Rank</th><th>Player</th><th>Bets</th><th>Wins</th><th>Net</th></tr></thead><tbody>
+  ${rows.map((r,i)=>`<tr><td><b>${["🥇","🥈","🥉"][i]||(i+1)}</b></td><td><b>${esc(r.name)}</b></td><td class="tnum">${r.bets}</td><td class="tnum">${r.wins}</td><td class="tnum ${r.net>=0?'pos':'neg'}">${r.net>=0?"+":""}${money(r.net)}</td></tr>`).join("")||'<tr><td colspan="5" class="muted center">No players yet.</td></tr>'}
+  </tbody></table></div></div>`;
+}
+
+/* ---------- staff dashboard ---------- */
+function metrics(){
+  const players=DB.users.filter(u=>u.role==="player");
+  const staked=DB.bets.reduce((s,b)=>s+b.stake,0), paid=DB.bets.reduce((s,b)=>s+b.payout,0);
+  const deposits=DB.tx.filter(t=>t.type==="deposit").reduce((s,t)=>s+t.amount,0);
+  return {players:players.length, bets:DB.bets.length, staked, ggr:staked-paid, deposits, open:DB.bets.filter(b=>b.status==="pending").length};
+}
+function vStaff(){
+  const m=metrics(); const openEv=DB.events.filter(e=>e.status==="open");
+  return `<h2 class="title">🛠️ Staff Dashboard</h2>
+  <p class="muted">Operational view for employees — players, activity and fixture settlement. Financial ownership figures stay in the Owner console.</p>
+  <div class="stats"><div class="stat"><b class="tnum">${m.players}</b><span>Players</span></div>
+    <div class="stat"><b class="tnum">${m.bets}</b><span>Bets</span></div>
+    <div class="stat"><b class="tnum">${m.open}</b><span>Open bets</span></div>
+    <div class="stat"><b class="tnum">${money(m.staked)}</b><span>Total staked</span></div></div>
+
+  <h2 class="title">Settle open fixtures</h2>
+  <div class="card">${openEv.map(e=>`<div class="event"><div class="tm"><span class="pill">${esc(e.league)}</span><div style="margin-top:6px"><b>${esc(e.home)}</b> vs <b>${esc(e.away)}</b></div></div>
+    <div class="row"><button class="btn ghost sm" data-settle="${e.id}" data-res="home">Home won</button>${e.od?`<button class="btn ghost sm" data-settle="${e.id}" data-res="draw">Draw</button>`:""}<button class="btn ghost sm" data-settle="${e.id}" data-res="away">Away won</button></div></div>`).join("")||'<p class="muted center">No open fixtures to settle.</p>'}</div>
+
+  <h2 class="title">Players</h2>
+  <div class="card"><div class="field"><input id="usearch" placeholder="Search players by name or email…"></div>
+    <div class="tblwrap"><table><thead><tr><th>User</th><th>Email</th><th>Phone</th><th>Balance</th><th>Bets</th><th>Joined</th></tr></thead><tbody id="ubody">${userRows("")}</tbody></table></div></div>
+
+  <h2 class="title">Recent activity</h2>
+  <div class="card">${betsTable(DB.bets.slice(0,12),true)||'<p class="muted center">No bets yet.</p>'}</div>`;
+}
+function userRows(q){
+  q=(q||"").toLowerCase();
+  const list=DB.users.filter(u=>u.role==="player").filter(u=>!q||u.username.toLowerCase().includes(q)||u.email.toLowerCase().includes(q));
+  return list.map(u=>`<tr><td><b>${esc(u.username)}</b></td><td class="muted">${esc(u.email)}</td><td class="muted">${esc(u.phone||"—")}</td>
+    <td class="tnum">${money(u.balance)}</td><td class="tnum">${DB.bets.filter(b=>b.userId===u.id).length}</td>
+    <td class="dim">${new Date(u.createdAt).toLocaleDateString([], {day:'numeric',month:'short',year:'2-digit'})}</td></tr>`).join("")
+    ||'<tr><td colspan="6" class="muted center">No matching players.</td></tr>';
+}
+
+/* ---------- owner console ---------- */
+function vOwner(){
+  const m=metrics();
+  const teamRows=DB.users.filter(u=>u.role!=="player").map(u=>`<tr><td><b>${esc(u.username)}</b></td><td class="muted">${esc(u.email)}</td>
+    <td><span class="badge b-${u.role}">${u.role}</span></td><td>
+    ${u.id===me().id?'<span class="dim">you</span>':
+      `<button class="btn ghost sm" data-role="${u.id}" data-set="${u.role==="staff"?"owner":"staff"}">Make ${u.role==="staff"?"owner":"staff"}</button>
+       <button class="btn red sm" data-remove="${u.id}">Remove</button>`}</td></tr>`).join("");
+  return `<h2 class="title">👑 Owner Console</h2>
+  <p class="muted">Full control — revenue, every account, and your staff team. Only owners see this.</p>
+  <div class="stats"><div class="stat"><b class="tnum ${m.ggr>=0?'pos':'neg'}">${money(m.ggr)}</b><span>House gross (GGR)</span></div>
+    <div class="stat"><b class="tnum">${money(m.staked)}</b><span>Total staked</span></div>
+    <div class="stat"><b class="tnum">${money(m.deposits)}</b><span>Deposits</span></div>
+    <div class="stat"><b class="tnum">${DB.users.length}</b><span>All accounts</span></div></div>
+
+  <h2 class="title">Your team</h2>
+  <div class="card"><div class="tblwrap"><table><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Actions</th></tr></thead><tbody id="teambody">${teamRows}</tbody></table></div></div>
+
+  <h2 class="title">Add a staff / owner account</h2>
+  <div class="card"><div id="staffErr"></div>
+    <div class="grid g2"><div class="field"><label>Username</label><input id="nsUser"></div>
+      <div class="field"><label>Email</label><input id="nsEmail" type="email"></div>
+      <div class="field"><label>Temp password</label><input id="nsPass"></div>
+      <div class="field"><label>Role</label><select id="nsRole"><option value="staff">Staff (employee)</option><option value="owner">Owner</option></select></div></div>
+    <button class="btn gold" id="nsAdd">Create account</button>
+    <p class="dim mt" style="font-size:.8rem">Employees get the Staff dashboard; owners get this console too. In production these map to a <span class="kbd">role</span> column with hashed passwords.</p></div>
+
+  <h2 class="title">All accounts</h2>
+  <div class="card"><div class="tblwrap"><table><thead><tr><th>User</th><th>Email</th><th>Role</th><th>Balance</th><th>Joined</th></tr></thead><tbody>
+    ${DB.users.map(u=>`<tr><td><b>${esc(u.username)}</b></td><td class="muted">${esc(u.email)}</td><td><span class="badge b-${u.role}">${u.role}</span></td><td class="tnum">${money(u.balance)}</td><td class="dim">${new Date(u.createdAt).toLocaleDateString([], {day:'numeric',month:'short',year:'2-digit'})}</td></tr>`).join("")}
+  </tbody></table></div></div>`;
+}
+
+/* ============================================================
+   RENDER + EVENTS
+   ============================================================ */
+function render(){ renderChrome(); $("#view").innerHTML=view(); }
+
+/* delegated clicks */
+document.addEventListener("click",e=>{
+  const go_=e.target.closest("[data-go]"); if(go_){ const m=$("#menu"); if(m)m.classList.remove("open"); go(go_.dataset.go); return; }
+  const av_=e.target.closest("#avatarBtn"); if(av_){ $("#menu").classList.toggle("open"); e.stopPropagation(); return; }
+  if(!e.target.closest("#menu")){ const m=$("#menu"); if(m)m.classList.remove("open"); }
+  const lo=e.target.closest("#logoutBtn"); if(lo){ DB.session=null; save(); toast("Logged out. 🐝"); go("home"); return; }
+
+  // sports
+  const pick=e.target.closest("[data-pick]"); if(pick){ const ev=pick.dataset.ev; sportsSel[ev]=pick.dataset.pick;
+    document.querySelectorAll(`.odds[data-ev="${ev}"]`).forEach(o=>o.classList.remove("sel")); pick.classList.add("sel"); return; }
+  const betb=e.target.closest("[data-bet]"); if(betb){ placeSport(betb.dataset.bet); return; }
+
+  // aviator
+  if(e.target.closest("#avplay")){ avStart(); return; }
+  if(e.target.closest("#avcash")){ avCash(); return; }
+  const chip=e.target.closest("[data-chip]"); if(chip){ const s=$("#avstake"); if(s)s.value=chip.dataset.chip; return; }
+
+  // lucky
+  const ball=e.target.closest(".ball[data-n]"); if(ball && route==="lucky"){ toggleBall(ball); return; }
+  if(e.target.closest("#lkplay")){ luckyDraw(); return; }
+
+  // gold
+  const gb=e.target.closest("[data-gold]"); if(gb){ goldBet(gb.dataset.gold); return; }
+
+  // wallet
+  if(e.target.closest("#depbtn")){ doDeposit(); return; }
+  if(e.target.closest("#wdbtn")){ doWithdraw(); return; }
+
+  // staff settle
+  const st=e.target.closest("[data-settle]"); if(st){ settleFixture(+st.dataset.settle, st.dataset.res); return; }
+
+  // owner team mgmt
+  const rl=e.target.closest("[data-role]"); if(rl){ setRole(+rl.dataset.role, rl.dataset.set); return; }
+  const rm=e.target.closest("[data-remove]"); if(rm){ removeUser(+rm.dataset.remove); return; }
+  if(e.target.closest("#nsAdd")){ addStaff(); return; }
+
+  // app preview
+  if(e.target.closest("#appToggle")||e.target.closest("#tryApp")){ document.body.classList.toggle("appmode"); return; }
+});
+
+/* forms */
+document.addEventListener("submit",e=>{
+  if(e.target.id==="loginForm"){ e.preventDefault(); doLogin(e.target); }
+  if(e.target.id==="regForm"){ e.preventDefault(); doRegister(e.target); }
+});
+/* live search */
+document.addEventListener("input",e=>{
+  if(e.target.id==="usearch"){ $("#ubody").innerHTML=userRows(e.target.value); }
+});
+
+/* ---------- actions ---------- */
+function doLogin(f){
+  const id=f.identity.value.trim().toLowerCase(), pw=f.password.value;
+  const u=DB.users.find(x=>x.username.toLowerCase()===id||x.email.toLowerCase()===id);
+  if(!u||u.password!==pw){ $("#formerr").innerHTML='<div class="err">Incorrect login details. Try again.</div>'; return; }
+  DB.session=u.id; save(); toast("Welcome back, "+u.username+"! 🐝","ok");
+  go(u.role==="player"?"lobby":(u.role==="owner"?"owner":"staff"));
+}
+function doRegister(f){
+  const username=f.username.value.trim(), email=f.email.value.trim(), phone=f.phone.value.trim();
+  const pw=f.password.value, pw2=f.password2.value; const errs=[];
+  if(username.length<3) errs.push("Username must be at least 3 characters.");
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) errs.push("Enter a valid email address.");
+  if(pw.length<6) errs.push("Password must be at least 6 characters.");
+  if(pw!==pw2) errs.push("Passwords do not match.");
+  if(DB.users.some(u=>u.username.toLowerCase()===username.toLowerCase())) errs.push("That username is already taken.");
+  if(DB.users.some(u=>u.email.toLowerCase()===email.toLowerCase())) errs.push("That email is already registered.");
+  if(errs.length){ $("#formerr").innerHTML='<div class="err">'+errs.map(esc).join("<br>")+'</div>'; return; }
+  const u={id:nextId(),username,email,phone,password:pw,role:"player",balance:1000,createdAt:Date.now()};
+  DB.users.push(u); DB.tx.unshift({id:nextId(),userId:u.id,type:"bonus",method:"demo",amount:1000,balanceAfter:1000,note:"Welcome bonus",createdAt:Date.now()});
+  DB.session=u.id; save(); toast("Welcome to the hive, "+username+"! 🍯","ok"); go("lobby");
+}
+function placeSport(evId){
+  const u=me(); if(!u){ go("login"); return; }
+  const ev=DB.events.find(x=>x.id==evId); const pick=sportsSel[evId];
+  if(!pick){ toast("Tap Home, Draw or Away first.","bad"); return; }
+  const stake=parseFloat(document.querySelector(`[data-stake="${evId}"]`).value);
+  const odds=pick==="home"?ev.oh:pick==="draw"?ev.od:ev.oa;
+  const label=pick==="draw"?"Draw":(pick==="home"?ev.home:ev.away)+" to win";
+  try{ placeBet(u.id,"sports",ev.home+" vs "+ev.away+" — "+label,stake,odds,ev.id); }
+  catch(err){ toast(err.message,"bad"); return; }
+  save(); renderChrome(); delete sportsSel[evId];
+  toast("Bet placed! "+label+" @ "+odds.toFixed(2)+" 🐝","ok"); render();
+}
+function toggleBall(b){
+  const n=+b.dataset.n; const i=luckyPicks.indexOf(n);
+  if(i>-1){ luckyPicks.splice(i,1); b.classList.remove("pick"); }
+  else if(luckyPicks.length<6){ luckyPicks.push(n); b.classList.add("pick"); }
+  $("#lkcount").textContent=luckyPicks.length; $("#lkplay").disabled=luckyPicks.length!==6;
+}
+function doDeposit(){
+  const u=me(); const amt=parseFloat($("#depamt").value); const method=document.querySelector('input[name="depm"]:checked').value;
+  if(!(amt>0)){ toast("Enter an amount greater than zero.","bad"); return; }
+  if(method==="demo"){ walletMove(u.id,"deposit",amt,"demo","Instant demo top-up"); save(); renderChrome();
+    $("#wbal").textContent=money(u.balance); $("#txbody").innerHTML=txRows(DB.tx.filter(t=>t.userId===u.id).slice(0,15));
+    toast("Added "+money(amt)+" demo credits. 🍯","ok"); }
+  else { DB.tx.unshift({id:nextId(),userId:u.id,type:"deposit",method,amount:0,balanceAfter:u.balance,status:"pending",note:cap(method)+" deposit "+money(amt),createdAt:Date.now()}); save();
+    $("#txbody").innerHTML=txRows(DB.tx.filter(t=>t.userId===u.id).slice(0,15));
+    toast(method.toUpperCase()+" deposit recorded as PENDING — confirms via the gateway in production.","ok"); }
+}
+function doWithdraw(){
+  const u=me(); const amt=parseFloat($("#wdamt").value); const method=$("#wdm").value;
+  if(!(amt>0)){ toast("Enter an amount greater than zero.","bad"); return; }
+  if(amt>u.balance){ toast("You cannot withdraw more than your balance.","bad"); return; }
+  walletMove(u.id,"withdraw",-amt,method,"Withdrawal (pending payout)"); save(); renderChrome();
+  $("#wbal").textContent=money(u.balance); $("#txbody").innerHTML=txRows(DB.tx.filter(t=>t.userId===u.id).slice(0,15));
+  toast("Withdrawal of "+money(amt)+" via "+method.toUpperCase()+" requested. 🐝","ok");
+}
+function settleFixture(evId,res){
+  const ev=DB.events.find(e=>e.id===evId); if(!ev||ev.status!=="open") return;
+  DB.bets.filter(b=>b.game==="sports"&&b.eventId===evId&&b.status==="pending").forEach(b=>{
+    let picked=null; if(b.selection.includes("Draw"))picked="draw"; else if(b.selection.includes(ev.home+" to win"))picked="home"; else if(b.selection.includes(ev.away+" to win"))picked="away";
+    settleBet(b, picked===res?"won":"lost", "Full time: "+cap(res));
+  });
+  ev.status="settled"; ev.result=res; save(); toast("Settled "+ev.home+" vs "+ev.away+" — "+res.toUpperCase()+".","ok"); render();
+}
+function setRole(id,role){ const u=DB.users.find(x=>x.id===id); if(!u)return; u.role=role; save(); toast(u.username+" is now "+role+".","ok"); render(); }
+function removeUser(id){ if(id===me().id)return; DB.users=DB.users.filter(u=>u.id!==id); save(); toast("Account removed.","ok"); render(); }
+function addStaff(){
+  const user=$("#nsUser").value.trim(), email=$("#nsEmail").value.trim(), pass=$("#nsPass").value.trim(), role=$("#nsRole").value; const errs=[];
+  if(user.length<3) errs.push("Username must be at least 3 characters.");
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) errs.push("Enter a valid email.");
+  if(pass.length<6) errs.push("Temp password must be at least 6 characters.");
+  if(DB.users.some(u=>u.username.toLowerCase()===user.toLowerCase())) errs.push("Username already taken.");
+  if(DB.users.some(u=>u.email.toLowerCase()===email.toLowerCase())) errs.push("Email already registered.");
+  if(errs.length){ $("#staffErr").innerHTML='<div class="err">'+errs.map(esc).join("<br>")+'</div>'; return; }
+  DB.users.push({id:nextId(),username:user,email,phone:"",password:pass,role,balance:0,createdAt:Date.now()});
+  save(); toast(cap(role)+" account created for "+user+".","ok"); render();
+}
+
+/* ---------- boot ---------- */
+$("#tickspan").innerHTML = (()=>{const t="🐝 Welcome to HiveBet — the sweetest odds in the hive &nbsp;•&nbsp; Live Aviator flying now &nbsp;•&nbsp; Gold market bets settle instantly &nbsp;•&nbsp; Players · Staff · Owners, one platform &nbsp;•&nbsp; Play responsibly · 18+ &nbsp;•&nbsp; ";return t+t;})();
+render();
+</script>
+</body>
+</html>

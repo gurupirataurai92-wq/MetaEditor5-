@@ -23,14 +23,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($exists->fetch()) {
             $errors[] = 'That username or email is already taken.';
         } else {
-            // First ever account becomes admin automatically.
-            $isAdmin = (int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn() === 0 ? 1 : 0;
+            // First ever account becomes the owner automatically.
+            $isFirst = (int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn() === 0;
+            $role    = $isFirst ? 'owner' : 'player';
+            $isAdmin = $isFirst ? 1 : 0;
             $stmt = $pdo->prepare(
-                'INSERT INTO users (username, email, phone, password_hash, balance, is_admin)
-                 VALUES (?,?,?,?,?,?)'
+                'INSERT INTO users (username, email, phone, password_hash, balance, role, is_admin)
+                 VALUES (?,?,?,?,?,?,?)'
             );
             $stmt->execute([$username, $email, $phone,
-                password_hash($pass, PASSWORD_DEFAULT), WELCOME_BONUS, $isAdmin]);
+                password_hash($pass, PASSWORD_DEFAULT), WELCOME_BONUS, $role, $isAdmin]);
             $uid = (int)$pdo->lastInsertId();
 
             $pdo->prepare(
