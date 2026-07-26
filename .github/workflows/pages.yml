@@ -1,9 +1,11 @@
 name: Deploy HiveBet demo to GitHub Pages
 
 # Publishes the self-contained browser demo (hivebet/demo) as a live website.
-# One-time setup: repo Settings → Pages → Build and deployment → Source: "GitHub Actions".
-# After that (or if the enablement step below succeeds), every push here goes live at:
-#   https://<owner>.github.io/<repo>/
+#
+# ONE-TIME SETUP (owner, ~15 seconds — GitHub won't let automation do this itself):
+#   Repo → Settings → Pages → "Build and deployment" → Source: **GitHub Actions**.
+# Then re-run this workflow (Actions tab → this workflow → "Run workflow"), or push again.
+# It goes live at:  https://gurupirataurai92-wq.github.io/MetaEditor5-/
 
 on:
   push:
@@ -30,8 +32,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Configure Pages
         uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - name: Upload demo as site
         uses: actions/upload-pages-artifact@v3
         with:
