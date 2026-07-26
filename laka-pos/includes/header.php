@@ -24,7 +24,10 @@ $nav = [
 </head>
 <body>
 <header class="topbar">
-  <div class="brand">LAKA&nbsp;LAKA&nbsp;CHICKEN<span>RMS</span></div>
+  <div class="brand">
+    <img src="assets/food/bucket.svg" alt="" class="brand-logo" width="34" height="34">
+    <span class="brand-word">LAKA&nbsp;LAKA&nbsp;CHICKEN</span>
+  </div>
   <nav class="mainnav">
     <?php foreach ($nav as $file => [$label, $roles]): ?>
       <?php if ($u && in_array($u['role'], $roles, true)): ?>
@@ -38,4 +41,5 @@ $nav = [
     <a class="logout" href="logout.php">Log out</a>
   </div>
 </header>
+<div class="stripe"></div>
 <main class="page">

@@ -27,7 +27,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </head>
 <body class="login-body">
 <div class="login-card">
-  <div class="login-brand">LAKA&nbsp;LAKA<br>CHICKEN<span>RMS · AI</span></div>
+  <img src="assets/food/bucket.svg" alt="" class="login-logo" width="76" height="76">
+  <div class="login-brand">LAKA&nbsp;LAKA<br>CHICKEN<span>Crispy · Juicy · Laka</span></div>
   <?php if ($error): ?><p class="login-error"><?= e($error) ?></p><?php endif; ?>
   <form method="post" autocomplete="off">
     <label>Username

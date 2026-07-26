@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Chicken burger">
+  <g stroke="#8a5a1e" stroke-width="1.5">
+    <!-- top bun -->
+    <path d="M24 52c0-20 16-30 36-30s36 10 36 30z" fill="#E7A33C"/>
+    <path d="M24 52c0-20 16-30 36-30s36 10 36 30z" fill="#F0B85A" stroke="none"/>
+    <g fill="#fff" stroke="none"><circle cx="46" cy="38" r="1.8"/><circle cx="60" cy="33" r="1.8"/><circle cx="74" cy="38" r="1.8"/><circle cx="54" cy="44" r="1.8"/><circle cx="68" cy="44" r="1.8"/></g>
+    <!-- lettuce -->
+    <path d="M22 54c6-5 12 3 19-1s13 4 19 0 13 4 19 0 12-4 19 1l-2 6H24z" fill="#5DAE4A"/>
+    <!-- chicken fillet -->
+    <path d="M26 62h68l-3 8c-1 3-4 5-7 5H36c-3 0-6-2-7-5z" fill="#C8781E"/>
+    <!-- bottom bun -->
+    <path d="M28 78h64c3 0 5 2 5 5s-2 5-5 5H28c-3 0-5-2-5-5s2-5 5-5z" fill="#E7A33C"/>
+  </g>
+</svg>

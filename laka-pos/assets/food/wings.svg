@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Hot wings">
+  <g stroke="#B9791F" stroke-width="2.5">
+    <g fill="#E7A33C">
+      <path d="M40 78c-10 4-22-2-22-14 0-11 11-16 20-12 7 3 8 10 5 16l9 6-6 10-10-6c-2 3 .5 5 4 4z"/>
+      <circle cx="26" cy="60" r="8" fill="#F3C877"/>
+    </g>
+    <g fill="#E4002B" opacity=".85"><path d="M40 78c-10 4-22-2-22-14 0-11 11-16 20-12" fill="none" stroke="#E4002B" stroke-width="4" stroke-linecap="round"/></g>
+    <g fill="#E7A33C" transform="translate(40 6)">
+      <path d="M40 78c-10 4-22-2-22-14 0-11 11-16 20-12 7 3 8 10 5 16l9 6-6 10-10-6c-2 3 .5 5 4 4z"/>
+      <circle cx="26" cy="60" r="8" fill="#F3C877"/>
+    </g>
+    <path d="M80 84c-10 4-22-2-22-14 0-11 11-16 20-12" fill="none" stroke="#E4002B" stroke-width="4" stroke-linecap="round"/>
+  </g>
+</svg>

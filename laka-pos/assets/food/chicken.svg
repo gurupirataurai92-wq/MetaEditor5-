@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Fried chicken">
+  <g stroke="#B9791F" stroke-width="2.5">
+    <path d="M58 92c-14 6-32-2-32-20 0-16 16-24 30-18 10 4 12 15 7 24l13 9-9 14-14-9c-3 4 1 7 5 5z" fill="#E7A33C"/>
+    <circle cx="38" cy="58" r="11" fill="#F3C877"/>
+    <path d="M58 92c-14 6-32-2-32-20 0-16 16-24 30-18" fill="none" stroke="#B10021" stroke-width="4" stroke-linecap="round" opacity=".5"/>
+  </g>
+</svg>

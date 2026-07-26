@@ -44,3 +44,18 @@ function money(float $n): string
 {
     return number_format($n, 2);
 }
+
+/** Pick a food illustration for a menu item by keywords in its name. */
+function menu_icon(string $name): string
+{
+    $n = strtolower($name);
+    return match (true) {
+        str_contains($n, 'bucket')                     => 'bucket',
+        str_contains($n, 'wing')                       => 'wings',
+        str_contains($n, 'burger') || str_contains($n, 'zinger') => 'burger',
+        str_contains($n, 'fries') || str_contains($n, 'chips')   => 'fries',
+        str_contains($n, 'drink') || str_contains($n, 'soda') || str_contains($n, 'cola') => 'drink',
+        str_contains($n, 'combo') || str_contains($n, 'meal')    => 'combo',
+        default                                        => 'chicken',
+    };
+}

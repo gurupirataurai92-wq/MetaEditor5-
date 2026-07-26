@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Chicken bucket">
+  <g>
+    <!-- drumsticks poking out -->
+    <g fill="#E7A33C" stroke="#B9791F" stroke-width="2">
+      <path d="M44 44c-6-10 2-20 12-18 8 2 9 12 3 18l7 8-8 6-6-8c-5 2-9-2-8-6z"/>
+      <circle cx="46" cy="30" r="7" fill="#F3C877"/>
+      <path d="M78 46c7-9 0-20-11-18-8 1-10 11-4 18l-7 7 8 6 6-8c5 2 9-3 7-8z" transform="translate(-6,-2)"/>
+      <circle cx="70" cy="31" r="7" fill="#F3C877"/>
+    </g>
+    <!-- bucket body: striped trapezoid -->
+    <path d="M30 52h60l-8 50a6 6 0 0 1-6 5H44a6 6 0 0 1-6-5z" fill="#fff"/>
+    <clipPath id="bk"><path d="M30 52h60l-8 50a6 6 0 0 1-6 5H44a6 6 0 0 1-6-5z"/></clipPath>
+    <g clip-path="url(#bk)">
+      <rect x="30" y="50" width="9" height="60" fill="#E4002B"/>
+      <rect x="48" y="50" width="9" height="60" fill="#E4002B"/>
+      <rect x="66" y="50" width="9" height="60" fill="#E4002B"/>
+      <rect x="84" y="50" width="9" height="60" fill="#E4002B"/>
+      <rect x="30" y="66" width="60" height="12" fill="#B10021" opacity=".28"/>
+    </g>
+    <!-- rim -->
+    <rect x="26" y="46" width="68" height="12" rx="6" fill="#E4002B"/>
+    <rect x="26" y="46" width="68" height="12" rx="6" fill="none" stroke="#B10021" stroke-width="2"/>
+  </g>
+</svg>
