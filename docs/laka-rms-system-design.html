@@ -1,0 +1,720 @@
+<title>LAKA LAKA CHICKEN — RMS·AI System Design</title>
+<style>
+  :root {
+    --ground:#FFFCF6; --surface:#FFFFFF; --surface-2:#F7F0E6; --surface-3:#F2E7D6;
+    --ink:#2A1D14; --ink-soft:#6B5D4F; --muted:#9A8B7B; --line:#E9DECE;
+    --red:#D93A2B; --red-deep:#B22B1F; --gold:#E9A13B; --gold-soft:#F6D9A6;
+    --green:#2E9E68; --amber:#C9791C; --info:#3B6FB0;
+    --font-display:"Arial Black","Helvetica Neue",Helvetica,Arial,sans-serif;
+    --font-body:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --font-mono:ui-monospace,"SF Mono","SFMono-Regular",Menlo,Consolas,monospace;
+    --maxw:1100px; --r:14px;
+    --shadow:0 1px 2px rgba(42,29,20,.06),0 8px 30px rgba(42,29,20,.07);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#15100C; --surface:#1E1710; --surface-2:#261C14; --surface-3:#2E2318;
+      --ink:#F5EBDD; --ink-soft:#C9B8A5; --muted:#8E7C69; --line:#37291D;
+      --red:#F0584A; --red-deep:#F0584A; --gold:#F2B45A; --gold-soft:#5A431F;
+      --green:#4CB985; --amber:#E0A14A; --info:#7CA9DD;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.4);
+    }
+  }
+  :root[data-theme="light"]{
+    --ground:#FFFCF6; --surface:#FFFFFF; --surface-2:#F7F0E6; --surface-3:#F2E7D6;
+    --ink:#2A1D14; --ink-soft:#6B5D4F; --muted:#9A8B7B; --line:#E9DECE;
+    --red:#D93A2B; --red-deep:#B22B1F; --gold:#E9A13B; --gold-soft:#F6D9A6;
+    --green:#2E9E68; --amber:#C9791C; --info:#3B6FB0;
+    --shadow:0 1px 2px rgba(42,29,20,.06),0 8px 30px rgba(42,29,20,.07);
+  }
+  :root[data-theme="dark"]{
+    --ground:#15100C; --surface:#1E1710; --surface-2:#261C14; --surface-3:#2E2318;
+    --ink:#F5EBDD; --ink-soft:#C9B8A5; --muted:#8E7C69; --line:#37291D;
+    --red:#F0584A; --red-deep:#F0584A; --gold:#F2B45A; --gold-soft:#5A431F;
+    --green:#4CB985; --amber:#E0A14A; --info:#7CA9DD;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 34px rgba(0,0,0,.4);
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--font-body);
+    line-height:1.6;-webkit-font-smoothing:antialiased;font-size:16px}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+  a{color:var(--red-deep);text-decoration:none}
+  a:hover{text-decoration:underline}
+  h1,h2,h3{text-wrap:balance;line-height:1.1}
+
+  /* ---- utility labels ---- */
+  .eyebrow{font-family:var(--font-mono);font-size:12px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--red-deep);font-weight:600}
+  .mono{font-family:var(--font-mono)}
+  .tabnum{font-variant-numeric:tabular-nums}
+
+  /* ---- nav ---- */
+  nav{position:sticky;top:0;z-index:50;background:color-mix(in srgb,var(--ground) 88%,transparent);
+    backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  .nav-in{max-width:var(--maxw);margin:0 auto;padding:12px 24px;display:flex;align-items:center;gap:20px}
+  .nav-brand{font-family:var(--font-display);font-weight:900;letter-spacing:-.02em;font-size:15px;
+    text-transform:uppercase;color:var(--ink);display:flex;align-items:center;gap:8px}
+  .nav-brand .dot{color:var(--red)}
+  .nav-links{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap}
+  .nav-links a{font-family:var(--font-mono);font-size:12.5px;color:var(--ink-soft);
+    text-transform:uppercase;letter-spacing:.06em}
+  .nav-links a:hover{color:var(--red-deep);text-decoration:none}
+  .toggle{font-family:var(--font-mono);font-size:12px;background:var(--surface-2);
+    border:1px solid var(--line);color:var(--ink-soft);border-radius:999px;padding:6px 12px;
+    cursor:pointer}
+  .toggle:hover{border-color:var(--red)}
+  @media (max-width:820px){.nav-links{display:none}}
+
+  /* ---- hero ---- */
+  header.hero{padding:70px 0 54px;border-bottom:1px solid var(--line);position:relative;overflow:hidden}
+  header.hero::before{content:"";position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(60% 90% at 88% -10%,color-mix(in srgb,var(--gold) 22%,transparent),transparent 60%),
+               radial-gradient(50% 70% at -8% 110%,color-mix(in srgb,var(--red) 12%,transparent),transparent 60%)}
+  .hero-in{position:relative}
+  .kicker{display:inline-flex;align-items:center;gap:10px;font-family:var(--font-mono);font-size:12px;
+    letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);
+    border:1px solid var(--line);background:var(--surface);padding:6px 12px;border-radius:999px}
+  .kicker b{color:var(--red-deep)}
+  h1.title{font-family:var(--font-display);font-weight:900;letter-spacing:-.03em;
+    font-size:clamp(38px,7.2vw,74px);margin:20px 0 6px;text-transform:uppercase;line-height:.95}
+  h1.title .rms{color:var(--red);display:block}
+  .lede{font-size:clamp(17px,2.2vw,21px);color:var(--ink-soft);max-width:60ch;margin:14px 0 0}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+  .chip{font-family:var(--font-mono);font-size:12px;letter-spacing:.03em;background:var(--surface-2);
+    border:1px solid var(--line);border-radius:8px;padding:7px 11px;color:var(--ink-soft)}
+  .chip b{color:var(--ink)}
+
+  /* ---- sections ---- */
+  section{padding:58px 0;border-bottom:1px solid var(--line)}
+  .sec-head{max-width:64ch;margin-bottom:30px}
+  h2{font-family:var(--font-display);font-weight:900;letter-spacing:-.02em;
+    font-size:clamp(24px,3.6vw,34px);margin:8px 0 10px;text-transform:uppercase}
+  .sec-head p{color:var(--ink-soft);margin:0;font-size:17px}
+
+  /* ---- cards / grids ---- */
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  @media (max-width:860px){.g3,.g4{grid-template-columns:repeat(2,1fr)}}
+  @media (max-width:560px){.g2,.g3,.g4{grid-template-columns:1fr}}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:20px;
+    box-shadow:var(--shadow)}
+  .card h3{font-size:18px;margin:0 0 6px;letter-spacing:-.01em}
+  .card p{margin:0;color:var(--ink-soft);font-size:14.5px}
+
+  .num-card{position:relative;padding-top:22px}
+  .num-card .n{font-family:var(--font-mono);font-size:12px;color:var(--red);font-weight:700;
+    letter-spacing:.1em}
+  .num-card .tag{display:inline-block;margin-top:10px;font-family:var(--font-mono);font-size:11px;
+    letter-spacing:.06em;text-transform:uppercase;color:var(--gold);
+    background:var(--gold-soft);border-radius:6px;padding:3px 8px}
+
+  /* context cards */
+  .ctx{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 16px 14px;
+    display:flex;flex-direction:column;gap:8px}
+  .ctx .h{display:flex;align-items:baseline;gap:8px;justify-content:space-between}
+  .ctx .h b{font-size:16px}
+  .ctx .h .k{font-family:var(--font-mono);font-size:11px;color:var(--muted)}
+  .ctx p{margin:0;font-size:13.5px;color:var(--ink-soft)}
+  .ent{display:flex;flex-wrap:wrap;gap:5px;margin-top:2px}
+  .ent span{font-family:var(--font-mono);font-size:11px;background:var(--surface-2);
+    border:1px solid var(--line);border-radius:5px;padding:2px 7px;color:var(--ink-soft)}
+
+  /* roles table */
+  .roles{display:grid;gap:14px;grid-template-columns:repeat(3,1fr)}
+  @media (max-width:860px){.roles{grid-template-columns:1fr}}
+  .role{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .role .top{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .role .top .ic{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;
+    background:var(--surface-2);font-size:18px}
+  .role .top b{font-size:16px}
+  .role .top .r{font-family:var(--font-mono);font-size:11px;color:var(--red-deep);text-transform:uppercase;
+    letter-spacing:.06em;margin-left:auto}
+  .role ul{margin:0;padding:12px 16px 16px 30px;color:var(--ink-soft);font-size:14px}
+  .role ul li{margin:4px 0}
+  .role ul li b{color:var(--ink)}
+
+  /* diagram spec-sheet cards (always light for legibility) */
+  .diagram{background:#FFFDF7;border:1px solid #E3D6C1;border-radius:12px;padding:22px;overflow-x:auto;
+    box-shadow:var(--shadow)}
+  .diagram-cap{font-family:var(--font-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;
+    color:#9A8B7B;margin:0 0 10px}
+  .mermaid{display:flex;justify-content:center;min-width:520px}
+
+  /* feature list */
+  .feat{columns:2;column-gap:34px}
+  @media (max-width:640px){.feat{columns:1}}
+  .feat div{break-inside:avoid;padding:8px 0;border-bottom:1px solid var(--line);
+    display:flex;gap:10px;align-items:flex-start}
+  .feat div::before{content:"▸";color:var(--red);font-size:13px;line-height:1.5}
+  .feat b{color:var(--ink)}
+  .feat span{color:var(--ink-soft);font-size:14.5px}
+
+  /* stack table */
+  .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+  table{border-collapse:collapse;width:100%;min-width:560px;font-size:14.5px}
+  th,td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--muted);background:var(--surface-2)}
+  tr:last-child td{border-bottom:0}
+  td b{color:var(--ink)}
+  td.mono{color:var(--ink-soft)}
+
+  /* code / repo */
+  pre.code{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:18px 20px;
+    overflow-x:auto;font-family:var(--font-mono);font-size:13px;line-height:1.7;color:var(--ink-soft);margin:0}
+  pre.code b{color:var(--ink)}
+  pre.code .c{color:var(--red-deep)}
+
+  /* status pills for AI section */
+  .pill{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:11px;
+    padding:3px 9px;border-radius:999px;letter-spacing:.04em}
+  .pill.good{background:color-mix(in srgb,var(--green) 16%,transparent);color:var(--green)}
+  .pill.warn{background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--amber)}
+  .pill.crit{background:color-mix(in srgb,var(--red) 16%,transparent);color:var(--red-deep)}
+
+  footer{padding:40px 0 60px;color:var(--muted);font-family:var(--font-mono);font-size:12.5px}
+  footer .wrap{display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between}
+
+  :focus-visible{outline:2px solid var(--red);outline-offset:2px;border-radius:4px}
+  @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+  html{scroll-behavior:smooth}
+  .lead-quote{border-left:3px solid var(--red);padding:2px 0 2px 18px;margin:0;color:var(--ink-soft);
+    font-size:16px}
+</style>
+
+<nav>
+  <div class="nav-in">
+    <div class="nav-brand">LAKA LAKA CHICKEN <span class="dot">·</span> RMS·AI</div>
+    <div class="nav-links">
+      <a href="#contrib">Contributions</a>
+      <a href="#arch">Architecture</a>
+      <a href="#contexts">Contexts</a>
+      <a href="#data">Data</a>
+      <a href="#flow">Order Flow</a>
+      <a href="#roles">Roles</a>
+      <a href="#ai">AI</a>
+      <a href="#stack">Stack</a>
+    </div>
+    <button class="toggle" id="themeBtn" aria-label="Toggle colour theme">◐ Theme</button>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap hero-in">
+    <span class="kicker">Restaurant Management System · <b>AI-augmented</b> · Offline-first</span>
+    <h1 class="title">Laka Laka Chicken<span class="rms">RMS · AI</span></h1>
+    <p class="lede">An offline-first, AI-augmented, multi-currency <b>restaurant-management ecosystem</b>
+      for fast-food operations — from the drive-thru lane to the fryer to the owner's P&amp;L. Same
+      engineering spine as SIMS AI, rebuilt around menus, recipes, kitchen stations and dayparts.</p>
+    <div class="chips">
+      <div class="chip"><b>9</b> bounded contexts</div>
+      <div class="chip"><b>6</b> role workspaces</div>
+      <div class="chip"><b>Kitchen Display</b> + station routing</div>
+      <div class="chip"><b>Drive-thru</b> &amp; kiosk &amp; online</div>
+      <div class="chip">Multi-currency <b>USD / ZWG</b></div>
+      <div class="chip"><b>Digital-twin</b> capacity sim</div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- OVERVIEW -->
+  <section id="overview">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">01 · Overview</span>
+        <h2>One kitchen, four order channels, zero lost tickets</h2>
+        <p>The platform is a <b>client-authoritative, offline-first modular monolith</b> partitioned into
+          DDD bounded contexts. Four order channels — counter POS, self-serve kiosk, drive-thru, and an
+          online storefront — all feed a single order engine that decomposes every order into
+          station-level kitchen tickets, then posts the settled sale into finance and ingredient inventory
+          automatically. Tills and the kitchen display keep serving through a power cut or dead link; a
+          conflict-free sync engine reconciles the moment connectivity returns.</p>
+      </div>
+      <div class="grid g4">
+        <div class="card"><div class="eyebrow">Channels</div><h3>4-way ordering</h3>
+          <p>Counter, kiosk, drive-thru and online — one pricing engine, computed server-side so a tampered client can't set its own price.</p></div>
+        <div class="card"><div class="eyebrow">Kitchen</div><h3>Station routing</h3>
+          <p>Orders explode into fryer / grill / drinks / assembly tickets, sequenced by prep time so items in a basket finish together.</p></div>
+        <div class="card"><div class="eyebrow">Money</div><h3>Transaction-time FX</h3>
+          <p>Every payment stores its captured USD⇄ZWG rate as exact decimals — reports stay economically true after any devaluation.</p></div>
+        <div class="card"><div class="eyebrow">Intelligence</div><h3>Grounded AI</h3>
+          <p>Daypart demand forecasts drive prep-ahead, staffing and waste control — answered from the store's own numbers, with an evidence trail.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONTRIBUTIONS -->
+  <section id="contrib">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">02 · Engineering contributions</span>
+        <h2>Four things this system does that a generic POS doesn't</h2>
+      </div>
+      <div class="grid g2">
+        <div class="card num-card">
+          <div class="n">C1</div>
+          <h3>Prep-time-aware kitchen routing</h3>
+          <p>An order isn't one ticket — it's a set of station tasks (fryer, grill, drinks, assembly) with
+            per-item prep durations. The router back-schedules each item so a bucket, fries and a drink land
+            on the pass at the same moment, not three minutes apart.</p>
+          <span class="tag">Kitchen Display System</span>
+        </div>
+        <div class="card num-card">
+          <div class="n">C2</div>
+          <h3>Transaction-time multi-currency capture</h3>
+          <p>Every monetary event persists <span class="mono">(amount, currency, base_currency,
+            exchange_rate, rate_source, captured_at)</span> as <span class="mono">NUMERIC(18,4)</span>.
+            A sale rung at today's ZWG rate stays interpretable months later — reports convert with the
+            <i>captured</i> rate, never today's.</p>
+          <span class="tag">Finance core</span>
+        </div>
+        <div class="card num-card">
+          <div class="n">C3</div>
+          <h3>Offline-first sync that can't lose a ticket</h3>
+          <p>Orders and stock movements are immutable, client-UUID-keyed events (union-merge + dedupe =
+            idempotent retries). Two offline tills selling the last combo are <i>both</i> accepted and
+            flagged for review — never silently dropped, never double-counted.</p>
+          <span class="tag">Sync engine</span>
+        </div>
+        <div class="card num-card">
+          <div class="n">C4</div>
+          <h3>Grounded operational AI + digital twin</h3>
+          <p>Forecasts, prep-ahead plans, staffing suggestions and food-cost anomaly detection run on
+            lightweight, explainable models over the tenant's own figures. A discrete-event
+            <b>restaurant simulator</b> stress-tests staffing and menu changes before they hit the floor.</p>
+          <span class="tag">Analytics / AI</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section id="arch">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">03 · Architecture</span>
+        <h2>Client-authoritative modular monolith</h2>
+        <p>Five client surfaces over a shared REST/OpenAPI backend, a relational data tier and an ML/AI
+          service. Bounded contexts stay internally modular and independently extractable — the KDS and ML
+          inference are the first candidates to split out under load.</p>
+      </div>
+      <div class="diagram">
+        <p class="diagram-cap">Fig 4.2 — System architecture</p>
+        <pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{'primaryColor':'#F7F0E6','primaryBorderColor':'#D93A2B','primaryTextColor':'#2A1D14','lineColor':'#B22B1F','secondaryColor':'#F6D9A6','tertiaryColor':'#FFFDF7','fontFamily':'ui-monospace, Menlo, monospace','fontSize':'13px'}}}%%
+flowchart TB
+  subgraph Clients
+    KDS[Kitchen Display\nbump bar]
+    DT[Drive-thru\nlane + timer]
+    KIO[Self-serve Kiosk]
+    POS[Counter POS\nFlutter + SQLite]
+    WEB[Owner/Manager\nReact dashboard]
+    STORE[Online Storefront\nPWA]
+  end
+  subgraph Edge
+    GW[NGINX + TLS\nAPI gateway]
+  end
+  subgraph Backend[Modular Monolith - FastAPI]
+    API[REST / OpenAPI]
+    subgraph Contexts[Bounded Contexts]
+      IDN[Identity & RBAC]
+      MENU[Menu & Recipes]
+      ORD[Orders & POS]
+      KIT[Kitchen & Production]
+      INV[Inventory & Supply]
+      FIN[Finance & Tax]
+      HR[HR & Staffing]
+      SYNC[Sync Engine]
+    end
+    AIS[AI/ML Service\nforecast · anomaly · assistant]
+  end
+  subgraph Data
+    PG[(PostgreSQL\nRLS multi-tenant)]
+    RED[(Redis\ncache · queues)]
+    OBJ[(Object store\nreceipts · backups)]
+  end
+  subgraph External
+    PAY[EcoCash · PayNow · ZIPIT]
+    MSG[SMS · WhatsApp]
+    LLM[LLM provider]
+  end
+  KDS & DT & KIO & POS & WEB & STORE --> GW --> API
+  API --> IDN & MENU & ORD & KIT & INV & FIN & HR & SYNC
+  API --> PG & RED & OBJ
+  API --> AIS --> PG
+  AIS --> LLM
+  API --> PAY & MSG
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- BOUNDED CONTEXTS -->
+  <section id="contexts">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">04 · Domain model</span>
+        <h2>Nine bounded contexts</h2>
+        <p>Each context owns its data and exposes an intent-shaped API. Sales flow into Inventory and
+          Finance; Kitchen consumes Orders; Analytics reads across all three.</p>
+      </div>
+      <div class="grid g3">
+        <div class="ctx"><div class="h"><b>Identity &amp; RBAC</b><span class="k">idn</span></div>
+          <p>Tenants, shops, users, roles, JWT + TOTP 2FA. Argon2-hashed staff passwords set at hiring.</p>
+          <div class="ent"><span>Tenant</span><span>Shop</span><span>User</span><span>Role</span><span>Permission</span><span>Shift</span></div></div>
+        <div class="ctx"><div class="h"><b>Menu &amp; Recipes</b><span class="k">menu</span></div>
+          <p>Menu items, combos, modifiers and the recipe that maps each item to the ingredients it consumes.</p>
+          <div class="ent"><span>MenuItem</span><span>Combo</span><span>Modifier</span><span>Recipe</span><span>Category</span><span>Daypart</span></div></div>
+        <div class="ctx"><div class="h"><b>Orders &amp; POS</b><span class="k">ord</span></div>
+          <p>Orders across four channels, order lines with modifiers, split-currency payments, receipts, loyalty.</p>
+          <div class="ent"><span>Order</span><span>OrderLine</span><span>Payment</span><span>Channel</span><span>Receipt</span><span>Loyalty</span></div></div>
+        <div class="ctx"><div class="h"><b>Kitchen &amp; Production</b><span class="k">kit</span></div>
+          <p>The KDS. Station tickets, prep queues, prep-time sequencing, bump events and pass assembly.</p>
+          <div class="ent"><span>KitchenTicket</span><span>Station</span><span>PrepTask</span><span>BumpEvent</span><span>Pass</span></div></div>
+        <div class="ctx"><div class="h"><b>Inventory &amp; Supply</b><span class="k">inv</span></div>
+          <p>Ingredient stock, batches with expiry, immutable stock movements, suppliers, POs and waste log.</p>
+          <div class="ent"><span>Ingredient</span><span>Batch</span><span>StockMovement</span><span>Supplier</span><span>PurchaseOrder</span><span>Waste</span></div></div>
+        <div class="ctx"><div class="h"><b>Finance &amp; Tax</b><span class="k">fin</span></div>
+          <p>Journal, expenses, VAT/ZIMRA rules, exchange rates, food-cost %, per-branch P&amp;L.</p>
+          <div class="ent"><span>Account</span><span>JournalEntry</span><span>Expense</span><span>TaxRule</span><span>ExchangeRate</span><span>FoodCost</span></div></div>
+        <div class="ctx"><div class="h"><b>HR &amp; Staffing</b><span class="k">hr</span></div>
+          <p>Employees, shift rosters, clock-on/off attendance, labour cost, payroll runs and payslips.</p>
+          <div class="ent"><span>Employee</span><span>Roster</span><span>Attendance</span><span>PayrollRun</span><span>Payslip</span></div></div>
+        <div class="ctx"><div class="h"><b>Sync Engine</b><span class="k">sync</span></div>
+          <p>Lamport-clocked outbox, delta cursors, idempotent event merge, oversell conflict flags.</p>
+          <div class="ent"><span>Outbox</span><span>Cursor</span><span>LamportClock</span><span>Conflict</span></div></div>
+        <div class="ctx"><div class="h"><b>Analytics &amp; AI</b><span class="k">ai</span></div>
+          <p>Daypart forecasts, prep-ahead + staffing recommendations, waste/food-cost anomalies, assistant.</p>
+          <div class="ent"><span>Forecast</span><span>Recommendation</span><span>Anomaly</span><span>AssistantSession</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DATA MODEL -->
+  <section id="data">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">05 · Data design</span>
+        <h2>Recipe-linked, event-sourced core</h2>
+        <p>Normalised to 3NF. Orders and stock movements are immutable ledgers so inventory and finance are
+          reconstructable; every business-owned row carries a <span class="mono">tenant_id</span> under
+          PostgreSQL row-level security.</p>
+      </div>
+      <div class="diagram">
+        <p class="diagram-cap">Fig 4.5 — Core entity-relationship (abridged)</p>
+        <pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{'primaryColor':'#F7F0E6','primaryBorderColor':'#D93A2B','primaryTextColor':'#2A1D14','lineColor':'#B22B1F','fontFamily':'ui-monospace, Menlo, monospace','fontSize':'12px'}}}%%
+erDiagram
+  TENANT ||--o{ SHOP : operates
+  TENANT ||--o{ USER : employs
+  USER }o--o{ ROLE : assigned
+  SHOP ||--o{ MENU_ITEM : offers
+  MENU_ITEM ||--|{ RECIPE_LINE : "made from"
+  RECIPE_LINE }o--|| INGREDIENT : consumes
+  MENU_ITEM ||--o{ MODIFIER : "customised by"
+  INGREDIENT ||--o{ BATCH : stocked_as
+  INGREDIENT ||--o{ STOCK_MOVEMENT : records
+  SHOP ||--o{ ORDER : receives
+  ORDER ||--|{ ORDER_LINE : contains
+  ORDER_LINE }o--|| MENU_ITEM : references
+  ORDER ||--o{ PAYMENT : settled_by
+  ORDER ||--|{ KITCHEN_TICKET : routed_to
+  KITCHEN_TICKET }o--|| STATION : "cooked at"
+  KITCHEN_TICKET ||--o{ BUMP_EVENT : bumped_by
+  EXCHANGE_RATE ||--o{ PAYMENT : priced_at
+  ORDER ||--o{ STOCK_MOVEMENT : depletes
+  EMPLOYEE ||--o{ ATTENDANCE : clocks
+  ORDER ||--o{ AUDIT_LOG : audited
+        </pre>
+      </div>
+      <div class="grid g2" style="margin-top:16px">
+        <div>
+          <p class="diagram-cap">Illustrative DDL — the order ledger</p>
+          <pre class="code"><span class="c">CREATE TABLE</span> <b>order</b> (
+  id            UUID <span class="c">PRIMARY KEY</span>,   <span style="color:var(--muted)">-- client-generated</span>
+  tenant_id     UUID <span class="c">NOT NULL</span>,
+  shop_id       UUID <span class="c">NOT NULL</span>,
+  channel       TEXT <span class="c">NOT NULL</span>,   <span style="color:var(--muted)">-- counter|kiosk|drive_thru|online</span>
+  cashier_id    UUID,
+  subtotal      NUMERIC(18,4) <span class="c">NOT NULL</span>,
+  tax_amount    NUMERIC(18,4) <span class="c">NOT NULL</span>,
+  total         NUMERIC(18,4) <span class="c">NOT NULL</span>,
+  currency      CHAR(3) <span class="c">NOT NULL</span>,
+  base_currency CHAR(3) <span class="c">NOT NULL</span>,
+  exchange_rate NUMERIC(18,6) <span class="c">NOT NULL</span>,
+  rate_source   TEXT <span class="c">NOT NULL</span>,
+  status        TEXT <span class="c">NOT NULL</span>,   <span style="color:var(--muted)">-- placed|cooking|ready|served|void</span>
+  captured_at   TIMESTAMPTZ <span class="c">NOT NULL</span>
+);</pre>
+        </div>
+        <div>
+          <p class="diagram-cap">Design guarantees</p>
+          <div class="grid" style="gap:10px">
+            <div class="card" style="padding:14px 16px"><h3 style="font-size:15px">Recipe-driven depletion</h3><p>Committing an order line walks its recipe and writes exact <span class="mono">StockMovement</span> rows — food cost is derived, never guessed.</p></div>
+            <div class="card" style="padding:14px 16px"><h3 style="font-size:15px">Immutable ledgers</h3><p><span class="mono">order</span>, <span class="mono">stock_movement</span> and <span class="mono">journal_entry</span> are append-only and event-sourced.</p></div>
+            <div class="card" style="padding:14px 16px"><h3 style="font-size:15px">Tenant isolation</h3><p>Row-level security on <span class="mono">tenant_id</span> is defence-in-depth beneath application RBAC.</p></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ORDER FLOW -->
+  <section id="flow">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">06 · Order lifecycle</span>
+        <h2>From lane to pass to P&amp;L</h2>
+        <p>The same engine serves every channel. Fulfilment replays an online order exactly as an in-store
+          sale, so it lands in finance and per-branch inventory automatically.</p>
+      </div>
+      <div class="diagram">
+        <p class="diagram-cap">Fig 4.7 — Order → kitchen → settlement (offline-capable)</p>
+        <pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{'primaryColor':'#F7F0E6','primaryBorderColor':'#D93A2B','primaryTextColor':'#2A1D14','lineColor':'#B22B1F','fontFamily':'ui-monospace, Menlo, monospace','fontSize':'12px','actorBkg':'#FFFDF7','actorBorder':'#D93A2B','signalColor':'#2A1D14','labelBoxBkg':'#F6D9A6','labelBoxBorderColor':'#E9A13B'}}}%%
+sequenceDiagram
+  autonumber
+  actor C as Customer
+  participant P as POS / Kiosk / Drive-thru
+  participant O as Order Engine
+  participant K as Kitchen Display
+  participant I as Inventory
+  participant F as Finance
+  C->>P: choose combo + modifiers
+  P->>O: create order (client UUID, captured FX)
+  O->>K: route station tickets (fryer/grill/drinks)
+  Note over K: prep-time sequencing<br/>items finish together
+  K-->>O: bump items as ready
+  O->>I: deplete ingredients via recipe
+  O->>F: post sale at captured rate
+  O-->>P: receipt + loyalty points
+  P-->>C: order ready — hand out
+  Note over P,O: offline? queue in Lamport outbox,<br/>idempotent sync on reconnect
+        </pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ROLES -->
+  <section id="roles">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">07 · Role-adaptive UI</span>
+        <h2>Six workspaces, one login</h2>
+        <p>The JWT's permission grants route each person to their own workspace — enforced again
+          server-side and by row-level security.</p>
+      </div>
+      <div class="roles">
+        <div class="role">
+          <div class="top"><div class="ic">👑</div><b>Owner</b><span class="r">full</span></div>
+          <ul>
+            <li>Branch-aware <b>financial dashboard</b> — revenue, net profit &amp; food-cost % per shop</li>
+            <li>Open / close branches, hire or remove staff</li>
+            <li><b>Live Monitor</b> — god-mode view of every till &amp; kitchen pass</li>
+            <li>Payments editor with full audit trail</li>
+          </ul>
+        </div>
+        <div class="role">
+          <div class="top"><div class="ic">🧑‍💼</div><b>Manager</b><span class="r">stock+staff</span></div>
+          <ul>
+            <li>Lands on <b>Staff &amp; Roster</b> — hire, assign, clock on/off</li>
+            <li>Inventory, waste log &amp; supplier POs</li>
+            <li>Update <b>menu prices</b> inline; run daypart promos</li>
+            <li>No branch creation, no owner financials</li>
+          </ul>
+        </div>
+        <div class="role">
+          <div class="top"><div class="ic">🧾</div><b>Cashier / Till</b><span class="r">serve</span></div>
+          <ul>
+            <li>POS with <b>combos, modifiers</b> &amp; quantity steppers</li>
+            <li>Split-currency payment (part USD cash, part EcoCash)</li>
+            <li><b>Printable receipt</b> slot after every sale</li>
+            <li>Sees only their own receipts — no reports, no void</li>
+          </ul>
+        </div>
+        <div class="role">
+          <div class="top"><div class="ic">👨‍🍳</div><b>Line Cook</b><span class="r">kitchen</span></div>
+          <ul>
+            <li><b>Kitchen Display</b> — tickets by station, oldest first</li>
+            <li>Colour-coded ticket age; <b>bump bar</b> to mark ready</li>
+            <li>Prep-ahead queue driven by the daypart forecast</li>
+            <li>86 an item to instantly hide it across all channels</li>
+          </ul>
+        </div>
+        <div class="role">
+          <div class="top"><div class="ic">🚗</div><b>Drive-thru</b><span class="r">lane</span></div>
+          <ul>
+            <li>Lane order pad with <b>service timer</b> per car</li>
+            <li>Live queue depth &amp; average lane time</li>
+            <li>Pay-window handoff synced to the kitchen pass</li>
+          </ul>
+        </div>
+        <div class="role">
+          <div class="top"><div class="ic">📱</div><b>Customer</b><span class="r">online</span></div>
+          <ul>
+            <li>Public <b>storefront</b> — no login, share a link</li>
+            <li>Browse menu, customise, choose <b>delivery or pickup</b></li>
+            <li>Mobile-money checkout; prices &amp; VAT computed server-side</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AI -->
+  <section id="ai">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">08 · Intelligence layer</span>
+        <h2>AI that runs the line, not just the dashboard</h2>
+        <p>Lightweight, explainable models over the tenant's own figures — every recommendation ships with
+          the evidence it was drawn from.</p>
+      </div>
+      <div class="grid g2">
+        <div class="card"><h3>🔮 Daypart demand forecast</h3>
+          <p style="margin-bottom:10px">Per-item, per-15-minute forecasts with confidence bands feed the
+            prep-ahead queue and the roster. Rolling-origin backtest reports MAPE / RMSE / MAE.</p>
+          <span class="pill good">▲ lunch rush 12:00–13:30 · +40% wings</span>
+        </div>
+        <div class="card"><h3>🍗 Prep-ahead &amp; staffing</h3>
+          <p style="margin-bottom:10px">Converts the forecast into "drop 3 more chicken batches by 11:45"
+            and "add a second fryer cook for the dinner peak" — safety-stock maths, not vibes.</p>
+          <span class="pill warn">⚑ understaffed 18:00–19:30 · +1 line cook</span>
+        </div>
+        <div class="card"><h3>📉 Food-cost &amp; waste anomalies</h3>
+          <p style="margin-bottom:10px">Flags food-cost % drift, deep-discount abuse, void frequency,
+            oversell events and end-of-day waste outliers against each shop's own baseline.</p>
+          <span class="pill crit">✖ oil usage 2.3σ above baseline · shop #4</span>
+        </div>
+        <div class="card"><h3>🧪 Digital-twin simulator</h3>
+          <p style="margin-bottom:10px">A discrete-event restaurant sim (the LAKA LAKA CHICKEN engine)
+            stress-tests staffing, menu and pricing changes against a modelled rush <i>before</i> they hit
+            the floor — service rate, wait time and profit per scenario.</p>
+          <span class="pill good">✓ +2 fryers → service 34% → 83%</span>
+        </div>
+      </div>
+      <p class="lead-quote" style="margin-top:20px">Grounded assistant: “Why was Shop 4 down last week?” →
+        retrieves that tenant's sales, waste and roster, answers from them, and attaches the figures it
+        used. Tenant-isolated at the retrieval boundary; no cross-store leakage.</p>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section id="features">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">09 · Feature highlights</span>
+        <h2>What ships in the box</h2>
+      </div>
+      <div class="feat">
+        <div><span><b>Combos &amp; modifiers</b> — bundle pricing, "no pickle / extra hot", size upsells</span></div>
+        <div><span><b>Kitchen Display System</b> with per-station queues &amp; bump bar</span></div>
+        <div><span><b>Drive-thru</b> lane pad with per-car service timers</span></div>
+        <div><span><b>Self-serve kiosk</b> &amp; online storefront (order ahead)</span></div>
+        <div><span><b>86 / out-of-stock</b> propagates instantly across all channels</span></div>
+        <div><span><b>Recipe-linked inventory</b> — ingredient depletion &amp; live food cost</span></div>
+        <div><span><b>Batch &amp; expiry</b> tracking with FEFO waste logging</span></div>
+        <div><span><b>Split-currency payments</b> — USD cash + ZWG EcoCash on one ticket</span></div>
+        <div><span><b>Mobile-money</b> — EcoCash, OneMoney, ZIPIT, PayNow</span></div>
+        <div><span><b>VAT-inclusive ZIMRA</b> tax extraction, dependency-free PDF receipts</span></div>
+        <div><span><b>Loyalty points</b> &amp; customer accounts</span></div>
+        <div><span><b>Multi-branch tenancy</b> with per-shop P&amp;L roll-up</span></div>
+        <div><span><b>Shift rosters</b>, clock-on/off attendance &amp; labour cost</span></div>
+        <div><span><b>Immutable audit log</b> — actor, before/after, timestamp</span></div>
+        <div><span><b>Offline-first</b> tills &amp; KDS with idempotent delta sync</span></div>
+        <div><span><b>JWT + rotating refresh + TOTP 2FA</b>, Argon2 staff passwords</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STACK -->
+  <section id="stack">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow">10 · Technology stack</span>
+        <h2>Boring where it counts, sharp where it matters</h2>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Layer</th><th>Technology</th><th>Why</th></tr></thead>
+          <tbody>
+            <tr><td><b>POS / Kiosk / KDS</b></td><td class="mono">Flutter (Dart) + SQLite</td><td>One codebase → Android tills, kiosk &amp; kitchen display; offline-first local replica</td></tr>
+            <tr><td><b>Web dashboard</b></td><td class="mono">React + TypeScript + Tailwind + Recharts</td><td>Owner/manager analytics, live monitor, interactive charts</td></tr>
+            <tr><td><b>Storefront</b></td><td class="mono">React PWA + IndexedDB</td><td>Public no-login ordering, installable, works on flaky links</td></tr>
+            <tr><td><b>API backend</b></td><td class="mono">FastAPI (Python), modular monolith</td><td>Async, auto-OpenAPI, same language as the ML service</td></tr>
+            <tr><td><b>Datastore</b></td><td class="mono">PostgreSQL — RLS, NUMERIC</td><td>Financial-grade decimals &amp; row-level tenant isolation</td></tr>
+            <tr><td><b>Cache / queue</b></td><td class="mono">Redis</td><td>Sessions, rate-limiting, background PDF/SMS/report jobs</td></tr>
+            <tr><td><b>ML / AI</b></td><td class="mono">scikit-learn · Prophet · XGBoost · ONNX</td><td>Short-series daypart forecasts; portable inference</td></tr>
+            <tr><td><b>Assistant</b></td><td class="mono">LLM provider via RAG</td><td>Grounded answers over the tenant's own figures</td></tr>
+            <tr><td><b>Infra</b></td><td class="mono">Docker Compose · NGINX · GitHub Actions</td><td>Twelve-factor, one-VPS deploy, CI/CD</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="grid g2" style="margin-top:22px">
+        <div>
+          <p class="diagram-cap">Repository layout</p>
+          <pre class="code">laka-rms/
+├── <b>backend/</b>              <span class="c"># FastAPI modular monolith</span>
+│   └── app/contexts/
+│       ├── identity/       menu/       orders/
+│       ├── kitchen/        inventory/  finance/
+│       ├── hr/             syncengine/ analytics/
+├── <b>web/</b>                  <span class="c"># React admin + live monitor</span>
+├── <b>storefront/</b>           <span class="c"># public PWA ordering</span>
+├── <b>pos/</b>                  <span class="c"># Flutter tills · kiosk · KDS</span>
+├── <b>ml/</b>                   <span class="c"># forecast + backtest harness</span>
+├── <b>sim/</b>                  <span class="c"># LAKA LAKA CHICKEN digital twin</span>
+├── <b>infra/</b>                <span class="c"># compose · nginx · RLS SQL</span>
+├── <b>docs/</b>                 <span class="c"># research + manuals + diagrams</span>
+└── <b>scripts/</b>              <span class="c"># seed_demo.py</span></pre>
+        </div>
+        <div>
+          <p class="diagram-cap">Deployment — one VPS runs it all</p>
+          <pre class="code"><span class="c"># bring the whole stack up</span>
+<b>cd</b> infra
+LAKA_JWT_SECRET=$(openssl rand -hex 32) \
+POSTGRES_PASSWORD=... \
+  docker compose up -d
+
+<span class="c"># NGINX serves the dashboard + storefront,</span>
+<span class="c"># proxies /api; Postgres enforces RLS</span>
+<span class="c"># beneath application-layer RBAC.</span>
+
+<span class="c"># seed a fully-populated demo restaurant</span>
+python3 scripts/seed_demo.py
+<span class="c"># prints 4 logins: owner · manager ·</span>
+<span class="c"># cashier · line cook</span></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>LAKA LAKA CHICKEN · RMS·AI — system design dossier</span>
+    <span>Offline-first · AI-augmented · multi-currency · fast-food</span>
+  </div>
+</footer>
+
+<script>
+  (function(){
+    var btn=document.getElementById('themeBtn');
+    var root=document.documentElement;
+    function cur(){
+      var s=root.getAttribute('data-theme');
+      if(s) return s;
+      return window.matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
+    }
+    btn.addEventListener('click',function(){
+      var next=cur()==='dark'?'light':'dark';
+      root.setAttribute('data-theme',next);
+      btn.textContent=(next==='dark'?'◑':'◐')+' Theme';
+    });
+  })();
+</script>
