@@ -48,6 +48,7 @@ function status_label(string $status): string
         'sourcing_visuals' => 'Sourcing visuals',
         'captioning'       => 'Timing captions',
         'assembling'       => 'Assembling video',
+        'rendering'        => 'Rendering video',
         'done'             => 'Done',
         'failed'           => 'Failed',
     ][$status] ?? ucfirst($status);

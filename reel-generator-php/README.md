@@ -1,13 +1,26 @@
 # Reel Generator — PHP + MySQL (XAMPP)
 
-A **faceless short-form video generator** you can run locally on **XAMPP**
-(Apache + MySQL + PHP). Enter a topic; the pipeline writes a script, times a
-voiceover, sources per-scene visuals, and syncs karaoke captions — then **plays
-the finished 9:16 reel right in your browser**, driven from the database.
+A **script-to-video generator** you can run locally on **XAMPP** (Apache +
+MySQL + PHP). Enter a topic or full script, choose **realistic** or **cartoon**
+and **short** or **long**, and the pipeline writes/segments the script, times a
+voiceover, and produces a video. You can also **upload your own videos** and
+play them back. Everything is stored in a MySQL database.
 
-No API keys and no ffmpeg required: the provider steps are offline mocks that
-produce **real, stored data** (scenes + word timings). Swap any step for a real
-service (LLM / TTS / stock / ffmpeg) without changing the rest.
+## How the video actually gets made (important)
+
+Photorealistic video of humans is produced by a **third-party AI video API**
+(text-to-video or a licensed synthetic-presenter service). This app is the
+**integration + workflow layer**, not the model:
+
+- **With a provider connected** (endpoint + API key in `config/config.php`),
+  the script + options are sent to it and the returned MP4 is stored and played.
+- **With no provider** (default), the app runs in **preview mode**: it renders
+  the reel as an in-browser 9:16 animation from the database (scenes + word
+  timings) so everything works out of the box — no keys, no ffmpeg.
+
+> **Policy:** the provider integration is for text-to-video and *licensed /
+> consented* synthetic-presenter services. It must not be used to fabricate
+> videos impersonating real, identifiable individuals without their consent.
 
 ## Requirements
 
@@ -75,21 +88,39 @@ words.
 
 ```
 reel-generator-php/
-├─ index.php            home: create form + recent reels
+├─ index.php            home: create form (look/length options) + uploads + reels
 ├─ create.php           POST handler → runs the pipeline
-├─ reel.php             single reel + in-browser player
+├─ upload.php           POST handler → validates & stores an uploaded video
+├─ reel.php             single reel: rendered <video> or in-browser preview
 ├─ api.php              JSON endpoint (reel + scenes + words)
-├─ config/config.php    DB credentials + app settings
-├─ sql/schema.sql       database + tables (auto-installed or import by hand)
+├─ config/config.php    DB credentials, video-provider key, upload limits
+├─ sql/schema.sql       database + tables (auto-installed/upgraded or import by hand)
 ├─ includes/
-│  ├─ db.php            PDO connection + self-install
-│  ├─ pipeline.php      generation pipeline + data access
+│  ├─ db.php            PDO connection + self-install + schema upgrades
+│  ├─ pipeline.php      generation pipeline, uploads, data access
+│  ├─ video.php         video-provider layer (REST adapter + preview fallback)
 │  ├─ helpers.php       escaping, URLs, JSON, redirects
 │  └─ layout.php        shared page chrome
+├─ uploads/             stored uploads (script execution disabled via .htaccess)
 └─ assets/
    ├─ style.css         UI styling
-   └─ player.js         the 9:16 reel player
+   └─ player.js         the 9:16 preview player
 ```
+
+## Connecting a real video provider
+
+Set two environment variables (or edit `config/config.php`), then restart
+Apache:
+
+```
+REELGEN_VIDEO_ENDPOINT = https://your-video-api.example/v1/generate
+REELGEN_VIDEO_API_KEY  = sk-...
+```
+
+`includes/video.php` POSTs `{ script, style, length, aspect, fps }` and expects
+JSON back with either a ready `video_url` or an async `job_id`. Adapt the
+payload/response mapping to your chosen service (e.g. a text-to-video or
+licensed-avatar API). Rendered files are stored on the reel and played inline.
 
 ## Making it real (next steps)
 

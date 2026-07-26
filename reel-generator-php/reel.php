@@ -33,10 +33,14 @@ layout_header('Reel #' . $id);
         <h1 class="reel-title"><?= h($reel['topic']) ?></h1>
         <div class="reel-tags">
             <span class="status status-<?= h($reel['status']) ?>"><?= h(status_label($reel['status'])) ?></span>
+            <span class="tag"><?= h(ucfirst((string) ($reel['render_style'] ?? 'cartoon'))) ?></span>
+            <span class="tag"><?= h(ucfirst((string) ($reel['length_mode'] ?? 'short'))) ?></span>
             <span class="tag"><?= h($reel['aspect']) ?> · <?= (int) $reel['fps'] ?>fps</span>
             <span class="tag"><?= number_format((float) $reel['duration_sec'], 1) ?>s</span>
             <span class="tag"><?= count($scenes) ?> scenes</span>
-            <span class="tag"><?= h($reel['caption_style']) ?></span>
+            <?php if (!empty($reel['provider']) && $reel['provider'] !== 'preview'): ?>
+                <span class="tag">via <?= h($reel['provider']) ?></span>
+            <?php endif; ?>
         </div>
     </div>
 </section>
@@ -45,32 +49,51 @@ layout_header('Reel #' . $id);
     <div class="alert"><strong>Generation failed.</strong> <?= h($reel['error'] ?? 'Unknown error') ?></div>
 <?php endif; ?>
 
+<?php
+    $videoPath = (string) ($reel['video_path'] ?? '');
+    $hasFile   = $videoPath !== '' && !str_starts_with($videoPath, 'reel.php');
+    $videoSrc  = $hasFile
+        ? (preg_match('#^https?://#i', $videoPath) ? $videoPath : url($videoPath))
+        : null;
+?>
 <div class="reel-layout">
     <div class="player-col">
-        <div class="phone" id="player"
-             data-reel-id="<?= (int) $id ?>"
-             data-api="<?= h(url('api.php')) ?>">
-            <div class="screen">
-                <div class="notch"></div>
-                <div class="scene-bg" id="sceneBg"></div>
-                <div class="screen-top">
-                    <span class="stage-pill"><span class="live"></span> <span id="stageText">ready</span></span>
-                    <span class="ratio-tag" id="ratioText">9:16</span>
+        <?php if ($hasFile): ?>
+            <div class="phone">
+                <div class="screen">
+                    <div class="notch"></div>
+                    <video class="rendered" controls autoplay playsinline
+                           src="<?= h($videoSrc) ?>"></video>
                 </div>
-                <div class="caption-zone">
-                    <div class="caption" id="caption"></div>
-                </div>
-                <div class="progress"><i id="progressBar"></i></div>
             </div>
-        </div>
-        <div class="player-controls">
-            <button id="playBtn" type="button">▶ Play</button>
-            <span class="time"><span id="curTime">0.0</span>s / <span id="totTime"><?= number_format((float) $reel['duration_sec'], 1) ?></span>s</span>
-        </div>
-        <p class="muted small">
-            The player renders the reel from the database (scenes + word timings).
-            Wire in real footage &amp; TTS to export an MP4.
-        </p>
+            <p class="muted small">Rendered <?= h((string) ($reel['render_style'] ?? '')) ?> video via
+                <code><?= h((string) ($reel['provider'] ?? 'provider')) ?></code>.</p>
+        <?php else: ?>
+            <div class="phone" id="player"
+                 data-reel-id="<?= (int) $id ?>"
+                 data-api="<?= h(url('api.php')) ?>">
+                <div class="screen">
+                    <div class="notch"></div>
+                    <div class="scene-bg" id="sceneBg"></div>
+                    <div class="screen-top">
+                        <span class="stage-pill"><span class="live"></span> <span id="stageText">ready</span></span>
+                        <span class="ratio-tag" id="ratioText">9:16</span>
+                    </div>
+                    <div class="caption-zone">
+                        <div class="caption" id="caption"></div>
+                    </div>
+                    <div class="progress"><i id="progressBar"></i></div>
+                </div>
+            </div>
+            <div class="player-controls">
+                <button id="playBtn" type="button">▶ Play</button>
+                <span class="time"><span id="curTime">0.0</span>s / <span id="totTime"><?= number_format((float) $reel['duration_sec'], 1) ?></span>s</span>
+            </div>
+            <p class="muted small">
+                In-browser preview from the database (scenes + word timings).
+                Connect a video provider to render a real <?= h((string) ($reel['render_style'] ?? '')) ?> MP4.
+            </p>
+        <?php endif; ?>
     </div>
 
     <div class="scenes-col">

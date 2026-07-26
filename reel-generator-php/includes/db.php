@@ -97,4 +97,62 @@ function run_migrations(PDO $pdo): void
         }
         $pdo->exec($stmt);
     }
+
+    upgrade_schema($pdo);
+}
+
+/**
+ * Additive upgrades for databases created before newer columns existed.
+ * Each change is guarded by an information_schema check, so it works on both
+ * fresh and existing installs and on both MySQL and MariaDB.
+ */
+function upgrade_schema(PDO $pdo): void
+{
+    $columns = [
+        "ADD COLUMN `render_style` ENUM('realistic','cartoon') NOT NULL DEFAULT 'cartoon' AFTER `duration_sec`",
+        "ADD COLUMN `length_mode` ENUM('short','long') NOT NULL DEFAULT 'short' AFTER `render_style`",
+        "ADD COLUMN `source` ENUM('generated','uploaded') NOT NULL DEFAULT 'generated' AFTER `length_mode`",
+        "ADD COLUMN `provider` VARCHAR(64) NULL AFTER `source`",
+        "ADD COLUMN `video_path` VARCHAR(255) NULL AFTER `provider`",
+        "ADD COLUMN `external_job_id` VARCHAR(191) NULL AFTER `video_path`",
+    ];
+    $map = [
+        'render_style'   => $columns[0],
+        'length_mode'    => $columns[1],
+        'source'         => $columns[2],
+        'provider'       => $columns[3],
+        'video_path'     => $columns[4],
+        'external_job_id'=> $columns[5],
+    ];
+    foreach ($map as $col => $ddl) {
+        if (!column_exists($pdo, 'reels', $col)) {
+            $pdo->exec("ALTER TABLE `reels` {$ddl}");
+        }
+    }
+
+    // Widen the status enum to include 'rendering' if an older install predates it.
+    $stmt = $pdo->query(
+        "SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'reels' AND COLUMN_NAME = 'status'"
+    );
+    $type = (string) ($stmt->fetchColumn() ?: '');
+    if ($type !== '' && stripos($type, "'rendering'") === false) {
+        $pdo->exec(
+            "ALTER TABLE `reels` MODIFY `status`
+             ENUM('queued','scripting','voicing','sourcing_visuals','captioning','assembling','rendering','done','failed')
+             NOT NULL DEFAULT 'queued'"
+        );
+    }
+}
+
+/** Whether a column exists on a table in the current database. */
+function column_exists(PDO $pdo, string $table, string $column): bool
+{
+    $stmt = $pdo->prepare(
+        'SELECT 1 FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c
+          LIMIT 1'
+    );
+    $stmt->execute([':t' => $table, ':c' => $column]);
+    return $stmt->fetchColumn() !== false;
 }

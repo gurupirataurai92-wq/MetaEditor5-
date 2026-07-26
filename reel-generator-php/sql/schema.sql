@@ -3,7 +3,7 @@
 -- Import options:
 --   * phpMyAdmin  → Import → choose this file
 --   * CLI         → mysql -u root < sql/schema.sql
---   * Automatic   → the app self-installs these tables on first run (see includes/db.php)
+--   * Automatic   → the app self-installs + upgrades on first run (see includes/db.php)
 --
 -- Safe to run repeatedly: everything uses IF NOT EXISTS.
 
@@ -22,7 +22,15 @@ CREATE TABLE IF NOT EXISTS `reels` (
   `aspect`         VARCHAR(8)    NOT NULL DEFAULT '9:16',
   `fps`            SMALLINT UNSIGNED NOT NULL DEFAULT 30,
   `duration_sec`   DECIMAL(6,2)  NOT NULL DEFAULT 0,
-  `status`         ENUM('queued','scripting','voicing','sourcing_visuals','captioning','assembling','done','failed')
+  -- Look & length options
+  `render_style`   ENUM('realistic','cartoon') NOT NULL DEFAULT 'cartoon',
+  `length_mode`    ENUM('short','long')        NOT NULL DEFAULT 'short',
+  `source`         ENUM('generated','uploaded') NOT NULL DEFAULT 'generated',
+  -- Real video-provider linkage (filled when a provider renders an actual file)
+  `provider`       VARCHAR(64)   NULL,
+  `video_path`     VARCHAR(255)  NULL,
+  `external_job_id` VARCHAR(191) NULL,
+  `status`         ENUM('queued','scripting','voicing','sourcing_visuals','captioning','assembling','rendering','done','failed')
                                  NOT NULL DEFAULT 'queued',
   `progress`       DECIMAL(4,3)  NOT NULL DEFAULT 0,
   `output_url`     VARCHAR(255)  NULL,
@@ -63,4 +71,16 @@ CREATE TABLE IF NOT EXISTS `caption_words` (
   KEY `idx_words_reel` (`reel_id`, `ordinal`),
   CONSTRAINT `fk_words_reel`  FOREIGN KEY (`reel_id`)  REFERENCES `reels`  (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_words_scene` FOREIGN KEY (`scene_id`) REFERENCES `scenes` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- User-uploaded videos (source clips or finished videos to host/play).
+CREATE TABLE IF NOT EXISTS `uploads` (
+  `id`            INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `original_name` VARCHAR(255) NOT NULL,
+  `stored_path`   VARCHAR(255) NOT NULL,
+  `mime`          VARCHAR(100) NOT NULL,
+  `size_bytes`    BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  `created_at`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_uploads_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
