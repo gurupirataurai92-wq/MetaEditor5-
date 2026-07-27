@@ -160,4 +160,14 @@ footer.wrap { display: flex; justify-content: space-between; gap: 14px; flex-wra
 /* provider-rendered video in the phone frame */
 .phone video.rendered { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; border-radius: 22px; background: #000; }
 
+/* audio + per-character voices */
+.player-controls .mute { padding: 8px 12px; margin-left: auto; }
+.voices { display: flex; flex-direction: column; gap: 6px; width: 100%; max-width: 300px; margin-top: 12px; }
+.voice-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 6px 10px; }
+.voice-row .nm { font-weight: 650; }
+.voice-row .spk { color: var(--faint); }
+.voice-row .tone { font-family: var(--mono); font-size: 11px; color: var(--violet); margin-left: auto; }
+.audio-note { margin: 6px 0 0; }
+.scene-speaker { font-family: var(--mono); font-size: 11px; color: var(--violet); background: var(--violet-soft); padding: 1px 6px; border-radius: 5px; margin-right: 6px; }
+
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

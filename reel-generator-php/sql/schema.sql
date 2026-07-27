@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS `scenes` (
   `id`             INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `reel_id`        INT UNSIGNED NOT NULL,
   `scene_index`    SMALLINT UNSIGNED NOT NULL,
+  `speaker`        VARCHAR(64)   NOT NULL DEFAULT 'Narrator',
   `text`           TEXT          NOT NULL,
   `start_sec`      DECIMAL(6,2)  NOT NULL,
   `end_sec`        DECIMAL(6,2)  NOT NULL,

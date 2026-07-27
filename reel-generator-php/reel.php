@@ -88,9 +88,12 @@ layout_header('Reel #' . $id);
             <div class="player-controls">
                 <button id="playBtn" type="button">▶ Play</button>
                 <span class="time"><span id="curTime">0.0</span>s / <span id="totTime"><?= number_format((float) $reel['duration_sec'], 1) ?></span>s</span>
+                <button id="muteBtn" type="button" class="mute" title="Toggle sound" aria-label="Toggle sound">🔊</button>
             </div>
+            <div class="voices" id="voices"></div>
+            <p class="audio-note muted small" id="audioNote"></p>
             <p class="muted small">
-                In-browser preview from the database (scenes + word timings).
+                In-browser preview with spoken audio (scenes + per-character voices).
                 Connect a video provider to render a real <?= h((string) ($reel['render_style'] ?? '')) ?> MP4.
             </p>
         <?php endif; ?>
@@ -108,7 +111,7 @@ layout_header('Reel #' . $id);
                             <?= number_format((float) $s['start_sec'], 1) ?>–<?= number_format((float) $s['end_sec'], 1) ?>s
                         </div>
                         <div class="scene-body">
-                            <div class="scene-text"><?= h($s['text']) ?></div>
+                            <div class="scene-text"><span class="scene-speaker"><?= h($s['speaker'] ?? 'Narrator') ?></span> <?= h($s['text']) ?></div>
                             <div class="scene-visual">visual: <code><?= h($s['visual_query']) ?></code> · <?= h($s['motion']) ?></div>
                         </div>
                     </li>

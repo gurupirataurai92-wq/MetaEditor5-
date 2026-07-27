@@ -26,6 +26,7 @@ try {
         return [
             'id'        => (int) $s['id'],
             'index'     => (int) $s['scene_index'],
+            'speaker'   => $s['speaker'] ?? 'Narrator',
             'text'      => $s['text'],
             'startSec'  => (float) $s['start_sec'],
             'endSec'    => (float) $s['end_sec'],

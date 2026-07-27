@@ -87,16 +87,17 @@ function process_reel(int $reelId): void
         $sceneIds = [];
         $insScene = $pdo->prepare(
             'INSERT INTO scenes
-               (reel_id, scene_index, text, start_sec, end_sec, visual_type,
+               (reel_id, scene_index, speaker, text, start_sec, end_sec, visual_type,
                 visual_query, motion, caption_style, transition_out)
              VALUES
-               (:reel_id, :idx, :text, :start, :end, :vtype,
+               (:reel_id, :idx, :speaker, :text, :start, :end, :vtype,
                 :vquery, :motion, :cstyle, :trans)'
         );
         foreach ($scenes as $i => $s) {
             $insScene->execute([
                 ':reel_id' => $reelId,
                 ':idx'     => $i,
+                ':speaker' => $s['speaker'],
                 ':text'    => $s['text'],
                 ':start'   => $s['start_sec'],
                 ':end'     => $s['end_sec'],
@@ -224,12 +225,13 @@ function plan_scenes(string $topic, string $script, string $captionStyle, string
     $count = count($sentences);
 
     $scenes = [];
-    foreach ($sentences as $i => $text) {
-        $text = trim($text);
+    foreach ($sentences as $i => $sentence) {
+        [$speaker, $text] = parse_line(trim($sentence));
         if ($text === '') {
             continue;
         }
         $scenes[] = [
+            'speaker'        => $speaker,
             'text'           => $text,
             'start_sec'      => $i * $perScene,
             'end_sec'        => ($i + 1) * $perScene,
@@ -242,6 +244,20 @@ function plan_scenes(string $topic, string $script, string $captionStyle, string
     }
 
     return $scenes;
+}
+
+/**
+ * Splits a dialogue line "Name: text" into [speaker, text]; plain narration
+ * returns ['Narrator', text]. Used to give each character its own voice.
+ *
+ * @return array{0:string,1:string}
+ */
+function parse_line(string $sentence): array
+{
+    if (preg_match("/^([A-Za-z][\\w '.\\-]{0,26}?)\\s*:\\s*(.+)$/", $sentence, $m) && trim($m[2]) !== '') {
+        return [mb_substr(trim($m[1]), 0, 64), trim($m[2])];
+    }
+    return ['Narrator', $sentence];
 }
 
 /** Derives per-word timings spread evenly across a scene's span. */

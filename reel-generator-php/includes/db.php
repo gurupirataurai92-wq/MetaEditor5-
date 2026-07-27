@@ -130,6 +130,11 @@ function upgrade_schema(PDO $pdo): void
         }
     }
 
+    // scenes.speaker for per-character voices.
+    if (!column_exists($pdo, 'scenes', 'speaker')) {
+        $pdo->exec("ALTER TABLE `scenes` ADD COLUMN `speaker` VARCHAR(64) NOT NULL DEFAULT 'Narrator' AFTER `scene_index`");
+    }
+
     // Widen the status enum to include 'rendering' if an older install predates it.
     $stmt = $pdo->query(
         "SELECT COLUMN_TYPE FROM information_schema.COLUMNS
