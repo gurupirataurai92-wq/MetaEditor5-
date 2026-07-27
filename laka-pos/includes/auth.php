@@ -23,7 +23,7 @@ function is_logged_in(): bool
 function require_login(array $roles = []): void
 {
     if (!is_logged_in()) {
-        header('Location: index.php');
+        header('Location: staff.php');
         exit;
     }
     if ($roles && !in_array(current_user()['role'], $roles, true)) {

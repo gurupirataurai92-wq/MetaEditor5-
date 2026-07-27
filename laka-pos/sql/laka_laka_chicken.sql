@@ -96,6 +96,13 @@ CREATE TABLE orders (
   base_currency CHAR(3)       NOT NULL DEFAULT 'USD',
   exchange_rate DECIMAL(18,6) NOT NULL DEFAULT 1.000000,
   status        ENUM('placed','cooking','ready','served','void') NOT NULL DEFAULT 'placed',
+  -- customer details (used by online / self-service orders)
+  order_type     ENUM('pickup','delivery') NULL,
+  customer_name  VARCHAR(120) NULL,
+  customer_phone VARCHAR(40)  NULL,
+  address        VARCHAR(255) NULL,
+  notes          VARCHAR(255) NULL,
+  payment_status ENUM('unpaid','paid') NOT NULL DEFAULT 'unpaid',
   created_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_order_cashier FOREIGN KEY (cashier_id) REFERENCES users(id)
 ) ENGINE=InnoDB;

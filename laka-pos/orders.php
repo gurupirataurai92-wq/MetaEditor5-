@@ -20,20 +20,26 @@ require __DIR__ . '/includes/header.php';
 <div class="table-wrap">
 <table class="grid-table">
   <thead>
-    <tr><th>#</th><th>When</th><th>Channel</th><th>Items</th><th>Cashier</th><th>Pay</th><th class="r">Total</th><th>Status</th></tr>
+    <tr><th>#</th><th>When</th><th>Channel</th><th>Items</th><th>Customer / Cashier</th><th>Pay</th><th class="r">Total</th><th>Status</th></tr>
   </thead>
   <tbody>
   <?php foreach ($orders as $o):
       $itemStmt->execute([$o['id']]);
       $names = array_map(fn($r) => $r['qty'] . '× ' . $r['item_name'], $itemStmt->fetchAll());
+      if (!empty($o['customer_name'])) {
+          $who = $o['customer_name'] . ' · ' . $o['customer_phone']
+               . ' (' . ($o['order_type'] ?: 'pickup') . ')';
+      } else {
+          $who = $o['cashier'] ?? '—';
+      }
   ?>
     <tr>
       <td class="mono">#<?= (int) $o['id'] ?></td>
       <td class="mono"><?= e(date('d M H:i', strtotime($o['created_at']))) ?></td>
       <td><?= e(str_replace('_', ' ', $o['channel'])) ?></td>
       <td class="items"><?= e(implode(', ', $names)) ?></td>
-      <td><?= e($o['cashier'] ?? '—') ?></td>
-      <td><?= e($o['method'] ?? '—') ?></td>
+      <td><?= e($who) ?></td>
+      <td><?= e($o['method'] ?? '—') ?><?= ($o['payment_status'] ?? '') === 'unpaid' && $o['channel'] === 'online' ? ' <span class="badge b-placed">pending</span>' : '' ?></td>
       <td class="r mono">$<?= money((float) $o['total']) ?></td>
       <td><span class="badge b-<?= e($o['status']) ?>"><?= e($o['status']) ?></span></td>
     </tr>
