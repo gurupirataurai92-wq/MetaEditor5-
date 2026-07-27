@@ -1,0 +1,14 @@
+{
+  "name": "SIMS AI — Business Ecosystem",
+  "short_name": "SIMS AI",
+  "description": "Offline-first, AI-augmented business management for Zimbabwean SMEs.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b1220",
+  "theme_color": "#0f9d72",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

@@ -16,7 +16,7 @@ payments (EcoCash, OneMoney, ZIPIT, PayNow).
 | Directory | Contents | Status |
 |---|---|---|
 | `backend/` | FastAPI modular monolith — identity/RBAC, inventory, POS, finance, sync engine, analytics/AI, **online store** | ✅ Working, 61 passing tests |
-| `web/` | React + TypeScript + Tailwind admin dashboard (dark mode, charts, POS, AI assistant) | ✅ Working, builds clean |
+| `web/` | React + TypeScript + Tailwind admin dashboard — an installable **PWA** (dark mode, charts, POS, AI assistant) | ✅ Working, builds clean |
 | `mobile/` | Flutter offline-first app (SQLite replica, Lamport outbox, idempotent sync) | 🧩 Working skeleton |
 | `ml/` | Forecast training + rolling-origin backtest harness (MAPE/RMSE/MAE) | ✅ Runnable, zero-dep baseline |
 | `infra/` | Docker Compose (Postgres + Redis + API + NGINX), row-level-security SQL | ✅ Deployment-ready |
@@ -86,6 +86,20 @@ python3 scripts/seed_demo.py
 
 The seed prints three logins — **owner**, **manager** and **till operator** —
 sign in with each to see the three role-adaptive workspaces.
+
+## Install as an app (PWA)
+
+The dashboard is a Progressive Web App, so the same build runs on the web **and**
+installs like a native app:
+
+- **PC (Chrome/Edge):** an install icon appears in the address bar → *Install SIMS AI*.
+- **Android:** browser menu → *Add to Home screen / Install app*.
+- **Tablet / iPhone (Safari):** Share → *Add to Home Screen* — it launches full-screen.
+
+It's served over HTTPS in production (a requirement for install), registers a
+service worker for offline use, and opens in a standalone window. You sign in and
+the workspace you land on is decided by your account — owner → dashboard,
+manager → staff, till operator → point of sale.
 
 ## Production deployment
 

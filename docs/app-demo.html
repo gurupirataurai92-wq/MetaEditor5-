@@ -155,6 +155,23 @@
 
 <script>
 "use strict";
+/* Make the demo behave like an installed app: standalone launch, themed status
+   bar, and a home-screen icon (Add to Home Screen on tablets/phones). */
+(function appMeta(){
+  const head=document.head, add=(t,a)=>{const e=document.createElement(t);for(const k in a)e.setAttribute(k,a[k]);head.appendChild(e);};
+  const icon='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2a78d6"/><stop offset="1" stop-color="#12a67a"/></linearGradient></defs><rect width="64" height="64" rx="14" fill="url(#g)"/><g fill="#fff"><rect x="14" y="34" width="8" height="16" rx="2"/><rect x="28" y="26" width="8" height="24" rx="2"/><rect x="42" y="16" width="8" height="34" rx="2"/><circle cx="46" cy="10" r="4" fill="#ffd75e"/></g></svg>');
+  add('meta',{name:'theme-color',content:'#0f9d72'});
+  add('meta',{name:'apple-mobile-web-app-capable',content:'yes'});
+  add('meta',{name:'mobile-web-app-capable',content:'yes'});
+  add('meta',{name:'apple-mobile-web-app-title',content:'SIMS AI'});
+  add('meta',{name:'apple-mobile-web-app-status-bar-style',content:'black-translucent'});
+  add('meta',{name:'viewport',content:'width=device-width, initial-scale=1, viewport-fit=cover'});
+  add('link',{rel:'apple-touch-icon',href:icon});
+  const manifest={name:'SIMS AI — Business Ecosystem',short_name:'SIMS AI',display:'standalone',
+    orientation:'any',background_color:'#0b1220',theme_color:'#0f9d72',start_url:'.',
+    icons:[{src:icon,sizes:'any',type:'image/svg+xml',purpose:'any maskable'}]};
+  add('link',{rel:'manifest',href:'data:application/manifest+json,'+encodeURIComponent(JSON.stringify(manifest))});
+})();
 const $ = (s, r=document) => r.querySelector(s);
 const money = n => '$' + (Math.round(n*100)/100).toFixed(2);
 const uid = () => Math.random().toString(36).slice(2,9);
@@ -217,6 +234,13 @@ const ROLES = {
             nav:['staff','pos','inventory']},
   cashier: {label:'Till operator', desc:'The counter · sell, scan, receipts', land:'pos',
             nav:['pos','inventory']},
+};
+// The credentials entered decide the workspace — enter the owner's login and you
+// get the owner dashboard, the till's login and you get the POS, and so on.
+const ACCOUNTS = {
+  'owner@simsai.co.zw':   {password:'owner1234',   role:'owner',   name:'Rudo Ncube'},
+  'manager@simsai.co.zw': {password:'manager1234', role:'manager', name:'Nyasha Chikafu'},
+  'till@simsai.co.zw':    {password:'till1234',    role:'cashier', name:'Tatenda M.'},
 };
 const NAV = {
   dashboard:{ico:'📊',label:'Dashboard'},
@@ -296,15 +320,20 @@ function loginView(){
       <div class="card pad login-card" style="max-width:360px;width:100%">
         <h2 style="font-size:1.4rem">Welcome back</h2>
         <p class="muted small" style="margin-top:4px">Sign in to your workspace.</p>
-        <label class="field">Email<input id="li-email" type="email" placeholder="you@business.co.zw" autocomplete="username"></label>
-        <label class="field">Password<input id="li-pass" type="password" placeholder="••••••••" autocomplete="current-password"></label>
-        <button class="btn pri block" style="margin-top:16px" data-act="signin">Sign in</button>
-        <div class="lock">🔒 Passwords are encrypted and never shown to anyone — including the owner.</div>
-        <hr class="hr">
-        <div class="small muted">Try the live demo as:</div>
-        <div class="roles">
-          ${Object.entries(ROLES).map(([k,v])=>`<button class="role-btn" data-demo="${k}"><span><span class="r">${v.label}</span><br><span class="d">${v.desc}</span></span><span class="chev">→</span></button>`).join('')}
-        </div>
+        <form id="login-form">
+          <label class="field">Email<input id="li-email" type="email" placeholder="you@business.co.zw" autocomplete="username"></label>
+          <label class="field">Password<input id="li-pass" type="password" placeholder="••••••••" autocomplete="current-password"></label>
+          <div id="li-err" class="small" style="color:var(--crit);margin-top:10px;min-height:1em"></div>
+          <button type="submit" class="btn pri block" style="margin-top:6px">Sign in</button>
+        </form>
+        <div class="lock">🔒 Your workspace is decided by the account you sign in with. Passwords are encrypted and never shown inside the system.</div>
+        <details class="demo-creds">
+          <summary>Demo logins for testing</summary>
+          <div class="small muted" style="margin:8px 0 4px">Tap one to sign in, or type it above:</div>
+          <div class="roles">
+            ${Object.entries(ACCOUNTS).map(([email,a])=>`<button class="role-btn" data-demo="${a.role}"><span><span class="r">${ROLES[a.role].label}</span><br><span class="d mono">${email} · ${a.password}</span></span><span class="chev">→</span></button>`).join('')}
+          </div>
+        </details>
       </div>
     </div>
   </div>`;
@@ -475,6 +504,13 @@ function staffView(){
 let toastT;
 function toast(msg){ const el=document.createElement('div'); el.className='toast'; el.textContent=msg; document.body.appendChild(el); clearTimeout(toastT); toastT=setTimeout(()=>el.remove(),2200); }
 function go(p){ page=p; render(); }
+function doSignin(){
+  const email=($('#li-email')?.value||'').trim().toLowerCase();
+  const pass=$('#li-pass')?.value||'';
+  const acc=ACCOUNTS[email];
+  if(acc && acc.password===pass){ session={role:acc.role,name:acc.name}; page=ROLES[acc.role].land; render(); }
+  else { const er=$('#li-err'); if(er) er.textContent='Email or password is incorrect.'; }
+}
 function addToCart(id,qty=1){ const p=db.products.find(x=>x.id===id); if(!p) return; const l=cart.find(c=>c.id===id); if(l) l.qty+=qty; else cart.push({id:p.id,name:p.name,price:p.price,cost:p.cost,qty}); }
 function setQty(id,q){ q=Math.max(0,q|0); if(q===0) cart=cart.filter(c=>c.id!==id); else {const l=cart.find(c=>c.id===id); if(l)l.qty=q;} }
 
@@ -536,15 +572,18 @@ document.addEventListener('click',e=>{
   const t=e.target.closest('[data-nav],[data-act],[data-add],[data-inc],[data-dec],[data-rm],[data-duty],[data-demo]');
   if(!t) return;
   if(t.dataset.nav){ go(t.dataset.nav); return; }
-  if(t.dataset.demo){ const role=t.dataset.demo; session={role,name:ROLES[role].label}; page=ROLES[role].land; render(); return; }
+  if(t.dataset.demo){ // fill the form, then sign in — shows credential-based routing
+    const entry=Object.entries(ACCOUNTS).find(([e,v])=>v.role===t.dataset.demo);
+    if(entry){ const em=$('#li-email'); const pw=$('#li-pass'); if(em) em.value=entry[0]; if(pw) pw.value=entry[1].password;
+      session={role:entry[1].role,name:entry[1].name}; page=ROLES[entry[1].role].land; render(); }
+    return; }
   if(t.dataset.add){ addToCart(t.dataset.add,1); render(); return; }
   if(t.dataset.inc){ const l=cart.find(c=>c.id===t.dataset.inc); setQty(l.id,l.qty+1); render(); return; }
   if(t.dataset.dec){ const l=cart.find(c=>c.id===t.dataset.dec); setQty(l.id,l.qty-1); render(); return; }
   if(t.dataset.rm){ setQty(t.dataset.rm,0); render(); return; }
   if(t.dataset.duty){ const s=db.staff.find(x=>x.id===t.dataset.duty); s.onDuty=!s.onDuty; save(); toast(s.name+' is now '+(s.onDuty?'ON':'OFF')+' duty'); render(); return; }
   const a=t.dataset.act;
-  if(a==='signin'){ const email=$('#li-email')?.value||''; // demo: infer role, default owner
-      session={role:'owner',name:'Owner'}; page='dashboard'; render(); return; }
+  if(a==='signin'){ doSignin(); return; }
   if(a==='logout'){ session=null; page='dashboard'; cart=[]; render(); return; }
   if(a==='reset'){ resetDemo(); return; }
   if(a==='drawer'){ document.body.classList.toggle('drawer'); return; }
@@ -561,6 +600,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Enter'&&e.target.id==='pos-search'){ const code=e.target.value.trim(); if(code){ addByCode(code); posSearch=''; } }
 });
 document.addEventListener('submit',e=>{
+  if(e.target.id==='login-form'){ e.preventDefault(); doSignin(); return; }
   if(e.target.id==='add-form'){ e.preventDefault();
     const name=$('#np-name').value.trim(), price=parseFloat($('#np-price').value||'0'), cost=parseFloat($('#np-cost').value||'0'), qty=parseInt($('#np-qty').value||'0',10), code=$('#np-code').value.trim();
     if(!name||!code){ toast('Name and product code are required'); return; }
