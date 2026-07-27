@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ course.code }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1>{{ course.code }} — {{ course.name }}</h1>
+  <div>
+    {% if current_user.is_admin or (current_user.is_teacher and current_user.teacher and course.teacher_id == current_user.teacher.id) %}
+    <a class="btn btn-secondary" href="{{ url_for('attendance.take', course_id=course.id) }}">Attendance</a>
+    <a class="btn btn-secondary" href="{{ url_for('grades.gradebook', course_id=course.id) }}">Gradebook</a>
+    {% endif %}
+    {% if current_user.is_admin %}
+    <a class="btn btn-secondary" href="{{ url_for('courses.edit', course_id=course.id) }}">Edit</a>
+    <form class="inline-form" method="post" action="{{ url_for('courses.delete', course_id=course.id) }}"
+          onsubmit="return confirm('Delete this course?');">
+      <button class="btn btn-danger" type="submit">Delete</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <table>
+    <tr><th>Teacher</th><td>{{ course.teacher.full_name if course.teacher else '—' }}</td></tr>
+    <tr><th>Credits</th><td>{{ course.credits }}</td></tr>
+    <tr><th>Description</th><td>{{ course.description or '—' }}</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Enrolled students ({{ course.student_count }})</h2>
+  {% if course.enrollments %}
+  <table>
+    <thead><tr><th>Name</th><th>Score</th><th>Grade</th></tr></thead>
+    <tbody>
+      {% for e in course.enrollments %}
+      <tr>
+        <td>{{ e.student.full_name }}</td>
+        <td>{{ '%.0f'|format(e.score) if e.score is not none else '—' }}</td>
+        <td>{{ e.grade or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No students enrolled.</p>
+  {% endif %}
+</div>
+{% endblock %}

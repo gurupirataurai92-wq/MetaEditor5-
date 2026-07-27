@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Attendance · {{ course.code }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1>Attendance — {{ course.code }}</h1>
+  <a class="btn btn-secondary" href="{{ url_for('courses.detail', course_id=course.id) }}">Back to course</a>
+</div>
+
+<form class="toolbar" method="get">
+  <label style="display:flex; gap:0.5rem; align-items:center;">
+    Date
+    <input name="date" type="date" value="{{ on_date.isoformat() }}" style="max-width:200px;">
+  </label>
+  <button class="btn btn-secondary" type="submit">Load</button>
+</form>
+
+<div class="card">
+  {% if course.enrollments %}
+  <form method="post" action="{{ url_for('attendance.take', course_id=course.id, date=on_date.isoformat()) }}">
+    <table>
+      <thead><tr><th>Student</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for e in course.enrollments %}
+        {% set current = existing.get(e.student_id, 'present') %}
+        <tr>
+          <td>{{ e.student.full_name }}</td>
+          <td>
+            <select name="status_{{ e.student_id }}" style="max-width:180px;">
+              {% for opt in ['present', 'absent', 'late', 'excused'] %}
+              <option value="{{ opt }}" {{ 'selected' if current == opt else '' }}>{{ opt|capitalize }}</option>
+              {% endfor %}
+            </select>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div style="margin-top:1rem;"><button class="btn" type="submit">Save attendance</button></div>
+  </form>
+  {% else %}
+  <p class="muted">No students enrolled in this course.</p>
+  {% endif %}
+</div>
+{% endblock %}

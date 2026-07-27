@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ student.full_name }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1>{{ student.full_name }}</h1>
+  {% if current_user.is_admin %}
+  <div>
+    <a class="btn btn-secondary" href="{{ url_for('students.edit', student_id=student.id) }}">Edit</a>
+    <form class="inline-form" method="post" action="{{ url_for('students.delete', student_id=student.id) }}"
+          onsubmit="return confirm('Delete this student and their account?');">
+      <button class="btn btn-danger" type="submit">Delete</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Profile</h2>
+  <table>
+    <tr><th>Grade level</th><td>{{ student.grade_level or '—' }}</td></tr>
+    <tr><th>Date of birth</th><td>{{ student.date_of_birth.isoformat() if student.date_of_birth else '—' }}</td></tr>
+    <tr><th>Guardian</th><td>{{ student.guardian_name or '—' }}</td></tr>
+    <tr><th>Phone</th><td>{{ student.phone or '—' }}</td></tr>
+    <tr><th>Email</th><td>{{ student.user.email }}</td></tr>
+    <tr><th>Enrolled on</th><td>{{ student.enrolled_on.isoformat() if student.enrolled_on else '—' }}</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Enrolled courses</h2>
+  {% if student.enrollments %}
+  <table>
+    <thead><tr><th>Code</th><th>Course</th><th>Score</th><th>Grade</th>{% if current_user.is_admin %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+      {% for e in student.enrollments %}
+      <tr>
+        <td>{{ e.course.code }}</td>
+        <td>{{ e.course.name }}</td>
+        <td>{{ '%.0f'|format(e.score) if e.score is not none else '—' }}</td>
+        <td>{{ e.grade or '—' }}</td>
+        {% if current_user.is_admin %}
+        <td class="text-right">
+          <form class="inline-form" method="post" action="{{ url_for('students.drop', enrollment_id=e.id) }}"
+                onsubmit="return confirm('Remove this enrollment?');">
+            <button class="btn btn-sm btn-danger" type="submit">Drop</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Not enrolled in any courses.</p>
+  {% endif %}
+
+  {% if current_user.is_admin %}
+  <form method="post" action="{{ url_for('students.enroll', student_id=student.id) }}" style="margin-top:1rem; display:flex; gap:0.5rem; align-items:center;">
+    <select name="course_id" style="max-width:320px;">
+      <option value="">Enroll in course…</option>
+      {% for course in all_courses %}
+        <option value="{{ course.id }}">{{ course.code }} — {{ course.name }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn" type="submit">Enroll</button>
+  </form>
+  {% endif %}
+</div>
+{% endblock %}

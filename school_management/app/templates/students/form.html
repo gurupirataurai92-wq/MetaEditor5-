@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if student else 'New' }} Student{% endblock %}
+{% block content %}
+{% set d = student if student else form %}
+<div class="card" style="max-width:640px;">
+  <h1>{{ 'Edit' if student else 'New' }} Student</h1>
+  <form method="post">
+    <div class="form-row">
+      <label>First name</label>
+      <input name="first_name" value="{{ d.first_name or '' }}" required>
+    </div>
+    <div class="form-row">
+      <label>Last name</label>
+      <input name="last_name" value="{{ d.last_name or '' }}" required>
+    </div>
+    {% if not student %}
+    <div class="form-row">
+      <label>Username</label>
+      <input name="username" value="{{ form.username or '' }}" required>
+    </div>
+    <div class="form-row">
+      <label>Email</label>
+      <input name="email" type="email" value="{{ form.email or '' }}" required>
+    </div>
+    <div class="form-row">
+      <label>Password</label>
+      <input name="password" type="password" required>
+    </div>
+    {% endif %}
+    <div class="form-row">
+      <label>Grade level</label>
+      <input name="grade_level" value="{{ d.grade_level or '' }}">
+    </div>
+    <div class="form-row">
+      <label>Date of birth</label>
+      <input name="date_of_birth" type="date"
+             value="{{ student.date_of_birth.isoformat() if student and student.date_of_birth else (form.date_of_birth or '') }}">
+    </div>
+    <div class="form-row">
+      <label>Guardian name</label>
+      <input name="guardian_name" value="{{ d.guardian_name or '' }}">
+    </div>
+    <div class="form-row">
+      <label>Phone</label>
+      <input name="phone" value="{{ d.phone or '' }}">
+    </div>
+    <button class="btn" type="submit">Save</button>
+    <a class="btn btn-secondary" href="{{ url_for('students.index') }}">Cancel</a>
+  </form>
+</div>
+{% endblock %}

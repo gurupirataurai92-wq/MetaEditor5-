@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Students{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1>Students</h1>
+  {% if current_user.is_admin %}
+  <a class="btn" href="{{ url_for('students.create') }}">+ New student</a>
+  {% endif %}
+</div>
+
+<form class="toolbar" method="get">
+  <input name="q" value="{{ search }}" placeholder="Search by name…" style="max-width:280px;">
+  <button class="btn btn-secondary" type="submit">Search</button>
+</form>
+
+<div class="card">
+  {% if students %}
+  <table>
+    <thead><tr><th>Name</th><th>Grade level</th><th>Guardian</th><th>Courses</th><th></th></tr></thead>
+    <tbody>
+      {% for s in students %}
+      <tr>
+        <td><a href="{{ url_for('students.detail', student_id=s.id) }}">{{ s.full_name }}</a></td>
+        <td>{{ s.grade_level or '—' }}</td>
+        <td>{{ s.guardian_name or '—' }}</td>
+        <td>{{ s.enrollments|length }}</td>
+        <td class="text-right"><a class="btn btn-sm btn-secondary" href="{{ url_for('students.detail', student_id=s.id) }}">View</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No students found.</p>
+  {% endif %}
+</div>
+{% endblock %}

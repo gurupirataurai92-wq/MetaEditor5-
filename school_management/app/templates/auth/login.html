@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Login · School Management{% endblock %}
+{% block content %}
+<div class="login-wrapper">
+  <div class="card">
+    <h1 style="text-align:center;">🎓 SchoolMS</h1>
+    <p class="muted" style="text-align:center;">Sign in to continue</p>
+    <form method="post">
+      <div class="form-row">
+        <label for="username">Username</label>
+        <input id="username" name="username" autofocus required>
+      </div>
+      <div class="form-row">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" required>
+      </div>
+      <button class="btn" style="width:100%;" type="submit">Sign in</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

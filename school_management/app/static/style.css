@@ -1,0 +1,141 @@
+:root {
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --bg: #f1f5f9;
+  --card: #ffffff;
+  --text: #1e293b;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --danger: #dc2626;
+  --success: #16a34a;
+  --warning: #d97706;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+
+a { color: var(--primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.navbar {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  background: var(--card);
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  flex-wrap: wrap;
+}
+.brand { font-weight: 700; font-size: 1.2rem; color: var(--text); }
+.nav-links { display: flex; gap: 1rem; }
+.nav-links a { color: var(--muted); font-weight: 500; }
+.nav-links a:hover { color: var(--primary); text-decoration: none; }
+.nav-user { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; font-size: 0.9rem; }
+
+.badge {
+  background: var(--primary);
+  color: #fff;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.container { max-width: 960px; margin: 2rem auto; padding: 0 1.5rem; }
+
+.flash {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  border: 1px solid transparent;
+}
+.flash-success { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+.flash-danger  { background: #fee2e2; color: #991b1b; border-color: #fecaca; }
+.flash-warning { background: #fef3c7; color: #92400e; border-color: #fde68a; }
+.flash-info    { background: #dbeafe; color: #1e40af; border-color: #bfdbfe; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+h1, h2, h3 { margin-top: 0; }
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.stat {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  text-align: center;
+}
+.stat .value { font-size: 2rem; font-weight: 700; color: var(--primary); }
+.stat .label { color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+tr:last-child td { border-bottom: none; }
+
+.btn {
+  display: inline-block;
+  background: var(--primary);
+  color: #fff;
+  padding: 0.55rem 1rem;
+  border-radius: 8px;
+  border: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+}
+.btn:hover { background: var(--primary-dark); text-decoration: none; }
+.btn-secondary { background: #e2e8f0; color: var(--text); }
+.btn-secondary:hover { background: #cbd5e1; }
+.btn-danger { background: var(--danger); }
+.btn-danger:hover { background: #b91c1c; }
+.btn-sm { padding: 0.35rem 0.7rem; font-size: 0.8rem; }
+
+.form-row { margin-bottom: 1rem; }
+.form-row label { display: block; font-weight: 500; margin-bottom: 0.3rem; font-size: 0.9rem; }
+input, select, textarea {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-family: inherit;
+}
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--primary); border-color: var(--primary); }
+
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.inline-form { display: inline; }
+.muted { color: var(--muted); }
+.text-right { text-align: right; }
+
+.pill { padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; }
+.pill-present { background: #dcfce7; color: #166534; }
+.pill-absent  { background: #fee2e2; color: #991b1b; }
+.pill-late    { background: #fef3c7; color: #92400e; }
+.pill-excused { background: #dbeafe; color: #1e40af; }
+
+.login-wrapper { max-width: 380px; margin: 6rem auto; }
+.footer { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 2rem 0; }

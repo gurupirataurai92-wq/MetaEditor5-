@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if course else 'New' }} Course{% endblock %}
+{% block content %}
+{% set d = course if course else form %}
+<div class="card" style="max-width:640px;">
+  <h1>{{ 'Edit' if course else 'New' }} Course</h1>
+  <form method="post">
+    <div class="form-row">
+      <label>Course code</label>
+      <input name="code" value="{{ d.code or '' }}" {{ 'readonly' if course else 'required' }}>
+    </div>
+    <div class="form-row">
+      <label>Name</label>
+      <input name="name" value="{{ d.name or '' }}" required>
+    </div>
+    <div class="form-row">
+      <label>Description</label>
+      <textarea name="description" rows="3">{{ d.description or '' }}</textarea>
+    </div>
+    <div class="form-row">
+      <label>Credits</label>
+      <input name="credits" type="number" min="0" value="{{ d.credits or 1 }}">
+    </div>
+    <div class="form-row">
+      <label>Teacher</label>
+      <select name="teacher_id">
+        <option value="">Unassigned</option>
+        {% for t in teachers %}
+        <option value="{{ t.id }}" {{ 'selected' if course and course.teacher_id == t.id else '' }}>{{ t.full_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button class="btn" type="submit">Save</button>
+    <a class="btn btn-secondary" href="{{ url_for('courses.index') }}">Cancel</a>
+  </form>
+</div>
+{% endblock %}

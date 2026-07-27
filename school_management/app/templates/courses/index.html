@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Courses{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1>Courses</h1>
+  {% if current_user.is_admin %}
+  <a class="btn" href="{{ url_for('courses.create') }}">+ New course</a>
+  {% endif %}
+</div>
+<div class="card">
+  {% if courses %}
+  <table>
+    <thead><tr><th>Code</th><th>Name</th><th>Teacher</th><th>Credits</th><th>Students</th></tr></thead>
+    <tbody>
+      {% for c in courses %}
+      <tr>
+        <td><a href="{{ url_for('courses.detail', course_id=c.id) }}">{{ c.code }}</a></td>
+        <td>{{ c.name }}</td>
+        <td>{{ c.teacher.full_name if c.teacher else '—' }}</td>
+        <td>{{ c.credits }}</td>
+        <td>{{ c.student_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No courses yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

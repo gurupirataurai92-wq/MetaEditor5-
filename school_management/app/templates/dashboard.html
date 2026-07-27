@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+<p class="muted">Welcome, {{ current_user.display_name }}.</p>
+
+<div class="stats-grid">
+  <div class="stat"><div class="value">{{ stats.students }}</div><div class="label">Students</div></div>
+  <div class="stat"><div class="value">{{ stats.teachers }}</div><div class="label">Teachers</div></div>
+  <div class="stat"><div class="value">{{ stats.courses }}</div><div class="label">Courses</div></div>
+  <div class="stat"><div class="value">{{ stats.enrollments }}</div><div class="label">Enrollments</div></div>
+</div>
+
+{% if current_user.is_admin %}
+<div class="card">
+  <h2>Quick actions</h2>
+  <a class="btn" href="{{ url_for('students.create') }}">+ New student</a>
+  <a class="btn" href="{{ url_for('teachers.create') }}">+ New teacher</a>
+  <a class="btn" href="{{ url_for('courses.create') }}">+ New course</a>
+</div>
+{% endif %}
+
+{% if my_courses is defined %}
+<div class="card">
+  <h2>My courses</h2>
+  {% if my_courses %}
+  <table>
+    <thead><tr><th>Code</th><th>Name</th><th>Students</th><th></th></tr></thead>
+    <tbody>
+      {% for course in my_courses %}
+      <tr>
+        <td><a href="{{ url_for('courses.detail', course_id=course.id) }}">{{ course.code }}</a></td>
+        <td>{{ course.name }}</td>
+        <td>{{ course.student_count }}</td>
+        <td class="text-right">
+          <a class="btn btn-sm" href="{{ url_for('attendance.take', course_id=course.id) }}">Attendance</a>
+          <a class="btn btn-sm" href="{{ url_for('grades.gradebook', course_id=course.id) }}">Gradebook</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">You are not assigned to any courses yet.</p>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if my_enrollments is defined %}
+<div class="card">
+  <h2>My courses</h2>
+  {% if my_enrollments %}
+  <table>
+    <thead><tr><th>Code</th><th>Course</th><th>Teacher</th><th>Score</th><th>Grade</th></tr></thead>
+    <tbody>
+      {% for e in my_enrollments %}
+      <tr>
+        <td>{{ e.course.code }}</td>
+        <td>{{ e.course.name }}</td>
+        <td>{{ e.course.teacher.full_name if e.course.teacher else '—' }}</td>
+        <td>{{ '%.0f'|format(e.score) if e.score is not none else '—' }}</td>
+        <td>{{ e.grade or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">You are not enrolled in any courses yet.</p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

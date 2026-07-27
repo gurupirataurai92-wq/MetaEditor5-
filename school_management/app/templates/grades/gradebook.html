@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Gradebook · {{ course.code }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1>Gradebook — {{ course.code }}</h1>
+  <a class="btn btn-secondary" href="{{ url_for('courses.detail', course_id=course.id) }}">Back to course</a>
+</div>
+
+<div class="card">
+  {% if course.enrollments %}
+  <form method="post" action="{{ url_for('grades.gradebook', course_id=course.id) }}">
+    <table>
+      <thead><tr><th>Student</th><th>Score (0–100)</th><th>Letter</th></tr></thead>
+      <tbody>
+        {% for e in course.enrollments %}
+        <tr>
+          <td>{{ e.student.full_name }}</td>
+          <td><input name="score_{{ e.id }}" type="number" step="0.1" min="0" max="100"
+                     value="{{ '%.1f'|format(e.score) if e.score is not none else '' }}" style="max-width:140px;"></td>
+          <td>{{ e.grade or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted" style="margin-top:0.5rem;">Letter grades are assigned automatically: A ≥ 90, B ≥ 80, C ≥ 70, D ≥ 60, else F.</p>
+    <div><button class="btn" type="submit">Save grades</button></div>
+  </form>
+  {% else %}
+  <p class="muted">No students enrolled in this course.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}{{ teacher.full_name }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h1>{{ teacher.full_name }}</h1>
+  {% if current_user.is_admin %}
+  <div>
+    <a class="btn btn-secondary" href="{{ url_for('teachers.edit', teacher_id=teacher.id) }}">Edit</a>
+    <form class="inline-form" method="post" action="{{ url_for('teachers.delete', teacher_id=teacher.id) }}"
+          onsubmit="return confirm('Delete this teacher and their account?');">
+      <button class="btn btn-danger" type="submit">Delete</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Profile</h2>
+  <table>
+    <tr><th>Department</th><td>{{ teacher.department or '—' }}</td></tr>
+    <tr><th>Phone</th><td>{{ teacher.phone or '—' }}</td></tr>
+    <tr><th>Email</th><td>{{ teacher.user.email }}</td></tr>
+    <tr><th>Hired on</th><td>{{ teacher.hired_on.isoformat() if teacher.hired_on else '—' }}</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Courses taught</h2>
+  {% if teacher.courses %}
+  <table>
+    <thead><tr><th>Code</th><th>Name</th><th>Students</th></tr></thead>
+    <tbody>
+      {% for c in teacher.courses %}
+      <tr>
+        <td><a href="{{ url_for('courses.detail', course_id=c.id) }}">{{ c.code }}</a></td>
+        <td>{{ c.name }}</td>
+        <td>{{ c.student_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No courses assigned.</p>
+  {% endif %}
+</div>
+{% endblock %}
