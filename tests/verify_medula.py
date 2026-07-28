@@ -529,6 +529,177 @@ p = 85.0
 for _ in range(5000): p = adapt_pct(p, 10, 500, 75)
 check("v2 adaptive: bounded at floor", p >= 70.0-1e-9, f"{p:.2f}")
 
+
+# ========================= v2.50 NEW ENGINES ============================
+
+# --- §22 Order Flow Engine: tick-volume weighted close location
+def order_flow(bars, gain=2.0):
+    """bars: list of (high, low, close, tickvol), index 0 = newest"""
+    num = den = 0.0
+    for h, l, c, v in bars:
+        rng = h - l
+        if rng <= 0: continue
+        clv = ((c-l)-(h-c))/rng
+        w = v if v > 0 else 1.0
+        num += clv*w; den += w
+    return 100.0*mtanh(gain*(num/den)) if den > 0 else 0.0
+
+buy_pressure  = [(10.0, 9.0, 9.95, 100)]*20   # closes at the highs
+sell_pressure = [(10.0, 9.0, 9.05, 100)]*20   # closes at the lows
+mid           = [(10.0, 9.0, 9.50, 100)]*20
+check("OrderFlow: closes at highs -> strong positive", order_flow(buy_pressure) > 50,
+      f"{order_flow(buy_pressure):.1f}")
+check("OrderFlow: closes at lows -> symmetric negative",
+      abs(order_flow(buy_pressure)+order_flow(sell_pressure)) < 1e-9)
+check("OrderFlow: closes mid-range -> ~0", abs(order_flow(mid)) < 1e-9)
+check("OrderFlow: bounded and volume-weighted",
+      -100 <= order_flow(buy_pressure) <= 100 and
+      order_flow([(10,9,9.95,1000)]+[(10,9,9.05,1)]*3) > 0)
+check("OrderFlow: zero-range bars skipped without dividing by zero",
+      order_flow([(10.0,10.0,10.0,50)]*5) == 0.0)
+
+# --- §23 Volatility Forecast: RiskMetrics EWMA
+def ewma_sigma(returns, lam=0.94):
+    var = None
+    for r in returns:
+        var = r*r if var is None else lam*var + (1-lam)*r*r
+    return math.sqrt(var) if var and var > 0 else 0.0
+
+calm_then_wild = [0.0001]*80 + [0.01]*20
+wild_then_calm = [0.01]*80 + [0.0001]*20
+s_cw, s_wc = ewma_sigma(calm_then_wild), ewma_sigma(wild_then_calm)
+check("VolForecast: recent turbulence dominates the forecast", s_cw > s_wc,
+      f"{s_cw:.5f} vs {s_wc:.5f}")
+# EWMA(0.94) has a ~16-bar half-life: after 20 calm bars it still retains
+# roughly 29% of the prior variance. Assert that documented decay, not a
+# faster one -- the sigma should fall well below the wild level but need
+# not reach the calm level yet.
+decay = s_wc/0.01
+check("VolForecast: calm-after-wild decays toward calm at the EWMA half-life",
+      0.30 < decay < 0.75, f"retained {decay*100:.0f}% of wild sigma")
+check("VolForecast: wild-after-calm rises most of the way to the wild level",
+      s_cw/0.01 > 0.75, f"reached {s_cw/0.01*100:.0f}% of wild sigma")
+def realized(returns):
+    m = sum(returns)/len(returns)
+    return math.sqrt(sum((r-m)**2 for r in returns)/len(returns))
+ratio = mclamp(ewma_sigma(calm_then_wild)/max(realized(calm_then_wild),1e-12), 0.25, 4.0)
+check("VolForecast: expansion gives ratio > 1 (EA sizes down)", ratio > 1.0, f"{ratio:.2f}")
+check("VolForecast: ratio clamped to sane bounds", 0.25 <= ratio <= 4.0)
+
+# --- §24 Trade Quality Score
+def trade_quality(spread_pts, point, tp_dist, regime_fit, htf, flow, volq, sessq, fc):
+    edge = mclamp(1 - (spread_pts*2*point)/tp_dist, 0, 1) if tp_dist > 0 else 0
+    q = 100*(0.24*edge + 0.20*regime_fit + 0.18*htf + 0.14*flow
+             + 0.12*volq + 0.07*sessq + 0.05*fc)
+    return mclamp(q, 0, 100)
+
+good = trade_quality(12, 0.00001, 0.0036, 1.0, 0.9, 0.85, 0.95, 1.0, 1.0)
+poor = trade_quality(35, 0.00001, 0.0009, 0.4, 0.15, 0.3, 0.4, 0.25, 0.6)
+check("Quality: excellent setup scores high", good > 85, f"{good:.1f}")
+check("Quality: poor setup scores low", poor < 45, f"{poor:.1f}")
+check("Quality: bounded 0-100", 0 <= good <= 100 and 0 <= poor <= 100)
+wide = trade_quality(200, 0.00001, 0.0036, 1.0, 0.9, 0.85, 0.95, 1.0, 1.0)
+check("Quality: spread wider than target destroys the edge term", wide < good, f"{wide:.1f}")
+
+# --- §25 Equity Curve Engine
+def equity_curve_mult(profits, n=10, cut=0.6):
+    if len(profits) < n+1: return 1.0
+    curve, run = [], 0.0
+    for p in profits:
+        run += p; curve.append(run)
+    sma = sum(curve[-n:])/n
+    return cut if curve[-1] < sma else 1.0
+rising  = [10.0]*20
+falling = [10.0]*10 + [-10.0]*10
+check("EquityCurve: rising curve -> full size", equity_curve_mult(rising) == 1.0)
+check("EquityCurve: curve below its average -> reduced size", equity_curve_mult(falling) == 0.6)
+check("EquityCurve: too few trades -> no interference", equity_curve_mult([1.0]*5) == 1.0)
+check("EquityCurve: never zero (recovery stays observable)",
+      equity_curve_mult(falling) > 0)
+
+# --- §26 Participation Watchdog
+def effective_pct(base, idle_bars, idle_start=40, every=10, step=2.0, floor=60.0):
+    if idle_bars <= idle_start: return base
+    steps = 1 + (idle_bars-idle_start)//every
+    return max(base - steps*step, floor)
+check("Watchdog: no relaxation before the idle threshold",
+      effective_pct(82, 10) == 82 and effective_pct(82, 40) == 82)
+check("Watchdog: relaxes stepwise once idle", effective_pct(82, 41) == 80.0 and
+      effective_pct(82, 51) == 78.0, f"{effective_pct(82,41)}, {effective_pct(82,51)}")
+check("Watchdog: monotonically non-increasing in idle time",
+      all(effective_pct(82, i) >= effective_pct(82, i+1) for i in range(0, 400)))
+check("Watchdog: never relaxes below its hard floor",
+      effective_pct(82, 100000) == 60.0)
+check("Watchdog: floor is above the distribution midpoint (still selective)",
+      effective_pct(82, 100000) > 50.0)
+
+# THE ANTI-STATIONARY GUARANTEE: given any market that clears the safety
+# floor at all, the watchdog must eventually produce an entry.
+random.seed(5)
+for label, scale in [("quiet market", 0.35), ("normal market", 1.0), ("volatile market", 2.0)]:
+    ring = ConfRing(500)
+    for _ in range(500): ring.push(abs(random.gauss(0, 18))*scale)
+    idle, fired_at = 0, None
+    for bar in range(600):
+        cfin = abs(random.gauss(0, 18))*scale
+        pct = ring.percentile(cfin); ring.push(cfin)
+        eff = effective_pct(82, idle)
+        if cfin >= 15.0 and pct >= eff:
+            fired_at = bar; break
+        idle += 1
+    ok = fired_at is not None
+    check(f"ANTI-STATIONARY: watchdog forces participation in {label}",
+          ok, f"never fired in 600 bars (scale {scale})")
+    if ok:
+        check(f"ANTI-STATIONARY: {label} entry within a bounded wait",
+              fired_at < 400, f"took {fired_at} bars")
+
+# floor still wins over the watchdog: a market with no conviction at all
+# must NOT be forced into a trade
+ring_dead = ConfRing(300)
+for _ in range(300): ring_dead.push(random.uniform(0, 6))
+forced = False
+for bar in range(1000):
+    cfin = random.uniform(0, 6)
+    pct = ring_dead.percentile(cfin); ring_dead.push(cfin)
+    if cfin >= 15.0 and pct >= effective_pct(82, bar):
+        forced = True; break
+check("ANTI-STATIONARY: safety floor still blocks a conviction-less market",
+      not forced, "watchdog wrongly forced a trade below the floor")
+
+# --- history seeding: percentile mode must be live immediately
+def seeded_ring(n=500, scale=1.0):
+    r = ConfRing(500)
+    for _ in range(n): r.push(abs(random.gauss(0, 20))*scale)
+    return r
+check("Seeding: distribution live from bar 1 (no 60-bar warm-up)",
+      len(seeded_ring()) >= 40)
+sr = seeded_ring()
+check("Seeding: seeded ring produces usable percentile ranks immediately",
+      0 <= sr.percentile(30) <= 100 and sr.percentile(9999) == 100.0)
+
+# --- §14 partial close + break-even
+def partial_volume(vol, pct, step=0.01, minlot=0.01):
+    part = math.floor(vol*pct/100.0/step + 1e-9)*step
+    if part < minlot or (vol-part) < minlot: return 0.0
+    return part
+check("PartialTP: splits a normal position", abs(partial_volume(0.10, 50)-0.05) < 1e-9)
+check("PartialTP: refuses to split when a leg would fall below min lot",
+      partial_volume(0.01, 50) == 0.0)
+check("PartialTP: remainder always >= min lot when a split happens",
+      all((0.10 - partial_volume(0.10, p)) >= 0.01 for p in [10, 50, 90]))
+
+def break_even(entry, direction, buf):
+    return entry + direction*buf
+check("BreakEven: long stop moves above entry by the buffer",
+      break_even(1.1000, 1, 0.0002) > 1.1000)
+check("BreakEven: short stop moves below entry by the buffer",
+      break_even(1.1000, -1, 0.0002) < 1.1000)
+
+# weights still normalize with the sixth engine added
+w = [0.22, 0.22, 0.18, 0.12, 0.13, 0.13]
+check("Confidence: six-engine weights normalize to 1", abs(sum(w)-1.0) < 1e-9)
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
