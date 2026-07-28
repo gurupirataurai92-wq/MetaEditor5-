@@ -1,27 +1,40 @@
 //+------------------------------------------------------------------+
 //|                                                Medula_Single.mq5 |
-//|  Medula EA — single-file, zero-dependency build.                 |
-//|  Same engines as MQL5/Experts/Medula/ but consolidated into one  |
-//|  file with no includes at all (raw OrderSend instead of CTrade). |
-//|  Formula references (§) point to MEDULA_FORMULAS.md.             |
-//|    §1-§7   analysis engines                                      |
-//|    §8-§9   confidence + decision                                 |
+//|  Medula EA v2.00 — single-file, zero-dependency build.           |
+//|                                                                  |
+//|  v2 CHANGE OF ARITHMETIC (why v1 never traded):                  |
+//|  v1 compared confidence to a FIXED threshold (60). Because the    |
+//|  weights sum to 1 and each engine score is capped at +/-1, the    |
+//|  attainable confidence on real data peaked near 55 AFTER the      |
+//|  volatility/spread penalties — so the threshold was unreachable   |
+//|  and the EA waited forever. v2 replaces the fixed bar with a      |
+//|  SELF-CALIBRATING one: current confidence is ranked against its   |
+//|  own rolling distribution, and the EA acts when conviction sits   |
+//|  in the top percentile band of what this symbol actually produces.|
+//|  A top decile always exists, on any symbol, timeframe or regime,  |
+//|  so the arithmetic adapts itself instead of needing hand-tuning.  |
+//|                                                                  |
+//|  Engines (formula references point to MEDULA_FORMULAS.md):       |
+//|    §1-§7   analysis        §8-§9   confidence + decision         |
 //|    §10-§14 execution / basket / scaling / exits                  |
 //|    §13,§15-§17 risk, allocation, session, correlation            |
 //|    §18-§20 analytics, adaptive tuning, logging                   |
 //|  Validation (§21) is performed offline in the Strategy Tester.   |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "1.00"
+#property version   "2.00"
 
 //============================== INPUTS ==============================
 
 input group "General"
 input long   InpMagic            = 770015;   // Magic number
-input int    InpDeviationPts     = 10;       // Max price deviation (points)
+input int    InpDeviationPts     = 20;       // Max price deviation (points)
 input bool   InpAnalyzeEveryTick = true;     // Full analysis every tick (false = per bar)
 input bool   InpVerboseLog       = true;     // Print decisions to Experts log
 input bool   InpCsvLog           = true;     // Write MedulaLog.csv (Files folder)
+input bool   InpShowPanel        = true;     // Live diagnostic panel on chart
+input bool   InpDiagnostics      = true;     // Log WHY an entry was skipped
+input int    InpDiagThrottleSec  = 300;      // Min seconds between repeats of same reason
 
 input group "Analysis"
 input int    InpErLen          = 20;    // Efficiency ratio length
@@ -39,19 +52,28 @@ input int    InpBbPeriod       = 20;    // Bollinger period
 input double InpBbDev          = 2.0;   // Bollinger deviation
 input int    InpRocLen         = 10;    // ROC length
 
-input group "Confidence & Decision"
+input group "Confidence (§8)"
 input double InpW1 = 0.25;              // Weight: structure
 input double InpW2 = 0.25;              // Weight: trend
 input double InpW3 = 0.20;              // Weight: momentum
 input double InpW4 = 0.15;              // Weight: liquidity
 input double InpW5 = 0.15;              // Weight: MTF alignment
-input double InpConfGain          = 2.5;  // Confidence tanh gain (§8)
-input double InpMaxSpreadPoints   = 30.0; // Max acceptable spread (points)
-input double InpConfThreshold     = 60.0; // Initial confidence threshold
-input double InpHysteresis        = 8.0;  // Exit hysteresis band
-input double InpMtfVetoConfluence = 50.0; // MTF veto confluence level
+input double InpConfGain          = 2.5;  // Confidence tanh gain
+input double InpMaxSpreadPoints   = 40.0; // Hard spread limit (points) - blocks entry
+input double InpSpreadFreeFrac    = 0.60; // Spread below this fraction of limit is unpenalized
 
-input group "Risk"
+input group "Decision — self-calibrating threshold (§9)"
+input bool   InpUsePercentile     = true;  // Rank confidence vs its own distribution
+input double InpEntryPercentile   = 85.0;  // Enter in top (100-this)% of recent conviction
+input int    InpConfSampleSize    = 500;   // Rolling distribution size (bars)
+input int    InpMinSamples        = 60;    // Samples needed before percentile mode engages
+input double InpMinAbsConfidence  = 18.0;  // Absolute conviction floor (never trade below)
+input double InpBootstrapConf     = 35.0;  // Threshold used while distribution fills
+input double InpExitConfFraction  = 0.55;  // Exit when conf falls below this x entry conf
+input double InpMtfVetoConfluence = 60.0;  // Block counter-HTF entries above this confluence
+input int    InpEntryCooldownSec  = 120;   // Min seconds between entries (anti-churn)
+
+input group "Risk (§13)"
 input double InpRiskPct           = 0.75;  // Risk per trade (% equity)
 input double InpSlAtrMult         = 1.5;   // SL distance (ATR mult)
 input double InpTpAtrMult         = 3.0;   // TP distance (ATR mult)
@@ -61,50 +83,51 @@ input double InpMarginSafety      = 1.5;   // Free-margin safety factor
 input double InpMaxAccountRiskPct = 4.0;   // Max total open risk (% equity)
 input double InpMaxBasketRiskPct  = 2.5;   // Max basket risk (% equity)
 input bool   InpAllowMinLot       = true;  // Round up to broker min lot (small accounts)
+input bool   InpMinLotOverride    = true;  // Let a single min-lot trade exceed the risk cap
 
-input group "Position Scaling"
+input group "Position Scaling (§12)"
 input int    InpMaxScaleIns     = 3;     // Max add-on positions
 input double InpScaleSpacingAtr = 1.0;   // Min spacing between adds (ATR mult)
 input double InpScaleDecay      = 0.7;   // Lot decay factor per add
 input double InpScaleConfK      = 0.9;   // Min confidence vs entry confidence
 
-input group "Exits"
+input group "Exits (§11, §14)"
 input double InpBasketTargetR  = 2.0;    // Basket profit target (R multiples)
 input double InpTrailAtrMult   = 3.0;    // Chandelier trail (ATR mult)
 input int    InpTrailLookback  = 22;     // Chandelier lookback (bars)
 input int    InpMaxBarsInTrade = 96;     // Time stop (bars)
 input double InpMinAcceptPL    = 0.0;    // Min P/L to bypass time stop
 
-input group "Capital Allocation"
-input double InpConfGamma     = 1.5;     // Confidence sizing exponent
+input group "Capital Allocation (§15)"
+input double InpConfGamma     = 0.8;     // Confidence sizing exponent
 input bool   InpUseKellyCap   = true;    // Apply fractional-Kelly cap
 input double InpKellyFraction = 0.25;    // Kelly fraction (quarter-Kelly)
 
-input group "Sessions"
-input bool   InpUseSessions = true;      // Enable session multipliers (GMT)
+input group "Sessions (§16, GMT)"
+input bool   InpUseSessions = true;      // Enable session multipliers
 input double InpSessAsian   = 0.6;       // Asian (00-07 GMT)
 input double InpSessLondon  = 1.0;       // London (07-12 GMT)
 input double InpSessOverlap = 1.2;       // London/NY overlap (12-16 GMT)
 input double InpSessNewYork = 1.0;       // New York (16-21 GMT)
 input double InpSessDead    = 0.3;       // Dead zone (21-24 GMT)
 
-input group "Correlation"
+input group "Correlation (§17)"
 input bool   InpUseCorrelation = true;   // Enable correlation gating
 input int    InpCorrBars       = 100;    // Correlation lookback (bars)
 input double InpCorrThreshold  = 0.70;   // |r| threshold
 input int    InpMaxCorrelated  = 2;      // Veto at this many correlated legs
 
-input group "Execution Quality"
-input double InpMaxSlippagePts   = 20.0; // Max acceptable avg slippage (points)
+input group "Execution Quality (§10)"
+input double InpMaxSlippagePts   = 30.0; // Max acceptable avg slippage (points)
 input int    InpExecWindow       = 20;   // Rolling attempts window
-input double InpExecSuspendBelow = 50.0; // Suspend entries below this score
+input double InpExecSuspendBelow = 40.0; // Suspend entries below this score
 
-input group "Adaptive"
-input bool   InpAdaptive     = true;     // Enable threshold adaptation
+input group "Performance Feedback (§19)"
+input bool   InpAdaptive     = true;     // Adapt entry percentile on performance
 input double InpAdaptEta     = 2.0;      // Learning rate
 input double InpAdaptAlpha   = 0.1;      // EMA smoothing
-input double InpThrMin       = 50.0;     // Threshold lower bound
-input double InpThrMax       = 85.0;     // Threshold upper bound
+input double InpPctMin       = 70.0;     // Entry percentile lower bound
+input double InpPctMax       = 95.0;     // Entry percentile upper bound
 input int    InpAdaptRecentN = 20;       // Recent-trades window
 
 //========================= TYPES & HELPERS ==========================
@@ -188,10 +211,12 @@ struct SMarketSnapshot
    double            liquidityScore;   // §6, -100..+100
    double            mtfAlignment;     // §7, -1..+1
    double            mtfConfluence;    // §7, 0..100
+   double            mtfValidWeight;   // §7, share of higher TFs with usable data
    bool              bullBos,bearBos;
    bool              bullChoch,bearChoch;
    double            confidenceDir;    // §8, -100..+100 (sign = direction)
    double            confidenceFinal;  // §8, 0..100 after penalties
+   double            confPercentile;   // §9, rank within rolling distribution
    double            bid,ask,close;
    double            spreadPts;
   };
@@ -235,6 +260,10 @@ double   g_trailMultEff=0.0;
 int      g_fills[];
 double   g_slips[];
 int      g_execHead=0,g_execCount=0;
+// rolling confidence distribution — the self-calibrating threshold (§9)
+double   g_confSamples[];
+int      g_confHead=0,g_confCount=0;
+double   g_entryPct;                   // adaptive entry percentile
 // analytics (§18)
 double   g_profits[];
 double   g_grossWin=0.0,g_grossLoss=0.0;
@@ -247,12 +276,17 @@ double   g_peakEquity=0.0;
 bool     g_breakerLatched=false;
 // core loop state
 SMarketSnapshot g_snap;
-double   g_thr;                        // adaptive confidence threshold (§19)
 bool     g_haveSnap=false;
 datetime g_lastBar=0;
 bool     g_breakerLogged=false;
-// logger (§20)
+datetime g_lastEntryTime=0;
+// diagnostics (§20)
 int      g_logHandle=INVALID_HANDLE;
+string   g_blockReason="waiting for data";
+string   g_lastLoggedReason="";
+datetime g_lastReasonLog=0;
+long     g_ticks=0;
+int      g_entriesTaken=0;
 
 //======================= LOGGING & DIAGNOSTICS (§20) ================
 
@@ -265,7 +299,7 @@ void LogInit(void)
       if(g_logHandle!=INVALID_HANDLE)
         {
          if(FileSize(g_logHandle)==0)
-            FileWriteString(g_logHandle,"time;symbol;regime;structure;trend;momentum;volPct;liquidity;mtf;confidence;decision;lots;reason\n");
+            FileWriteString(g_logHandle,"time;symbol;regime;structure;trend;momentum;volPct;liquidity;mtf;confidence;pctile;decision;lots;reason\n");
          FileSeek(g_logHandle,0,SEEK_END);
         }
      }
@@ -289,12 +323,12 @@ void LogEvent(const string msg)
 // structured decision record: full input vector that produced the action
 void LogDecision(const string decision,const double lots,const string reason)
   {
-   string line=StringFormat("%s;%s;%s;%.1f;%.1f;%.1f;%.1f;%.1f;%.2f;%.1f;%s;%.2f;%s",
+   string line=StringFormat("%s;%s;%s;%.1f;%.1f;%.1f;%.1f;%.1f;%.2f;%.1f;%.1f;%s;%.2f;%s",
                             TimeToString(TimeCurrent(),TIME_DATE|TIME_SECONDS),
                             _Symbol,RegimeName(g_snap.regime),
                             g_snap.structureScore,g_snap.trendScore,g_snap.momentumScore,
                             g_snap.volPercentile,g_snap.liquidityScore,g_snap.mtfAlignment,
-                            g_snap.confidenceFinal,decision,lots,reason);
+                            g_snap.confidenceFinal,g_snap.confPercentile,decision,lots,reason);
    if(InpVerboseLog)
       Print("[Medula] ",line);
    if(g_logHandle!=INVALID_HANDLE)
@@ -302,6 +336,21 @@ void LogDecision(const string decision,const double lots,const string reason)
       FileWriteString(g_logHandle,line+"\n");
       FileFlush(g_logHandle);
      }
+  }
+
+// records why no entry was taken; throttled so one persistent cause
+// cannot flood the log, but never silent the way v1 was
+void Block(const string reason)
+  {
+   g_blockReason=reason;
+   if(!InpDiagnostics)
+      return;
+   datetime now=TimeCurrent();
+   if(reason==g_lastLoggedReason && (now-g_lastReasonLog)<InpDiagThrottleSec)
+      return;
+   g_lastLoggedReason=reason;
+   g_lastReasonLog=now;
+   LogEvent("no entry — "+reason);
   }
 
 //============================ INDICATORS ============================
@@ -504,11 +553,13 @@ void UpdateStructure(void)
 //    ADX (c1) and efficiency (c3) are strength-only, so they are signed
 //    by the EMA direction to keep the composite score directional.
 double TrendScoreCore(const double adx,const double e50_0,const double e50_n,
-                      const double e20_0,const double atr,const double er)
+                      const double e20_0,const double atr,const double er,bool &valid)
   {
-   if(atr<=0.0 || adx==EMPTY_VALUE || e50_0==EMPTY_VALUE ||
+   valid=false;
+   if(atr<=0.0 || atr==EMPTY_VALUE || adx==EMPTY_VALUE || e50_0==EMPTY_VALUE ||
       e50_n==EMPTY_VALUE || e20_0==EMPTY_VALUE)
       return 0.0;
+   valid=true;
    double slope=(e50_0-e50_n)/((double)InpSlopeBars*atr);
    double c1=MTanh(adx/25.0-1.0);
    double c2=MTanh(slope*10.0);
@@ -522,12 +573,13 @@ double TrendScoreCore(const double adx,const double e50_0,const double e50_n,
 
 void UpdateTrend(void)
   {
+   bool v;
    g_snap.trendScore=TrendScoreCore(g_snap.adx,
                                     IndVal(g_hEMA50,0,0),
                                     IndVal(g_hEMA50,0,InpSlopeBars),
                                     IndVal(g_hEMA20,0,0),
                                     g_snap.atr,
-                                    g_snap.er);
+                                    g_snap.er,v);
    g_snap.trendDir=MSign(g_snap.trendScore);
   }
 
@@ -581,25 +633,39 @@ void UpdateLiquidity(void)
    g_snap.liquidityScore=100.0*MTanh((below-above)/(below+above+1.0));
   }
 
-//--- Multi-Timeframe Engine (§7): D1 0.40, H4 0.30, H1 0.20, chart 0.10
+//--- Multi-Timeframe Engine (§7): D1 0.40, H4 0.30, H1 0.20, chart 0.10.
+//    v2: a higher timeframe whose history is not yet loaded no longer
+//    counts as "disagreement" — its weight is redistributed across the
+//    timeframes that do have data, and the veto stands down if too
+//    little of the higher-timeframe picture is available.
 void UpdateMTF(void)
   {
    double w[4]={0.40,0.30,0.20,0.10};
-   double align=0.0;
+   double align=0.0,validW=0.0;
    for(int i=0;i<3;i++)
      {
+      bool valid=false;
       double er=EfficiencyRatio(_Symbol,g_mtfTf[i],InpErLen);
       double ts=TrendScoreCore(IndVal(g_hAdxTF[i],0,0),
                                IndVal(g_hEma50TF[i],0,0),
                                IndVal(g_hEma50TF[i],0,InpSlopeBars),
                                IndVal(g_hEma20TF[i],0,0),
                                IndVal(g_hAtrTF[i],0,0),
-                               er);
-      align+=w[i]*(double)MSign(ts);
+                               er,valid);
+      if(valid)
+        {
+         align+=w[i]*(double)MSign(ts);
+         validW+=w[i];
+        }
      }
    align+=w[3]*(double)g_snap.trendDir;
+   validW+=w[3];
+
+   if(validW>0.0)
+      align/=validW;                 // renormalize onto -1..+1
    g_snap.mtfAlignment=align;
    g_snap.mtfConfluence=MathAbs(align)*100.0;
+   g_snap.mtfValidWeight=validW;
   }
 
 //--- Market State Engine (§1) with the spec's priority ordering
@@ -634,14 +700,23 @@ bool AnalysisUpdate(void)
   {
    double atr=IndVal(g_hATR,0,0);
    if(atr==EMPTY_VALUE || atr<=0.0)
+     {
+      Block("indicator history not ready (ATR)");
       return false;
+     }
    double adx=IndVal(g_hADX,0,0);
    if(adx==EMPTY_VALUE)
+     {
+      Block("indicator history not ready (ADX)");
       return false;
+     }
 
    MqlTick tick;
    if(!SymbolInfoTick(_Symbol,tick))
+     {
+      Block("no tick data from broker");
       return false;
+     }
 
    g_snap.atr=atr;
    g_snap.adx=adx;
@@ -665,7 +740,11 @@ bool AnalysisUpdate(void)
 
 //================= CONFIDENCE & DECISION (§8-§9) ====================
 
-//--- Confidence Engine (§8): weighted evidence -> tanh squash -> penalties
+//--- Confidence Engine (§8): weighted evidence -> gain -> tanh -> penalties.
+//    v2 reshapes the spread penalty: a normal dealing spread costs nothing,
+//    and the cost only ramps as the spread approaches the hard limit. The
+//    v1 linear form silently halved every score at a routine 15-point
+//    spread, which is what made the fixed threshold unreachable.
 void ComputeConfidence(const double execQuality)
   {
    double raw=g_w1*(g_snap.structureScore/100.0)
@@ -674,41 +753,107 @@ void ComputeConfidence(const double execQuality)
              +g_w4*(g_snap.liquidityScore/100.0)
              +g_w5*g_snap.mtfAlignment;
 
-   // gain (§8): weights sum to 1, so |raw| <= 1 and tanh alone could never
-   // exceed 76 — the gain maps strong agreement onto the usable 0-100 scale
    g_snap.confidenceDir=100.0*MTanh(InpConfGain*raw);
    double mag=MathAbs(g_snap.confidenceDir);
 
-   double pVol   =g_snap.volSuitability/100.0;
-   double pSpread=(InpMaxSpreadPoints>0.0
-                   ? MClamp(1.0-g_snap.spreadPts/InpMaxSpreadPoints,0.0,1.0)
-                   : 1.0);
-   double pExec  =MClamp(execQuality/100.0,0.0,1.0);
+   double pVol=g_snap.volSuitability/100.0;
+
+   double pSpread=1.0;
+   if(InpMaxSpreadPoints>0.0)
+     {
+      double freePts=InpSpreadFreeFrac*InpMaxSpreadPoints;
+      if(g_snap.spreadPts>freePts)
+        {
+         double span=MathMax(InpMaxSpreadPoints-freePts,1e-9);
+         pSpread=MClamp(1.0-(g_snap.spreadPts-freePts)/span,0.0,1.0);
+        }
+     }
+
+   double pExec=MClamp(execQuality/100.0,0.0,1.0);
 
    g_snap.confidenceFinal=mag*pVol*pSpread*pExec;
   }
 
-//--- Decision Engine (§9): threshold + hysteresis + MTF veto
+//--- rolling confidence distribution: one sample per closed bar (§9)
+void PushConfidenceSample(const double conf)
+  {
+   int w=ArraySize(g_confSamples);
+   if(w<=0) return;
+   g_confSamples[g_confHead]=conf;
+   g_confHead=(g_confHead+1)%w;
+   if(g_confCount<w)
+      g_confCount++;
+  }
+
+//--- percentile rank of the current conviction within its own history.
+//    This is the self-calibrating threshold: whatever range of confidence
+//    this symbol/timeframe actually produces, the top band always exists.
+double ConfidencePercentile(const double conf)
+  {
+   if(g_confCount<=0)
+      return 50.0;
+   int below=0;
+   for(int i=0;i<g_confCount;i++)
+      if(g_confSamples[i]<conf)
+         below++;
+   return 100.0*(double)below/(double)g_confCount;
+  }
+
+bool PercentileModeActive(void)
+  {
+   return (InpUsePercentile && g_confCount>=InpMinSamples);
+  }
+
+//--- Decision Engine (§9)
 ENUM_DECISION Decide(const bool inTrade,const int basketDir)
   {
    int dir=MSign(g_snap.confidenceDir);
 
    if(!inTrade)
      {
-      if(dir!=0 && g_snap.confidenceFinal>=g_thr)
+      if(dir==0)
         {
-         // MTF veto (§7): block entries against a confident higher-TF bias
-         if(MSign(g_snap.mtfAlignment)!=dir && g_snap.mtfConfluence>InpMtfVetoConfluence)
-            return DECISION_WAIT;
-         return (dir>0 ? DECISION_BUY : DECISION_SELL);
+         Block("no directional edge (confidence sign is zero)");
+         return DECISION_WAIT;
         }
-      return DECISION_WAIT;
+      if(g_snap.confidenceFinal<InpMinAbsConfidence)
+        {
+         Block(StringFormat("conviction %.1f below absolute floor %.1f",
+                            g_snap.confidenceFinal,InpMinAbsConfidence));
+         return DECISION_WAIT;
+        }
+      if(PercentileModeActive())
+        {
+         if(g_snap.confPercentile<g_entryPct)
+           {
+            Block(StringFormat("conviction %.1f ranks at %.0f pct, needs %.0f pct",
+                               g_snap.confidenceFinal,g_snap.confPercentile,g_entryPct));
+            return DECISION_WAIT;
+           }
+        }
+      else if(g_snap.confidenceFinal<InpBootstrapConf)
+        {
+         Block(StringFormat("bootstrapping distribution (%d/%d samples), conviction %.1f < %.1f",
+                            g_confCount,InpMinSamples,g_snap.confidenceFinal,InpBootstrapConf));
+         return DECISION_WAIT;
+        }
+      // MTF veto (§7): only when enough higher-timeframe data is actually loaded
+      if(g_snap.mtfValidWeight>=0.5 &&
+         MSign(g_snap.mtfAlignment)!=dir && g_snap.mtfConfluence>InpMtfVetoConfluence)
+        {
+         Block(StringFormat("higher timeframes disagree (alignment %.2f, confluence %.0f)",
+                            g_snap.mtfAlignment,g_snap.mtfConfluence));
+         return DECISION_WAIT;
+        }
+      return (dir>0 ? DECISION_BUY : DECISION_SELL);
      }
 
-   // in trade: exit on confidence collapse or a confident direction flip
-   if(g_snap.confidenceFinal<g_thr-InpHysteresis)
+   // in trade: exit on conviction collapse relative to entry, or a flip
+   double exitFloor=MathMax(InpExitConfFraction*g_entryConfidence,InpMinAbsConfidence*0.5);
+   if(g_snap.confidenceFinal<exitFloor)
       return DECISION_EXIT;
-   if(dir!=0 && basketDir!=0 && dir!=basketDir)
+   if(dir!=0 && basketDir!=0 && dir!=basketDir &&
+      g_snap.confidenceFinal>=InpMinAbsConfidence)
       return DECISION_EXIT;
    return DECISION_HOLD;
   }
@@ -799,19 +944,27 @@ double RiskOfLots(const double lots,const double slDistPrice)
    return slDistPrice/tickSz*tickVal*lots;
   }
 
+double MinLot(void)
+  {
+   double m=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
+   return (m>0.0 ? m : 0.01);
+  }
+
 //--- broker-constraint normalization; min-lot override keeps small
 //    accounts tradable (explicit opt-in because it raises risk above plan)
 double NormalizeLots(double lots)
   {
    double step=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_STEP);
-   double minL=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
+   double minL=MinLot();
    double maxL=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MAX);
    if(step<=0.0)
       step=0.01;
    lots=MathFloor(lots/step+1e-9)*step;
    if(lots<minL)
       return (InpAllowMinLot ? minL : 0.0);
-   return MathMin(lots,maxL);
+   if(maxL>0.0)
+      lots=MathMin(lots,maxL);
+   return lots;
   }
 
 //--- §10 pre-trade margin validation with safety factor
@@ -1032,7 +1185,7 @@ void RecoverIfNeeded(const SBasket &b,const double conf,const double equity)
       g_initialLot=(b.firstEntryVolume>0.0 ? b.firstEntryVolume
                                            : b.totalVolume/MathMax(b.count,1));
       g_initialRiskAmt=equity*InpRiskPct/100.0;
-      g_entryConfidence=(conf>0.0 ? conf : InpConfThreshold);
+      g_entryConfidence=(conf>0.0 ? conf : InpBootstrapConf);
       g_trailMultEff=InpTrailAtrMult;
      }
   }
@@ -1046,11 +1199,13 @@ bool OpenMarket(const int dir,const double lots,const double atr,const double co
       return false;
    int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
    double pt=SymbolInfoDouble(_Symbol,SYMBOL_POINT);
+   double stopsLevel=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*pt;
    double price=(dir>0 ? t.ask : t.bid);
-   double sl=NormalizeDouble(dir>0 ? price-InpSlAtrMult*atr
-                                   : price+InpSlAtrMult*atr,digits);
-   double tp=NormalizeDouble(dir>0 ? price+InpTpAtrMult*atr
-                                   : price-InpTpAtrMult*atr,digits);
+
+   double slDist=MathMax(InpSlAtrMult*atr,stopsLevel+pt);
+   double tpDist=MathMax(InpTpAtrMult*atr,stopsLevel+pt);
+   double sl=NormalizeDouble(dir>0 ? price-slDist : price+slDist,digits);
+   double tp=NormalizeDouble(dir>0 ? price+tpDist : price-tpDist,digits);
 
    MqlTradeRequest req;
    MqlTradeResult  res;
@@ -1076,7 +1231,9 @@ bool OpenMarket(const int dir,const double lots,const double atr,const double co
 
    if(!filled)
      {
-      LogEvent(StringFormat("order rejected: dir=%d lots=%.2f rc=%u",dir,lots,res.retcode));
+      LogEvent(StringFormat("ORDER REJECTED by broker: dir=%d lots=%.2f retcode=%u (%s)",
+                            dir,lots,res.retcode,res.comment));
+      Block(StringFormat("broker rejected order, retcode %u",res.retcode));
       return false;
      }
 
@@ -1087,8 +1244,11 @@ bool OpenMarket(const int dir,const double lots,const double atr,const double co
       g_initialLot=lots;
       g_trailMultEff=InpTrailAtrMult;
      }
-   LogEvent(StringFormat("%s %.2f @ %.5f sl=%.5f tp=%.5f conf=%.1f slip=%.1fpts",
-                         dir>0?"BUY":"SELL",lots,res.price,sl,tp,conf,slip));
+   g_lastEntryTime=TimeCurrent();
+   g_entriesTaken++;
+   LogEvent(StringFormat("%s %.2f @ %.5f sl=%.5f tp=%.5f conf=%.1f (pct %.0f) slip=%.1fpts",
+                         dir>0?"BUY":"SELL",lots,res.price,sl,tp,conf,
+                         g_snap.confPercentile,slip));
    return true;
   }
 
@@ -1345,44 +1505,60 @@ double KellyFraction(const double frac,const double capFrac)
    return MClamp(frac*f,0.0,capFrac);
   }
 
-//--- Adaptive Parameter Engine (§19): bounded, EMA-smoothed threshold
-//    update. Recent underperformance vs. baseline raises the confidence
-//    threshold (system gets more selective); outperformance lowers it.
-void AdaptThreshold(const double riskUnit)
+//--- Adaptive Parameter Engine (§19): bounded, EMA-smoothed selectivity.
+//    Recent underperformance raises the entry percentile (be pickier);
+//    outperformance lowers it (participate more).
+void AdaptSelectivity(const double riskUnit)
   {
    if(TradesCount()<2*InpAdaptRecentN)
       return;
    double g=g_expAll-g_expRecent;                  // >0 means recent is worse
    double unit=(riskUnit>0.0 ? riskUnit : 1.0);
-   double target=MClamp(g_thr+InpAdaptEta*MTanh(g/unit),InpThrMin,InpThrMax);
-   g_thr=MClamp(InpAdaptAlpha*target+(1.0-InpAdaptAlpha)*g_thr,InpThrMin,InpThrMax);
+   double target=MClamp(g_entryPct+InpAdaptEta*MTanh(g/unit),InpPctMin,InpPctMax);
+   g_entryPct=MClamp(InpAdaptAlpha*target+(1.0-InpAdaptAlpha)*g_entryPct,
+                     InpPctMin,InpPctMax);
   }
 
 string AnalyticsSummary(void)
   {
-   return StringFormat("trades=%d winRate=%.1f%% PF=%.2f expAll=%.2f expRecent=%.2f",
-                       TradesCount(),WinRate()*100.0,ProfitFactor(),g_expAll,g_expRecent);
+   return StringFormat("trades=%d winRate=%.1f%% PF=%.2f expAll=%.2f expRecent=%.2f entryPct=%.1f",
+                       TradesCount(),WinRate()*100.0,ProfitFactor(),g_expAll,g_expRecent,g_entryPct);
   }
 
 //========================= ENTRY PIPELINE ===========================
 
-//--- §10, §12, §13, §15: sizing, gating, execution
+//--- §10, §12, §13, §15: sizing, gating, execution.
+//    Every rejection path reports its reason — v1's silent returns are
+//    what made a non-trading EA impossible to diagnose from the outside.
 void TryEnter(const int dir,const bool isInitial,const SBasket &b)
   {
-   // §10 execution circuit breaker
-   if(!ExecutionHealthy())
+   if(InpEntryCooldownSec>0 && g_lastEntryTime>0 &&
+      (TimeCurrent()-g_lastEntryTime)<InpEntryCooldownSec)
+     {
+      Block("entry cooldown active");
       return;
-   // §16 session gate (a zero multiplier means "do not trade")
+     }
+   if(!ExecutionHealthy())
+     {
+      Block(StringFormat("execution quality %.0f below %.0f — entries suspended",
+                         ExecutionQuality(),InpExecSuspendBelow));
+      return;
+     }
    double sessMult=SessionMultiplier();
    if(sessMult<=0.0)
+     {
+      Block("session multiplier is zero (no-trade window)");
       return;
-   // hard spread gate (§10) — the soft penalty already reduced confidence
+     }
    if(g_snap.spreadPts>InpMaxSpreadPoints)
+     {
+      Block(StringFormat("spread %.0f pts exceeds limit %.0f",
+                         g_snap.spreadPts,InpMaxSpreadPoints));
       return;
-   // §17 correlation hard veto
+     }
    if(CorrelationVeto(dir))
      {
-      LogEvent("entry vetoed: correlated exposure limit");
+      Block("correlated exposure limit reached on other symbols");
       return;
      }
 
@@ -1396,7 +1572,7 @@ void TryEnter(const int dir,const bool isInitial,const SBasket &b)
       riskAmt=eq*InpRiskPct/100.0*sessMult*RegimeRiskMult(g_snap.regime);
       double baseLot=LotForRisk(riskAmt,slDist);
       // §15 confidence + inverse-volatility allocation
-      double confAdj=MathPow(MClamp(g_snap.confidenceFinal/100.0,0.0,1.0),InpConfGamma);
+      double confAdj=MathPow(MClamp(g_snap.confidenceFinal/100.0,0.01,1.0),InpConfGamma);
       double volAdj=MClamp(1.0/MathMax(g_snap.vr,0.1),0.5,2.0);
       lots=baseLot*confAdj*volAdj;
       // §15 quarter-Kelly cap once there is enough trade history
@@ -1415,33 +1591,105 @@ void TryEnter(const int dir,const bool isInitial,const SBasket &b)
       riskAmt=RiskOfLots(lots,slDist);
      }
 
+   double rawLots=lots;
    lots=NormalizeLots(lots);
    if(lots<=0.0)
-      return;
-
-   // §13 exposure caps: basket risk and total account risk
-   double newRisk=RiskOfLots(lots,slDist);
-   if(BasketRiskUsed()+newRisk>eq*InpMaxBasketRiskPct/100.0)
-      return;
-   if(AccountRiskUsed()+newRisk>eq*InpMaxAccountRiskPct/100.0)
-      return;
-   // §10 margin validation
-   if(!MarginOK(dir,lots))
      {
-      LogEvent("entry skipped: insufficient free margin");
+      Block(StringFormat("computed size %.4f below broker minimum %.2f (enable min-lot rounding)",
+                         rawLots,MinLot()));
       return;
      }
 
-   string reason=StringFormat("regime=%s conf=%.0f trend=%.0f mom=%.0f struct=%.0f mtf=%.2f",
+   // §13 exposure caps: basket risk and total account risk
+   double newRisk=RiskOfLots(lots,slDist);
+   double basketCap=eq*InpMaxBasketRiskPct/100.0;
+   double acctCap  =eq*InpMaxAccountRiskPct/100.0;
+   double basketUsed=BasketRiskUsed();
+   double acctUsed  =AccountRiskUsed();
+
+   bool atMinLot=(MathAbs(lots-MinLot())<1e-9);
+   if(basketUsed+newRisk>basketCap)
+     {
+      // a single minimum-size position may exceed the plan on a small
+      // account; allowed only explicitly, and the true cost is logged
+      if(!(atMinLot && b.count==0 && InpMinLotOverride))
+        {
+         Block(StringFormat("basket risk cap: %.2f used + %.2f new > %.2f cap",
+                            basketUsed,newRisk,basketCap));
+         return;
+        }
+      LogEvent(StringFormat("min-lot override: taking %.2f risk (%.2f%% of equity) vs %.2f%% plan",
+                            newRisk,100.0*newRisk/MathMax(eq,1.0),InpMaxBasketRiskPct));
+     }
+   if(acctUsed+newRisk>acctCap)
+     {
+      if(!(atMinLot && InpMinLotOverride && acctUsed<=0.0))
+        {
+         Block(StringFormat("account risk cap: %.2f used + %.2f new > %.2f cap",
+                            acctUsed,newRisk,acctCap));
+         return;
+        }
+     }
+   if(!MarginOK(dir,lots))
+     {
+      Block(StringFormat("insufficient free margin for %.2f lots",lots));
+      return;
+     }
+
+   string reason=StringFormat("regime=%s conf=%.0f pct=%.0f trend=%.0f mom=%.0f struct=%.0f mtf=%.2f",
                               RegimeName(g_snap.regime),g_snap.confidenceFinal,
-                              g_snap.trendScore,g_snap.momentumScore,
-                              g_snap.structureScore,g_snap.mtfAlignment);
+                              g_snap.confPercentile,g_snap.trendScore,
+                              g_snap.momentumScore,g_snap.structureScore,g_snap.mtfAlignment);
    if(OpenMarket(dir,lots,g_snap.atr,g_snap.confidenceFinal,riskAmt,isInitial,b.count))
      {
       string action=(dir>0 ? (isInitial ? "BUY" : "BUY_SCALE")
                            : (isInitial ? "SELL" : "SELL_SCALE"));
       LogDecision(action,lots,reason);
+      g_blockReason="—";
      }
+  }
+
+//============================ CHART PANEL ===========================
+
+void DrawPanel(const SBasket &b)
+  {
+   if(!InpShowPanel)
+      return;
+   string mode=(PercentileModeActive()
+                ? StringFormat("percentile (need %.0f)",g_entryPct)
+                : StringFormat("bootstrap (need %.0f, %d/%d samples)",
+                               InpBootstrapConf,g_confCount,InpMinSamples));
+   string txt=StringFormat(
+      "MEDULA v2.00  |  %s %s\n"
+      "──────────────────────────────\n"
+      "regime        %s\n"
+      "structure     %+7.1f\n"
+      "trend         %+7.1f\n"
+      "momentum      %+7.1f\n"
+      "liquidity     %+7.1f\n"
+      "MTF align     %+7.2f  (confluence %.0f)\n"
+      "volatility    pct %.0f   suitability %.0f\n"
+      "spread        %.0f pts   exec quality %.0f\n"
+      "──────────────────────────────\n"
+      "CONVICTION    %6.1f  %s\n"
+      "rank          %6.0f pct\n"
+      "mode          %s\n"
+      "──────────────────────────────\n"
+      "positions     %d   floating %.2f\n"
+      "entries taken %d\n"
+      "status        %s",
+      _Symbol,EnumToString(_Period),
+      RegimeName(g_snap.regime),
+      g_snap.structureScore,g_snap.trendScore,g_snap.momentumScore,
+      g_snap.liquidityScore,g_snap.mtfAlignment,g_snap.mtfConfluence,
+      g_snap.volPercentile,g_snap.volSuitability,
+      g_snap.spreadPts,ExecutionQuality(),
+      g_snap.confidenceFinal,(MSign(g_snap.confidenceDir)>0?"LONG":
+                              (MSign(g_snap.confidenceDir)<0?"SHORT":"flat")),
+      g_snap.confPercentile,mode,
+      b.count,b.floatPL,g_entriesTaken,
+      g_blockReason);
+   Comment(txt);
   }
 
 //========================= EVENT HANDLERS ===========================
@@ -1470,6 +1718,13 @@ int OnInit(void)
    g_execHead=0;
    g_execCount=0;
 
+   int cs=MathMax(InpConfSampleSize,10);
+   ArrayResize(g_confSamples,cs);
+   ArrayInitialize(g_confSamples,0.0);
+   g_confHead=0;
+   g_confCount=0;
+   g_entryPct=MClamp(InpEntryPercentile,InpPctMin,InpPctMax);
+
    double eq=AccountInfoDouble(ACCOUNT_EQUITY);
    g_dayStartEquity=eq;
    g_peakEquity=eq;
@@ -1478,28 +1733,34 @@ int OnInit(void)
    RiskUpdate();
 
    g_trailMultEff=InpTrailAtrMult;
-   g_thr=InpConfThreshold;
    g_haveSnap=false;
    g_lastBar=0;
    g_peakMomAbs=0.0;
+   g_lastEntryTime=0;
+   g_entriesTaken=0;
+   g_ticks=0;
+   g_blockReason="warming up";
 
    AnalyticsRefresh();
 
-   LogEvent(StringFormat("initialized on %s %s, threshold=%.1f",
-                         _Symbol,EnumToString(_Period),g_thr));
+   LogEvent(StringFormat("v2.00 initialized on %s %s — self-calibrating entry at %.0f percentile, floor %.1f",
+                         _Symbol,EnumToString(_Period),g_entryPct,InpMinAbsConfidence));
    return INIT_SUCCEEDED;
   }
 
 void OnDeinit(const int reason)
   {
    IndRelease();
-   LogEvent("deinitialized, reason="+IntegerToString(reason));
+   Comment("");
+   LogEvent(StringFormat("deinitialized (reason %d) — entries taken this run: %d",
+                         reason,g_entriesTaken));
    LogClose();
   }
 
 //--- core event loop (§ "Engine Data Flow Summary")
 void OnTick(void)
   {
+   g_ticks++;
    RiskUpdate();
 
    SBasket b;
@@ -1513,22 +1774,28 @@ void OnTick(void)
          CloseBasket("risk circuit breaker");
       if(!g_breakerLogged)
         {
-         LogEvent("circuit breaker active: trading suspended");
+         LogEvent("CIRCUIT BREAKER ACTIVE — trading suspended until reset");
          g_breakerLogged=true;
         }
+      g_blockReason="circuit breaker latched";
+      DrawPanel(b);
       return;
      }
    g_breakerLogged=false;
 
    // analysis refresh: every tick, or on new bar with light tick updates
    datetime curBar=iTime(_Symbol,_Period,0);
-   bool newBar=(curBar!=g_lastBar);
+   bool newBar=(curBar!=g_lastBar && curBar>0);
    if(newBar)
       g_lastBar=curBar;
+
    if(InpAnalyzeEveryTick || newBar || !g_haveSnap)
      {
       if(!AnalysisUpdate())
-         return;                       // history not ready yet
+        {
+         DrawPanel(b);
+         return;                       // history not ready yet (reason logged)
+        }
       g_haveSnap=true;
      }
    else
@@ -1551,6 +1818,11 @@ void OnTick(void)
    if(InpUseCorrelation && cDir!=0)
       g_snap.confidenceFinal*=CorrelationDampener(cDir);
 
+   // §9 self-calibrating threshold: sample once per bar, rank every tick
+   if(newBar)
+      PushConfidenceSample(g_snap.confidenceFinal);
+   g_snap.confPercentile=ConfidencePercentile(g_snap.confidenceFinal);
+
    RecoverIfNeeded(b,g_snap.confidenceFinal,AccountInfoDouble(ACCOUNT_EQUITY));
 
    // §14 exit engine runs every tick, before any new-entry logic
@@ -1566,17 +1838,25 @@ void OnTick(void)
 
    if(d==DECISION_EXIT)
      {
-      CloseBasket("confidence collapse / direction flip");
-      LogDecision("EXIT",0.0,"confidence collapse / direction flip");
+      CloseBasket("conviction collapse / direction flip");
+      LogDecision("EXIT",0.0,"conviction collapse / direction flip");
+      DrawPanel(b);
       return;
      }
    if(d==DECISION_BUY || d==DECISION_SELL)
       TryEnter(d==DECISION_BUY ? 1 : -1,true,b);
-   else if(d==DECISION_HOLD && b.count>0 && ScaleInAllowed(b))
-      TryEnter(b.dir,false,b);
+   else if(d==DECISION_HOLD && b.count>0)
+     {
+      if(ScaleInAllowed(b))
+         TryEnter(b.dir,false,b);
+      else
+         g_blockReason="holding basket";
+     }
+
+   DrawPanel(b);
   }
 
-//--- post-trade feedback: analytics refresh + adaptive tuning (§18-§19)
+//--- post-trade feedback: analytics refresh + adaptive selectivity (§18-§19)
 void OnTradeTransaction(const MqlTradeTransaction &trans,
                         const MqlTradeRequest &request,
                         const MqlTradeResult &result)
@@ -1597,10 +1877,10 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    if(InpAdaptive)
      {
       double riskUnit=AccountInfoDouble(ACCOUNT_EQUITY)*InpRiskPct/100.0;
-      double before=g_thr;
-      AdaptThreshold(riskUnit);
-      if(MathAbs(g_thr-before)>0.01)
-         LogEvent(StringFormat("adaptive threshold %.1f -> %.1f",before,g_thr));
+      double before=g_entryPct;
+      AdaptSelectivity(riskUnit);
+      if(MathAbs(g_entryPct-before)>0.01)
+         LogEvent(StringFormat("selectivity %.1f -> %.1f percentile",before,g_entryPct));
      }
    LogEvent(AnalyticsSummary());
   }

@@ -409,6 +409,126 @@ def integration(trend_bias):
 check("PIPELINE: persistent uptrend -> BUY", integration(+1) == "BUY", integration(+1))
 check("PIPELINE: persistent downtrend -> SELL", integration(-1) == "SELL", integration(-1))
 
+
+# ============================ v2.00 ARITHMETIC ============================
+# The v1 defect: a FIXED threshold the arithmetic could never reach.
+# v2 ranks conviction against its own rolling distribution instead.
+
+GAIN, MAXSPR, FREEFRAC = 2.5, 40.0, 0.60
+
+def spread_penalty_v1(sp, maxspr=30.0):
+    return mclamp(1 - sp/maxspr, 0, 1)
+
+def spread_penalty_v2(sp, maxspr=MAXSPR, freefrac=FREEFRAC):
+    free = freefrac*maxspr
+    if sp <= free: return 1.0
+    return mclamp(1 - (sp-free)/max(maxspr-free, 1e-9), 0, 1)
+
+check("v2 spread: routine 15pt spread is unpenalized (v1 halved it)",
+      spread_penalty_v2(15) == 1.0 and spread_penalty_v1(15) == 0.5)
+check("v2 spread: penalty ramps only near the limit",
+      spread_penalty_v2(24) == 1.0 and 0 < spread_penalty_v2(32) < 1)
+check("v2 spread: at/over hard limit -> 0", spread_penalty_v2(40) == 0.0 and spread_penalty_v2(50) == 0.0)
+check("v2 spread: monotonically non-increasing",
+      all(spread_penalty_v2(s) >= spread_penalty_v2(s+1) for s in range(0, 50)))
+
+def confidence_v2(struct, trend, mom, liq, mtf, vol_suit, spread, execq=100.0,
+                  w=(0.25,0.25,0.20,0.15,0.15)):
+    raw = w[0]*struct/100 + w[1]*trend/100 + w[2]*mom/100 + w[3]*liq/100 + w[4]*mtf
+    cdir = 100*mtanh(GAIN*raw)
+    return cdir, abs(cdir)*(vol_suit/100)*spread_penalty_v2(spread)*mclamp(execq/100,0,1)
+
+class ConfRing:
+    """Rolling confidence distribution — the self-calibrating threshold (§9)."""
+    def __init__(self, size=500): self.size, self.buf = size, []
+    def percentile(self, c):
+        if not self.buf: return 50.0
+        return 100.0*sum(1 for s in self.buf if s < c)/len(self.buf)
+    def push(self, c):
+        self.buf.append(c)
+        if len(self.buf) > self.size: self.buf.pop(0)
+    def __len__(self): return len(self.buf)
+
+r = ConfRing(100)
+for v in range(100): r.push(float(v))
+check("Percentile: value above all samples -> 100", r.percentile(999) == 100.0)
+check("Percentile: value below all samples -> 0", r.percentile(-1) == 0.0)
+check("Percentile: median sample -> ~50", abs(r.percentile(50)-50) <= 1)
+
+# Self-calibration is the whole point: the SAME relative conviction must clear
+# the bar whether the instrument produces big scores or tiny ones.
+for scale, label in [(0.1, "tiny-range instrument"), (1.0, "normal"), (10.0, "wide-range")]:
+    ring = ConfRing(200)
+    random.seed(3)
+    for _ in range(200): ring.push(abs(random.gauss(0, 20))*scale)
+    top = sorted(ring.buf)[int(len(ring.buf)*0.93)]
+    check(f"Self-calibration: top-decile conviction clears 85th pct on {label}",
+          ring.percentile(top) >= 85.0, f"pct={ring.percentile(top):.1f}")
+
+def decide_v2(cdir, cfin, ring, in_trade=False, basket_dir=0, entry_conf=0.0,
+              entry_pct=85.0, floor=18.0, boot=35.0, min_samples=60,
+              mtf_align=0.0, mtf_confl=0.0, mtf_valid=1.0, veto=60.0,
+              exit_frac=0.55):
+    d = msign(cdir)
+    if not in_trade:
+        if d == 0: return "WAIT"
+        if cfin < floor: return "WAIT"
+        if len(ring) >= min_samples:
+            if ring.percentile(cfin) < entry_pct: return "WAIT"
+        elif cfin < boot: return "WAIT"
+        if mtf_valid >= 0.5 and msign(mtf_align) != d and mtf_confl > veto: return "WAIT"
+        return "BUY" if d > 0 else "SELL"
+    if cfin < max(exit_frac*entry_conf, floor*0.5): return "EXIT"
+    if d != 0 and basket_dir != 0 and d != basket_dir and cfin >= floor: return "EXIT"
+    return "HOLD"
+
+# THE REGRESSION THAT MATTERS: v2 must actually fire on realistic data.
+random.seed(11)
+ring = ConfRing(500); fired = 0; total = 3000
+for _ in range(total):
+    cdir, cfin = confidence_v2(random.gauss(0,35), random.gauss(0,40), random.gauss(0,35),
+                               random.gauss(0,25),
+                               random.choice([-1,-.6,-.4,-.2,0,.2,.4,.6,1])*random.uniform(.6,1),
+                               random.uniform(60,100), random.uniform(10,20))
+    d = decide_v2(cdir, cfin, ring)
+    ring.push(cfin)
+    if d in ("BUY","SELL"): fired += 1
+check("v2 EXECUTION REGRESSION: EA actually fires on realistic data (v1 fired 0)",
+      fired > 100, f"{fired} signals in {total} bars")
+check("v2 EXECUTION REGRESSION: selectivity retained (not firing every bar)",
+      fired < total*0.35, f"{100.0*fired/total:.1f}% of bars")
+
+# floor still blocks junk conviction even when it ranks highly in a dead market
+dead = ConfRing(200)
+for _ in range(200): dead.push(random.uniform(0, 8))
+check("v2 floor: dead market's 'best' conviction still blocked by absolute floor",
+      decide_v2(9.0, 9.0, dead) == "WAIT")
+
+check("v2 MTF veto: stands down when higher-timeframe data is unavailable",
+      decide_v2(70, 90, ConfRing(0), mtf_align=-0.9, mtf_confl=90, mtf_valid=0.1) in ("BUY","SELL"))
+check("v2 MTF veto: still blocks when data IS available and disagrees",
+      decide_v2(70, 90, ConfRing(0), mtf_align=-0.9, mtf_confl=90, mtf_valid=1.0) == "WAIT")
+
+check("v2 exit: conviction below fraction of entry conviction -> EXIT",
+      decide_v2(70, 30, ring, in_trade=True, basket_dir=1, entry_conf=60) == "EXIT")
+check("v2 exit: conviction holding above fraction -> HOLD",
+      decide_v2(70, 40, ring, in_trade=True, basket_dir=1, entry_conf=60) == "HOLD")
+check("v2 exit: direction flip with real conviction -> EXIT",
+      decide_v2(-70, 50, ring, in_trade=True, basket_dir=1, entry_conf=60) == "EXIT")
+
+# adaptive selectivity now moves the PERCENTILE, bounded
+def adapt_pct(pct, exp_all, exp_recent, unit, eta=2.0, alpha=0.1, lo=70, hi=95):
+    target = mclamp(pct + eta*mtanh((exp_all-exp_recent)/max(unit,1e-9)), lo, hi)
+    return mclamp(alpha*target + (1-alpha)*pct, lo, hi)
+check("v2 adaptive: losses raise selectivity percentile", adapt_pct(85, 10, -40, 75) > 85)
+check("v2 adaptive: wins lower selectivity percentile", adapt_pct(85, 10, 60, 75) < 85)
+p = 85.0
+for _ in range(5000): p = adapt_pct(p, 10, -500, 75)
+check("v2 adaptive: bounded at ceiling", p <= 95.0+1e-9, f"{p:.2f}")
+p = 85.0
+for _ in range(5000): p = adapt_pct(p, 10, 500, 75)
+check("v2 adaptive: bounded at floor", p >= 70.0-1e-9, f"{p:.2f}")
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
