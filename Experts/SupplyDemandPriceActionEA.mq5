@@ -45,6 +45,12 @@ input bool     UsePremiumDiscount  = true;   // Buy only in discount, sell only 
 input int      HTFSwingStrength    = 2;      // Swing definition on bias/structure TFs
 input int      HTFLookback         = 120;    // Bars scanned on higher timeframes
 
+input group    "=== HTF Order-Block Filter ==="
+input bool     UseHTFZoneFilter    = true;   // Only trade M15 zones nested in an HTF zone
+input ENUM_TIMEFRAMES  HTFZoneTF   = PERIOD_H1;  // Timeframe whose zones must contain the entry
+input double   HTFZonePadPct       = 0.25;   // Tolerance (% of HTF zone height) around it
+input bool     HTFZoneHardFilter   = true;   // true = required; false = confluence bonus only
+
 input group    "=== Zone / Order Block Detection ==="
 input int      LookbackBars        = 400;    // M15 bars scanned when mapping zones
 input int      MaxBaseCandles      = 3;      // Max consolidation candles in a base
@@ -266,10 +272,21 @@ void ProcessSymbol(const int s)
 //======================================================================
 void BuildZones(const int s, const MqlRates &rates[], const int n)
 {
-   Symbols[s].zoneCount = 0;
-   int scan = MathMin(n - 2, LookbackBars);
+   Symbols[s].zoneCount = DetectZones(rates, n, Symbols[s].zones, MAX_ZONES, true);
+}
 
-   for(int i = 2; i < scan && Symbols[s].zoneCount < MAX_ZONES; i++)
+//+------------------------------------------------------------------+
+//| Generic zone/order-block detector - reusable on any timeframe.    |
+//| enforceFresh=true applies the touch/age freshness filters (M15    |
+//| entry map); false keeps every structural zone (HTF context map).  |
+//+------------------------------------------------------------------+
+int DetectZones(const MqlRates &rates[], const int n, Zone &dest[],
+                const int maxZones, const bool enforceFresh)
+{
+   int count = 0;
+   int scan  = MathMin(n - 2, LookbackBars);
+
+   for(int i = 2; i < scan && count < maxZones; i++)
    {
       if(!IsImpulse(rates[i])) continue;
       bool bullLeg = (rates[i].close > rates[i].open);
@@ -315,8 +332,7 @@ void BuildZones(const int s, const MqlRates &rates[], const int n)
          z.distal   = baseHigh;
       }
 
-      // Order-block refinement: shrink the zone to the last opposite-colour
-      // candle before the impulse (the true origin the impulse departed from).
+      // Order-block refinement: shrink the zone to the origin candle.
       if(RefineToOrderBlock && baseCount >= 1)
       {
          int obIdx = baseStart + baseCount - 1;   // oldest base candle = origin
@@ -334,16 +350,16 @@ void BuildZones(const int s, const MqlRates &rates[], const int n)
 
       if(i > MaxZoneAgeBars) continue;
 
-      // Fair-value gap inside the impulse leg (3-candle imbalance i-1,i,i+1).
-      z.hasFVG = HasFVG(rates, i, z.type, n);
-
+      z.hasFVG  = HasFVG(rates, i, z.type, n);
       z.touches = CountTouches(rates, i, z);
-      if(z.touches > MaxZoneTouches) continue;
-      if(ZoneOverlaps(s, z)) continue;
 
-      Symbols[s].zones[Symbols[s].zoneCount] = z;
-      Symbols[s].zoneCount++;
+      if(enforceFresh && z.touches > MaxZoneTouches) continue;
+      if(ZoneArrayOverlaps(dest, count, z)) continue;
+
+      dest[count] = z;
+      count++;
    }
+   return(count);
 }
 
 //+------------------------------------------------------------------+
@@ -392,15 +408,42 @@ int CountTouches(const MqlRates &rates[], const int idxFrom, const Zone &z)
 }
 
 //+------------------------------------------------------------------+
-bool ZoneOverlaps(const int s, const Zone &z)
+bool ZoneArrayOverlaps(const Zone &arr[], const int count, const Zone &z)
 {
-   for(int i = 0; i < Symbols[s].zoneCount; i++)
+   for(int i = 0; i < count; i++)
    {
-      Zone e = Symbols[s].zones[i];
-      if(e.type != z.type) continue;
+      if(arr[i].type != z.type) continue;
       double aLo = MathMin(z.proximal, z.distal), aHi = MathMax(z.proximal, z.distal);
-      double bLo = MathMin(e.proximal, e.distal), bHi = MathMax(e.proximal, e.distal);
+      double bLo = MathMin(arr[i].proximal, arr[i].distal), bHi = MathMax(arr[i].proximal, arr[i].distal);
       if(aHi >= bLo && bHi >= aLo) return(true);
+   }
+   return(false);
+}
+
+//+------------------------------------------------------------------+
+//| HTF order-block filter: is `price` sitting inside a same-type     |
+//| zone on the higher timeframe? Buys must nest in an HTF demand     |
+//| zone, sells in an HTF supply zone.                                |
+//+------------------------------------------------------------------+
+bool InHTFZone(const string sym, const int dir, const double price)
+{
+   MqlRates r[];
+   ArraySetAsSeries(r, true);
+   int c = CopyRates(sym, HTFZoneTF, 0, HTFLookback + 5, r);
+   if(c < 20) return(false);
+
+   Zone htf[];
+   ArrayResize(htf, MAX_ZONES);
+   int hc = DetectZones(r, c, htf, MAX_ZONES, false);
+
+   int want = (dir == DIR_BUY) ? ZONE_DEMAND : ZONE_SUPPLY;
+   for(int i = 0; i < hc; i++)
+   {
+      if(htf[i].type != want) continue;
+      double lo = MathMin(htf[i].proximal, htf[i].distal);
+      double hi = MathMax(htf[i].proximal, htf[i].distal);
+      double pad = (hi - lo) * HTFZonePadPct;
+      if(price >= lo - pad && price <= hi + pad) return(true);
    }
    return(false);
 }
@@ -605,6 +648,14 @@ bool FindSetup(const int s, const MqlRates &rates[], const int n, Setup &out)
          if(dir == DIR_SELL &&  disc) continue;   // only sell in premium
       }
 
+      // HTF order-block nesting: the M15 zone must live inside an HTF zone.
+      bool inHTFZone = false;
+      if(UseHTFZoneFilter)
+      {
+         inHTFZone = InHTFZone(Symbols[s].name, dir, zone.proximal);
+         if(HTFZoneHardFilter && !inHTFZone) continue;
+      }
+
       bool swept = LiquiditySwept(rates, n, dir);
       if(RequireLiquiditySweep && !swept) continue;
 
@@ -629,6 +680,7 @@ bool FindSetup(const int s, const MqlRates &rates[], const int n, Setup &out)
       if(pa)                 score += 1;
       if(zone.touches == 0)  score += 1;                 // pristine zone
       if(zone.strength >= 2.0) score += 1;               // powerful departure
+      if(inHTFZone)          score += 2;                 // nested inside an HTF zone
 
       if(score < MinConfluenceScore) continue;
 

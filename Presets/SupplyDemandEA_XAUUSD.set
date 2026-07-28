@@ -1,0 +1,66 @@
+; SupplyDemandPriceActionEA v2 - GOLD (XAUUSD) ONLY preset
+; ForexSymbol is left empty so this instance trades only Gold.
+; Gold is fast and volatile: smaller risk, stronger impulse requirement,
+; slightly wider zone tolerance. Run on an XAUUSD M15 chart.
+; If running a second (EURUSD) instance too, give it a different MagicBase.
+; ENUM_TIMEFRAMES values: M15=15  M30=30  H1=16385  H4=16388  D1=16408
+GoldSymbol=XAUUSD
+ForexSymbol=
+EntryTF=15
+BiasTF=16388
+StructureTF=16385
+RiskPercent=0.5
+TP1_R=1.0
+TP2_R=3.0
+PartialClosePct=50.0
+MinLot=0.01
+MaxLotCap=5.0
+MaxOpenPerSymbol=1
+MaxOpenTotal=1
+MagicBase=20260726
+UseHTFBias=true
+UsePremiumDiscount=true
+HTFSwingStrength=2
+HTFLookback=120
+UseHTFZoneFilter=true
+HTFZoneTF=16385
+HTFZonePadPct=0.30
+HTFZoneHardFilter=true
+LookbackBars=400
+MaxBaseCandles=3
+BasingBodyFactor=0.5
+ImpulseBodyFactor=0.6
+ImpulseLegFactor=1.5
+ZoneEntryBufferPct=0.20
+MaxZoneAgeBars=250
+MaxZoneTouches=1
+RefineToOrderBlock=true
+MinConfluenceScore=6
+RequireLiquiditySweep=true
+SweepLookback=24
+RequireBOS=true
+SwingStrength=2
+RequireFVG=false
+RequirePA=true
+PinWickFactor=1.8
+UseVolatilityFilter=true
+RangeSampleBars=20
+MinRangeFactor=0.4
+MaxRangeFactor=4.0
+SL_BufferPoints=0.0
+UseBreakEven=true
+BreakEvenTriggerR=1.0
+UseStructureTrail=true
+TrailStartR=1.2
+TrailSwingStrength=2
+UseSessionFilter=true
+SessionStartHourGMT=7
+SessionEndHourGMT=20
+TradeMonday=true
+TradeFriday=true
+MaxTradesPerDay=5
+ConsecLossCooldown=3
+CooldownBars=12
+DailyLossLimitPct=4.0
+MinAccountUSD=5.0
+MaxSpreadPoints=0.0
