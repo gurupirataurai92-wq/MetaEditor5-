@@ -23,6 +23,21 @@ with the customer's details and payment status.
 
 ![Checkout](docs/store-cart.png)
 
+## Product photos
+
+Menu cards show **real photos** of the food. Each menu item has an `image`
+field (a local file under `assets/food/photos/` **or** a full `https://…`
+URL). Add photos two ways:
+
+- **Drop image files** into [`assets/food/photos/`](assets/food/photos/) using
+  the documented names (`bucket.jpg`, `burger.jpg`, `fries.jpg`, …); or
+- **Paste a photo link** per item on the staff **Menu** page (owner/manager) —
+  each item has a *Photo URL / path* field.
+
+If a photo is missing or a URL fails to load, the card automatically falls back
+to a built-in illustration, so it never shows a broken image. **Use your own
+photos or properly-licensed stock — not another brand's copyrighted images.**
+
 ## Staff back office
 
 Staff sign in at **`staff.php`** — a private URL that is **not linked from the

@@ -19,6 +19,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $pdo->prepare('UPDATE menu_items SET is_available = 1 - is_available WHERE id = ?')->execute([$id]);
         log_action('86_toggle', "Item #$id availability toggled");
     }
+    if (isset($_POST['save_image'])) {
+        $id  = (int) $_POST['id'];
+        $img = trim($_POST['image'] ?? '');
+        $pdo->prepare('UPDATE menu_items SET image = ? WHERE id = ?')
+            ->execute([$img !== '' ? $img : null, $id]);
+        log_action('image_change', "Item #$id photo updated");
+    }
     header('Location: menu.php');
     exit;
 }
@@ -37,18 +44,15 @@ require __DIR__ . '/includes/header.php';
 <div class="table-wrap">
 <table class="grid-table">
   <thead>
-    <tr><th>Item</th><th>Category</th><th>Station</th><th class="r">Cost</th>
-        <th class="r">Price</th><th class="r">Margin</th><th>Available</th></tr>
+    <tr><th>Photo</th><th>Item</th><th>Station</th><th class="r">Price</th>
+        <th>Photo URL / path</th><th>Available</th></tr>
   </thead>
   <tbody>
-  <?php foreach ($items as $m):
-      $margin = (float) $m['price'] - (float) $m['cost'];
-  ?>
+  <?php foreach ($items as $m): ?>
     <tr class="<?= $m['is_available'] ? '' : 'row-off' ?>">
-      <td><b><?= e($m['name']) ?></b></td>
-      <td><?= e($m['category']) ?></td>
+      <td class="menu-thumb"><?= food_img($m['image'] ?? null, $m['name']) ?></td>
+      <td><b><?= e($m['name']) ?></b><br><span class="mono" style="color:var(--muted);font-size:11px"><?= e($m['category']) ?></span></td>
       <td class="mono"><?= e($m['station']) ?></td>
-      <td class="r mono">$<?= money((float) $m['cost']) ?></td>
       <td class="r">
         <form method="post" class="price-form">
           <input type="hidden" name="id" value="<?= (int) $m['id'] ?>">
@@ -56,7 +60,14 @@ require __DIR__ . '/includes/header.php';
           <button name="save_price" value="1">save</button>
         </form>
       </td>
-      <td class="r mono">$<?= money($margin) ?></td>
+      <td>
+        <form method="post" class="image-form">
+          <input type="hidden" name="id" value="<?= (int) $m['id'] ?>">
+          <input type="text" name="image" placeholder="https://… or assets/food/photos/x.jpg"
+                 value="<?= e($m['image'] ?? '') ?>">
+          <button name="save_image" value="1">save</button>
+        </form>
+      </td>
       <td>
         <form method="post">
           <button name="toggle" value="<?= (int) $m['id'] ?>" class="badge <?= $m['is_available'] ? 'b-served' : 'b-void' ?> btn-badge">

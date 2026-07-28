@@ -70,6 +70,7 @@ CREATE TABLE menu_items (
   station      ENUM('fryer','grill','drinks','assembly') NOT NULL DEFAULT 'fryer',
   prep_minutes INT           NOT NULL DEFAULT 4,
   is_available TINYINT(1)    NOT NULL DEFAULT 1,
+  image        VARCHAR(255)  NULL,   -- photo: local path (assets/food/photos/x.jpg) or full URL
   CONSTRAINT fk_item_cat FOREIGN KEY (category_id) REFERENCES categories(id)
 ) ENGINE=InnoDB;
 
@@ -179,13 +180,13 @@ INSERT INTO ingredients (id, name, unit, stock_qty, reorder_point, unit_cost) VA
  (6,'Spice mix','portion',300,60,0.0800);
 
 -- Menu items
-INSERT INTO menu_items (id, name, category_id, price, cost, station, prep_minutes) VALUES
- (1,'Original Bucket (8pc)',1,18.9900,6.4000,'fryer',6),
- (2,'Hot Wings (6pc)',      1,5.9900,1.8000,'fryer',5),
- (3,'Laka Zinger Burger',   2,6.4900,2.1000,'grill',4),
- (4,'Laka Fries',           3,2.9900,0.7000,'fryer',3),
- (5,'Soft Drink',           4,1.9900,0.3500,'drinks',1),
- (6,'Laka Combo (Zinger+Fries+Drink)',5,9.9900,3.1500,'assembly',5);
+INSERT INTO menu_items (id, name, category_id, price, cost, station, prep_minutes, image) VALUES
+ (1,'Original Bucket (8pc)',1,18.9900,6.4000,'fryer',6,'assets/food/photos/bucket.jpg'),
+ (2,'Hot Wings (6pc)',      1,5.9900,1.8000,'fryer',5,'assets/food/photos/wings.jpg'),
+ (3,'Laka Zinger Burger',   2,6.4900,2.1000,'grill',4,'assets/food/photos/burger.jpg'),
+ (4,'Laka Fries',           3,2.9900,0.7000,'fryer',3,'assets/food/photos/fries.jpg'),
+ (5,'Soft Drink',           4,1.9900,0.3500,'drinks',1,'assets/food/photos/drink.jpg'),
+ (6,'Laka Combo (Zinger+Fries+Drink)',5,9.9900,3.1500,'assembly',5,'assets/food/photos/combo.jpg');
 
 -- Recipes (menu_item -> ingredient -> qty consumed)
 INSERT INTO recipes (menu_item_id, ingredient_id, qty) VALUES

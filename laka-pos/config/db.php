@@ -45,6 +45,28 @@ function money(float $n): string
     return number_format($n, 2);
 }
 
+/**
+ * Render a menu item's picture.
+ *
+ * Uses the item's real photo (a local file under assets/food/photos/ or a full
+ * URL) when one is set; if that photo is missing or fails to load it falls back
+ * to the built-in illustration, so a card never shows a broken image.
+ */
+function food_img(?string $image, string $name): string
+{
+    $icon = 'assets/food/' . menu_icon($name) . '.svg';
+    $photo = trim((string) $image);
+    $hasPhoto = $photo !== '';
+    $src = $hasPhoto ? $photo : $icon;
+    $cls = $hasPhoto ? 'food-photo is-photo' : 'food-photo is-icon';
+    $enc = fn($s) => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
+    // On error: drop to the illustration and restyle as an icon.
+    $fallback = "this.onerror=null;this.src='" . $enc($icon)
+        . "';this.className='food-photo is-icon'";
+    return '<img class="' . $cls . '" src="' . $enc($src) . '" alt="' . $enc($name)
+        . '" loading="lazy" onerror="' . $enc($fallback) . '">';
+}
+
 /** Pick a food illustration for a menu item by keywords in its name. */
 function menu_icon(string $name): string
 {

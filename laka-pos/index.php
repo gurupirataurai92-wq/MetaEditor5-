@@ -202,7 +202,7 @@ $payNextStep = [
       <div class="store-grid">
         <?php foreach ($items as $it): ?>
           <article class="pcard">
-            <div class="pcard-img"><img src="assets/food/<?= menu_icon($it['name']) ?>.svg" alt="<?= esc($it['name']) ?>" width="110" height="110"></div>
+            <div class="pcard-img"><?= food_img($it['image'] ?? null, $it['name']) ?></div>
             <div class="pcard-body">
               <h4><?= esc($it['name']) ?></h4>
               <p class="pcard-price">$<?= money((float) $it['price']) ?></p>

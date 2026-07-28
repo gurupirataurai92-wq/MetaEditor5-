@@ -119,7 +119,7 @@ require __DIR__ . '/includes/header.php';
                   data-name="<?= e($it['name']) ?>"
                   data-price="<?= (float) $it['price'] ?>"
                   data-station="<?= e($it['station']) ?>">
-            <span class="tile-img"><img src="assets/food/<?= menu_icon($it['name']) ?>.svg" alt="" width="86" height="86"></span>
+            <span class="tile-img"><?= food_img($it['image'] ?? null, $it['name']) ?></span>
             <span class="tile-body">
               <span class="tile-name"><?= e($it['name']) ?></span>
               <span class="tile-meta"><?= e($it['station']) ?></span>
