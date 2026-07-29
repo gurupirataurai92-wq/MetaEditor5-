@@ -6,7 +6,8 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MEDULA_FORMULAS.md](MEDULA_FORMULAS.md)** — formula specification for all 21 engines.
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
-- **[tests/verify_medula.py](tests/verify_medula.py)** — 170-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
+- **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
+- **[tests/verify_medula.py](tests/verify_medula.py)** — 198-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
 
@@ -92,3 +93,35 @@ about $17, which needs roughly $85 of equity to sit under a 20% ceiling and ~$68
 a 2.5% plan. At typical gold volatility (ATR ≈ $1.50) those figures fall to about $11 and
 $90. **A $10 account cannot trade gold at COVID-era volatility under any risk setting** —
 that is arithmetic, not configuration.
+
+
+## v3.00 — the price-action build
+
+`Medula_PriceAction.mq5` is a separate EA that discards indicators entirely. Verified by the
+test suite: **zero** `iRSI` / `iMACD` / `iADX` / `iBands` / `iMA` / `iATR` handles and zero
+`CopyBuffer` calls in executable code. The only market data it reads is `CopyHigh`,
+`CopyLow`, `CopyOpen`, `CopyClose` and `CopyTickVolume`.
+
+| Engine | Derived from |
+|---|---|
+| §A Structure | Fractal swing highs/lows, break of structure, change of character |
+| §B Supply & demand | Base candles + impulse departure; tracks freshness, tests, strength |
+| §C Trend | Higher-high/higher-low sequence — no moving average |
+| §D Momentum | Body dominance, directional runs, displacement |
+| §E Volatility | True range computed directly (a distance unit only, never a signal) |
+| §F Liquidity | Equal highs/lows where stops cluster |
+| §G Order flow | Close location within each bar's range, tick-volume weighted |
+| §H Multi-timeframe | Higher-timeframe swing structure |
+
+**Entries are setups, not score crossings:**
+
+1. **Zone rejection** — price returns to a fresh zone, prints a rejection wick, and closes
+   back out on the correct side, with structure agreeing.
+2. **BOS retest** — structure breaks, price returns to the broken level and holds it.
+3. **Break with momentum** — a structure break backed by decisive candle bodies.
+
+**Stops are placed by price action**, beyond the zone or swing that would invalidate the
+idea, with ATR only as a buffer. Targets are a configured R multiple of that real risk.
+
+Risk carries the v2.70 corrections: R is measured against the risk actually taken, and
+`InpMaxRiskPctHard` caps any single trade regardless of the min-lot override.

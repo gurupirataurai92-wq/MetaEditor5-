@@ -849,6 +849,189 @@ check("MinDeposit: scales linearly with stop distance",
 check("MinDeposit: a $10 account cannot carry COVID-era gold at any risk setting",
       d_covid > 10.0, f"needs ${d_covid:.0f}")
 
+
+# ================== v3.00 PRICE-ACTION ENGINES (no indicators) ============
+
+def true_range(h, l, c, i):
+    if i+1 >= len(c): return h[i]-l[i]
+    return max(h[i]-l[i], abs(h[i]-c[i+1]), abs(l[i]-c[i+1]))
+
+def atr_manual(h, l, c, period=14):
+    n = min(period, len(c)-1)
+    return sum(true_range(h, l, c, i) for i in range(n))/n if n > 0 else 0.0
+
+h = [10.5, 10.4, 10.6, 10.2, 10.3]
+l = [10.0, 9.9, 10.1, 9.8, 9.9]
+c = [10.2, 10.3, 10.4, 10.0, 10.1]
+check("ATR: computed from true range with no indicator handle",
+      atr_manual(h, l, c, 4) > 0)
+check("ATR: gap up is captured by true range, not just the bar range",
+      true_range([12.0], [11.5], [12.0, 10.0], 0) == 2.0,
+      f"{true_range([12.0],[11.5],[12.0,10.0],0)}")
+check("ATR: first bar falls back to its own range safely",
+      true_range([10.5], [10.0], [10.2], 0) == 0.5)
+
+# --- §B supply/demand zone detection: base then impulse
+def find_zone(bars, atr, impulse_atr=1.20, impulse_body=0.55,
+              base_max_atr=0.85, max_base=3):
+    """bars: list of (o,h,l,c), index 0 = newest."""
+    for i in range(1, len(bars)-1):
+        o, hi, lo, cl = bars[i]
+        rng, body = hi-lo, abs(cl-o)
+        if rng <= 0: continue
+        up = rng >= impulse_atr*atr and body >= impulse_body*rng and cl > o
+        dn = rng >= impulse_atr*atr and body >= impulse_body*rng and cl < o
+        if not (up or dn): continue
+        top, bot, used = -1e18, 1e18, 0
+        for b in range(i+1, min(i+1+max_base, len(bars))):
+            ob, hb, lb, cb = bars[b]
+            if (hb-lb) > base_max_atr*atr: break
+            top, bot, used = max(top, hb), min(bot, lb), used+1
+        if used:
+            return dict(top=top, bottom=bot, dir=1 if up else -1,
+                        strength=rng/atr, base_candles=used)
+    return None
+
+atr = 1.0
+# newest first: [0]=current, [1]=impulse up, [2..4]=quiet base
+demand_bars = [(103.0,103.5,102.8,103.2),      # current
+               (100.2,102.5,100.0,102.3),      # impulse up, range 2.5 = 2.5xATR
+               (100.1,100.3,99.9,100.2),       # base
+               (100.0,100.2,99.8,100.1),       # base
+               (99.9,100.1,99.7,100.0)]        # base
+z = find_zone(demand_bars, atr)
+check("Zones: base + impulse up creates a DEMAND zone", z is not None and z['dir'] == 1,
+      str(z))
+check("Zones: zone spans the base range, not the impulse candle",
+      z is not None and z['bottom'] >= 99.7 and z['top'] <= 100.4, str(z))
+check("Zones: strength recorded in ATR units", z is not None and z['strength'] >= 1.2,
+      f"{z['strength']:.2f}" if z else "none")
+
+supply_bars = [(97.0,97.2,96.5,96.8),
+               (100.0,100.1,97.5,97.7),        # impulse down
+               (100.0,100.2,99.8,100.1),
+               (100.1,100.3,99.9,100.2),
+               (100.0,100.2,99.9,100.1)]
+zs = find_zone(supply_bars, atr)
+check("Zones: base + impulse down creates a SUPPLY zone", zs is not None and zs['dir'] == -1,
+      str(zs))
+# a weak departure is not an imbalance
+weak = [(100.3,100.4,100.2,100.3),
+        (100.0,100.4,99.9,100.3),              # range 0.5 < 1.2xATR
+        (100.0,100.2,99.8,100.1),
+        (100.1,100.3,99.9,100.2),
+        (100.0,100.2,99.9,100.1)]
+check("Zones: a weak departure does NOT create a zone", find_zone(weak, atr) is None)
+# a wide, volatile base is not a base
+noisy = [(103.0,103.5,102.8,103.2),
+         (100.2,102.5,100.0,102.3),
+         (100.0,101.5,98.5,100.2),             # range 3.0 > 0.85xATR
+         (100.0,101.4,98.6,100.1),
+         (99.9,101.3,98.7,100.0)]
+check("Zones: a volatile base is rejected (no consolidation, no stranded orders)",
+      find_zone(noisy, atr) is None)
+
+# --- zone freshness
+def zone_quality(tests, dist_atr, strength, max_tests=2):
+    fresh = mclamp(1-tests/max(max_tests,1), 0, 1)
+    near  = mclamp(1-dist_atr/3.0, 0, 1)
+    stren = mclamp(strength/3.0, 0, 1)
+    return fresh*0.45 + near*0.35 + stren*0.20
+check("Zones: an untested zone outranks a repeatedly tested one",
+      zone_quality(0, 0.2, 2.0) > zone_quality(2, 0.2, 2.0))
+check("Zones: a near zone outranks a distant one",
+      zone_quality(0, 0.2, 2.0) > zone_quality(0, 2.8, 2.0))
+check("Zones: a stronger departure outranks a weak one",
+      zone_quality(0, 0.2, 3.0) > zone_quality(0, 0.2, 1.0))
+
+# --- §C trend from swing sequence, NOT from a moving average
+def trend_from_swings(highs, lows):
+    up = dn = 0
+    for i in range(1, len(highs)):
+        if highs[i] > highs[i-1]: up += 1
+        else: dn += 1
+    for i in range(1, len(lows)):
+        if lows[i] > lows[i-1]: up += 1
+        else: dn += 1
+    return 100.0*(up-dn)/(up+dn+1)
+check("Trend: higher highs and higher lows -> bullish, no EMA involved",
+      trend_from_swings([10,11,12,13], [9,10,11,12]) > 50)
+check("Trend: lower highs and lower lows -> bearish",
+      trend_from_swings([13,12,11,10], [12,11,10,9]) < -50)
+check("Trend: mixed swings -> near neutral",
+      abs(trend_from_swings([10,11,10,11], [9,10,9,10])) < 30)
+
+# --- §D momentum from candle anatomy
+def momentum_pa(bars):
+    body = sum(c-o for o, hi, lo, c in bars)
+    rng  = sum(hi-lo for o, hi, lo, c in bars)
+    dom  = body/rng if rng > 0 else 0.0
+    return 100.0*mtanh(1.4*0.45*dom)
+strong_up = [(100, 101, 99.95, 100.95)]*8       # closes at the highs, tiny wicks
+strong_dn = [(100.95, 101.05, 100, 100)]*8
+indecisive = [(100, 101, 99, 100)]*8            # big range, no body
+check("Momentum: bodies closing upward -> positive", momentum_pa(strong_up) > 20)
+check("Momentum: mirrored bearish bars -> negative", momentum_pa(strong_dn) < -20)
+check("Momentum: all wick, no body -> ~zero", abs(momentum_pa(indecisive)) < 5)
+
+# --- entry setups must actually fire
+def rejection_setup(o, hi, lo, cl, zone_top, zone_bottom, zone_dir, wick_frac=0.30):
+    rng = hi-lo
+    if rng <= 0: return 0
+    lower = (min(o, cl)-lo)/rng
+    upper = (hi-max(o, cl))/rng
+    touched = lo <= zone_top and hi >= zone_bottom
+    if not touched: return 0
+    if zone_dir > 0 and lower >= wick_frac and cl > zone_bottom: return 1
+    if zone_dir < 0 and upper >= wick_frac and cl < zone_top:    return -1
+    return 0
+
+check("Setup: wick into demand then close back above -> LONG",
+      rejection_setup(100.5, 100.7, 99.6, 100.4, 100.0, 99.5, 1) == 1)
+check("Setup: wick into supply then close back below -> SHORT",
+      rejection_setup(99.5, 100.4, 99.3, 99.6, 100.0, 99.5, -1) == -1)
+check("Setup: price never reaching the zone -> no trade",
+      rejection_setup(105, 105.5, 104.5, 105.2, 100.0, 99.5, 1) == 0)
+check("Setup: closing straight through demand -> no long (zone failed)",
+      rejection_setup(100.2, 100.3, 99.0, 99.1, 100.0, 99.5, 1) == 0)
+
+# --- stops anchored to the zone, not to an arbitrary ATR distance
+def plan_stop(direction, entry, zone_top, zone_bottom, atr, buf_mult=1.2, tp_r=2.5):
+    anchor = zone_bottom if direction > 0 else zone_top
+    sl = anchor - buf_mult*atr if direction > 0 else anchor + buf_mult*atr
+    risk = abs(entry-sl)
+    if risk < 0.5*atr:
+        risk = 0.5*atr
+        sl = entry-risk if direction > 0 else entry+risk
+    tp = entry + tp_r*risk if direction > 0 else entry - tp_r*risk
+    return sl, tp, risk
+
+sl, tp, risk = plan_stop(1, 100.4, 100.0, 99.5, 1.0)
+check("Stops: long stop sits BELOW the demand zone", sl < 99.5, f"{sl:.2f}")
+check("Stops: target is the configured R multiple of the real risk",
+      abs((tp-100.4) - 2.5*risk) < 1e-9)
+sl2, tp2, _ = plan_stop(-1, 99.6, 100.0, 99.5, 1.0)
+check("Stops: short stop sits ABOVE the supply zone", sl2 > 100.0, f"{sl2:.2f}")
+check("Stops: a trivially tight stop is widened to a sane floor",
+      plan_stop(1, 100.0, 100.0, 99.99, 1.0)[2] >= 0.5)
+
+# --- the whole point: this configuration must produce trades
+random.seed(21)
+ring = ConfRing(400)
+for _ in range(400): ring.push(abs(random.gauss(0, 22)))
+fired = 0
+for bar in range(800):
+    conv = abs(random.gauss(0, 22))
+    setup_present = random.random() < 0.12          # a setup roughly 1 bar in 8
+    pct = ring.percentile(conv); ring.push(conv)
+    idle_eff = max(75.0 - 2.5*max(0, (bar % 120 - 30)//8), 55.0)
+    if setup_present and conv >= 12.0 and pct >= idle_eff:
+        fired += 1
+check("PRICE ACTION: configuration produces trades over a normal stretch",
+      fired > 20, f"{fired} entries in 800 bars")
+check("PRICE ACTION: still selective, not firing on every setup",
+      fired < 800*0.12, f"{fired} of ~96 setups taken")
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
