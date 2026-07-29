@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                Medula_Single.mq5 |
-//|  Medula EA v2.50 — single-file, zero-dependency build.           |
+//|  Medula EA v2.60 — single-file, zero-dependency build.           |
 //|                                                                  |
 //|  DESIGN NOTE — why this EA does not sit idle:                    |
 //|  v1 compared conviction to a FIXED threshold (60). Because the    |
@@ -31,7 +31,7 @@
 //|  Validation (§21) is performed offline in the Strategy Tester.   |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "2.50"
+#property version   "2.60"
 
 //============================== INPUTS ==============================
 
@@ -80,8 +80,8 @@ input double InpW4 = 0.12;              // Weight: liquidity
 input double InpW5 = 0.13;              // Weight: MTF alignment
 input double InpW6 = 0.13;              // Weight: order flow
 input double InpConfGain          = 2.5;  // Confidence tanh gain
-input double InpMaxSpreadPoints   = 40.0; // Hard spread limit (points) - blocks entry
-input double InpSpreadFreeFrac    = 0.60; // Spread below this fraction of limit is unpenalized
+input double InpMaxSpreadPoints   = 40.0; // Absolute spread floor limit (points)
+input double InpMaxSpreadAtr      = 0.50; // Spread limit as a fraction of ATR (self-calibrating backstop)
 
 input group "Decision — self-calibrating threshold (§9)"
 input bool   InpUsePercentile     = true;  // Rank conviction vs its own distribution
@@ -243,6 +243,7 @@ void PushInt(int &arr[],const int v)
 //--- forward declarations (functions referenced before their definition)
 double SessionMultiplierRaw(void);
 void   UpdateEquityCurveMultiplier(void);
+double MaxSpreadPointsEffective(void);
 
 //--- snapshot of all engine outputs for the current tick
 struct SMarketSnapshot
@@ -898,9 +899,15 @@ bool AnalysisUpdate(void)
 
 //--- shared confidence core so the live path and the history seeder
 //    cannot drift apart
+//    v2.60: conviction measures the MARKET ONLY. Spread and execution
+//    quality are trading costs, not evidence about direction -- they gate
+//    entries (§10) and shape the quality score (§24). In v2.50 they were
+//    multiplied into conviction, and because the spread factor reaches
+//    exactly 0 at the limit, a single mis-scaled spread setting pinned
+//    conviction at 0.0 on every bar and silenced the whole EA.
 double ConfidenceCore(const double structS,const double trendS,const double momS,
                       const double liqS,const double mtfA,const double flowS,
-                      const double volSuit,const double spreadPts,const double execQ)
+                      const double volSuit)
   {
    double raw=g_w1*(structS/100.0)
              +g_w2*(trendS/100.0)
@@ -909,25 +916,31 @@ double ConfidenceCore(const double structS,const double trendS,const double momS
              +g_w5*mtfA
              +g_w6*(flowS/100.0);
    double cdir=100.0*MTanh(InpConfGain*raw);
+   return MathAbs(cdir)*MClamp(volSuit/100.0,0.0,1.0);
+  }
 
-   double pVol=volSuit/100.0;
-   double pSpread=1.0;
-   if(InpMaxSpreadPoints>0.0)
-     {
-      double freePts=InpSpreadFreeFrac*InpMaxSpreadPoints;
-      if(spreadPts>freePts)
-        {
-         double span=MathMax(InpMaxSpreadPoints-freePts,1e-9);
-         pSpread=MClamp(1.0-(spreadPts-freePts)/span,0.0,1.0);
-        }
-     }
-   double pExec=MClamp(execQ/100.0,0.0,1.0);
-   return MathAbs(cdir)*pVol*pSpread*pExec;
+//--- Effective spread limit (§10). An absolute point limit cannot travel
+//    between instruments: 40 points is generous on EURUSD and impossible
+//    on 3-digit gold. Scaling by ATR self-calibrates to the symbol's own
+//    bar range, with the point value as a floor.
+//    This gate is deliberately PERMISSIVE — it is a backstop against
+//    genuinely broken conditions (news spikes, rollover, illiquidity),
+//    not a cost filter. The economics of spread are priced properly by
+//    the Trade Quality Score (§24), which measures the edge remaining
+//    after round-turn cost against the actual profit target. Making this
+//    gate strict duplicates that job badly and silences the EA.
+double MaxSpreadPointsEffective(void)
+  {
+   double pt=SymbolInfoDouble(_Symbol,SYMBOL_POINT);
+   double byAtr=0.0;
+   if(pt>0.0 && g_snap.atr>0.0)
+      byAtr=InpMaxSpreadAtr*(g_snap.atr/pt);
+   return MathMax(byAtr,MathMax(InpMaxSpreadPoints,1.0));
   }
 
 //--- Confidence Engine (§8). A routine dealing spread costs nothing; the
 //    penalty only ramps as spread approaches the hard limit.
-void ComputeConfidence(const double execQuality)
+void ComputeConfidence(void)
   {
    double raw=g_w1*(g_snap.structureScore/100.0)
              +g_w2*(g_snap.trendScore/100.0)
@@ -940,8 +953,7 @@ void ComputeConfidence(const double execQuality)
    g_snap.confidenceFinal=ConfidenceCore(g_snap.structureScore,g_snap.trendScore,
                                          g_snap.momentumScore,g_snap.liquidityScore,
                                          g_snap.mtfAlignment,g_snap.orderFlowScore,
-                                         g_snap.volSuitability,g_snap.spreadPts,
-                                         execQuality);
+                                         g_snap.volSuitability);
   }
 
 //--- rolling confidence distribution: one sample per closed bar (§9)
@@ -1003,6 +1015,7 @@ int SeedDistributionFromHistory(void)
    if(want<=0) return 0;
    int pad=InpSlopeBars+InpRocLen+InpVolPctBars+2;
    int need=want+pad;
+   // accept a shorter seed rather than none at all
 
    double atrB[],adxB[],rsiB[],macdM[],macdS[],e20B[],e50B[],cl[],hi[],lo[];
    long tv[];
@@ -1015,7 +1028,11 @@ int SeedDistributionFromHistory(void)
 
    int got=CopyBuffer(g_hATR,0,0,need,atrB);
    if(got<pad+20)
-      return 0;                             // not enough history to seed
+     {
+      got=CopyBuffer(g_hATR,0,0,pad+60,atrB);   // minimal viable seed
+      if(got<pad+20)
+         return 0;
+     }                             // not enough history to seed
    need=got;
    if(CopyBuffer(g_hADX,0,0,need,adxB)<need)   return 0;
    if(CopyBuffer(g_hRSI,0,0,need,rsiB)<need)   return 0;
@@ -1083,7 +1100,7 @@ int SeedDistributionFromHistory(void)
 
       double conf=ConfidenceCore(g_snap.structureScore,trendS,momS,
                                  g_snap.liquidityScore,g_snap.mtfAlignment,flowS,
-                                 volSuit,g_snap.spreadPts,100.0);
+                                 volSuit);
       PushConfidenceSample(conf);
       seeded++;
      }
@@ -2016,10 +2033,12 @@ void TryEnter(const int dir,const bool isInitial,const SBasket &b)
       Block("session multiplier is zero (no-trade window)");
       return;
      }
-   if(g_snap.spreadPts>InpMaxSpreadPoints)
+   double sprLimit=MaxSpreadPointsEffective();
+   if(g_snap.spreadPts>sprLimit)
      {
-      Block(StringFormat("spread %.0f pts exceeds limit %.0f",
-                         g_snap.spreadPts,InpMaxSpreadPoints));
+      Block(StringFormat("spread %.0f pts exceeds limit %.0f (%.0f%% of ATR)",
+                         g_snap.spreadPts,sprLimit,
+                         (g_snap.atr>0.0 ? 100.0*g_snap.spreadPts*SymbolInfoDouble(_Symbol,SYMBOL_POINT)/g_snap.atr : 0.0)));
       return;
      }
    if(CorrelationVeto(dir))
@@ -2130,14 +2149,42 @@ void SelfTest(void)
                          InpStructLookback,InpVolPctBars,
                          (bars>=MathMax(InpStructLookback,InpVolPctBars)+50 ? "OK"
                           : "SHORT (load more history: scroll the chart back)")));
-   LogEvent(StringFormat("broker: min lot %.2f  step %.2f  stops level %d pts  spread now %.0f pts (limit %.0f)",
+   double sprLimit=MaxSpreadPointsEffective();
+   LogEvent(StringFormat("broker: min lot %.2f  step %.2f  contract %.0f  digits %d  stops level %d pts",
                          MinLot(),LotStep(),
-                         (int)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL),
-                         g_snap.spreadPts,InpMaxSpreadPoints));
-   LogEvent(StringFormat("account: equity %.2f  free margin %.2f  algo trading %s",
-                         AccountInfoDouble(ACCOUNT_EQUITY),
-                         AccountInfoDouble(ACCOUNT_MARGIN_FREE),
+                         SymbolInfoDouble(_Symbol,SYMBOL_TRADE_CONTRACT_SIZE),
+                         (int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS),
+                         (int)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)));
+   LogEvent(StringFormat("spread now %.0f pts  |  effective limit %.0f pts (%.0f%% of ATR, ATR=%.0f pts)",
+                         g_snap.spreadPts,sprLimit,InpMaxSpreadAtr*100.0,
+                         (SymbolInfoDouble(_Symbol,SYMBOL_POINT)>0.0
+                          ? g_snap.atr/SymbolInfoDouble(_Symbol,SYMBOL_POINT) : 0.0)));
+
+   double eqNow=AccountInfoDouble(ACCOUNT_EQUITY);
+   double freeNow=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   LogEvent(StringFormat("account: equity %.2f  free margin %.2f  leverage 1:%d  algo trading %s",
+                         eqNow,freeNow,(int)AccountInfoInteger(ACCOUNT_LEVERAGE),
                          (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ? "ENABLED" : "DISABLED — enable it")));
+
+   // AFFORDABILITY: can this account hold even the smallest allowed position?
+   // No amount of signal quality can overcome a margin shortfall, so say it
+   // plainly here rather than letting every order fail silently later.
+   MqlTick tk0;
+   if(SymbolInfoTick(_Symbol,tk0) && tk0.ask>0.0)
+     {
+      double marginMin=0.0;
+      if(OrderCalcMargin(ORDER_TYPE_BUY,_Symbol,MinLot(),tk0.ask,marginMin))
+        {
+         double needed=marginMin*InpMarginSafety;
+         LogEvent(StringFormat("affordability: min lot %.2f needs %.2f margin (%.2f with safety %.1fx) vs %.2f free",
+                               MinLot(),marginMin,needed,InpMarginSafety,freeNow));
+         if(needed>freeNow)
+            LogEvent(StringFormat("*** BLOCKING: this account CANNOT AFFORD one minimum lot of %s. ***  "
+                                  "Every order will be refused for insufficient margin regardless of signal. "
+                                  "Deposit at least %.2f, lower InpMarginSafety, or trade a smaller-contract symbol.",
+                                  _Symbol,needed));
+        }
+     }
 
    if(g_confCount>0)
      {
@@ -2181,14 +2228,14 @@ void DrawPanel(const SBasket &b)
       p85=StringFormat("%.0f",DistributionPercentile(85));
      }
    string txt=StringFormat(
-      "MEDULA v2.50  |  %s %s\n"
+      "MEDULA v2.60  |  %s %s\n"
       "──────────────────────────────\n"
       "regime        %s\n"
       "structure     %+7.1f     trend    %+7.1f\n"
       "momentum      %+7.1f     flow     %+7.1f\n"
       "liquidity     %+7.1f     MTF      %+7.2f\n"
       "vol pct %.0f  suit %.0f  forecast x%.2f\n"
-      "spread %.0f pts   exec %.0f   session x%.2f\n"
+      "spread %.0f/%.0f pts  exec %.0f  session x%.2f\n"
       "──────────────────────────────\n"
       "CONVICTION    %6.1f  %s\n"
       "rank          %6.0f pct   gate: %s\n"
@@ -2204,7 +2251,7 @@ void DrawPanel(const SBasket &b)
       g_snap.momentumScore,g_snap.orderFlowScore,
       g_snap.liquidityScore,g_snap.mtfAlignment,
       g_snap.volPercentile,g_snap.volSuitability,g_snap.volForecastRatio,
-      g_snap.spreadPts,ExecutionQuality(),SessionMultiplier(),
+      g_snap.spreadPts,MaxSpreadPointsEffective(),ExecutionQuality(),SessionMultiplier(),
       g_snap.confidenceFinal,(MSign(g_snap.confidenceDir)>0?"LONG":
                               (MSign(g_snap.confidenceDir)<0?"SHORT":"flat")),
       g_snap.confPercentile,mode,p50,p85,
@@ -2284,7 +2331,7 @@ int OnInit(void)
 
    SelfTest();
 
-   LogEvent(StringFormat("v2.50 ready on %s %s — entry at rank %.0f pct, floor %.1f, quality %.0f",
+   LogEvent(StringFormat("v2.60 ready on %s %s — entry at rank %.0f pct, floor %.1f, quality %.0f",
                          _Symbol,EnumToString(_Period),g_entryPct,
                          InpMinAbsConfidence,(InpUseQuality?InpMinTradeQuality:0.0)));
    return INIT_SUCCEEDED;
@@ -2362,7 +2409,7 @@ void OnTick(void)
         }
      }
 
-   ComputeConfidence(ExecutionQuality());
+   ComputeConfidence();
 
    int cDir=MSign(g_snap.confidenceDir);
    if(InpUseCorrelation && cDir!=0)

@@ -700,6 +700,90 @@ check("BreakEven: short stop moves below entry by the buffer",
 w = [0.22, 0.22, 0.18, 0.12, 0.13, 0.13]
 check("Confidence: six-engine weights normalize to 1", abs(sum(w)-1.0) < 1e-9)
 
+
+# ===================== v2.60 — XAUUSD DEAD-EA POSTMORTEM =================
+# Live backtest on XAUUSD.m M5 logged "conviction 0.0" on every bar for six
+# years. Root cause: the spread penalty multiplied into conviction reaches
+# EXACTLY zero at the limit, and a EURUSD-calibrated 40-point limit is
+# unreachable on 3-digit gold. These tests lock both fixes.
+
+def pspread_v250(sp, maxspr=40.0, freefrac=0.60):
+    free = freefrac*maxspr
+    if sp <= free: return 1.0
+    return mclamp(1-(sp-free)/max(maxspr-free,1e-9), 0, 1)
+
+check("POSTMORTEM: v2.50 spread factor reaches exactly 0.0 at the limit",
+      pspread_v250(40) == 0.0 and pspread_v250(300) == 0.0)
+check("POSTMORTEM: a zero factor annihilates any conviction (the dead EA)",
+      abs(87.0 * pspread_v250(300)) == 0.0)
+# no other factor could have produced exactly zero -> the diagnosis is unique
+vol_min = min(vol_suitability(p) for p in range(0, 101))/100.0
+check("POSTMORTEM: volatility factor can never reach zero (rules it out)",
+      vol_min > 0.15, f"min {vol_min:.3f}")
+
+def confidence_v260(struct, trend, mom, liq, mtf, flow, vol_suit,
+                    w=(0.22,0.22,0.18,0.12,0.13,0.13), gain=2.5):
+    """v2.60: conviction is market analysis ONLY -- no spread, no exec."""
+    raw = (w[0]*struct/100 + w[1]*trend/100 + w[2]*mom/100
+           + w[3]*liq/100 + w[4]*mtf + w[5]*flow/100)
+    return abs(100*mtanh(gain*raw))*mclamp(vol_suit/100, 0, 1)
+
+for spread in [0, 15, 40, 300, 5000]:
+    c = confidence_v260(60, 70, 55, 20, 0.6, 45, 90)
+    check(f"v2.60: conviction is independent of spread ({spread} pts)",
+          c > 40, f"{c:.1f}")
+check("v2.60: conviction can still be zero only if the market itself is flat",
+      confidence_v260(0, 0, 0, 0, 0, 0, 90) == 0.0)
+check("v2.60: any real directional evidence yields non-zero conviction",
+      confidence_v260(1, 0, 0, 0, 0, 0, 90) > 0.0)
+
+def max_spread_pts(atr_price, point, floor_pts=40.0, frac=0.50):
+    by_atr = frac*(atr_price/point) if point > 0 and atr_price > 0 else 0.0
+    return max(by_atr, max(floor_pts, 1.0))
+
+eur = max_spread_pts(0.00080, 0.00001)
+gold2 = max_spread_pts(0.80, 0.01)
+gold3 = max_spread_pts(0.80, 0.001)
+check("SpreadLimit: EURUSD keeps a sane tight limit", 28 <= eur <= 45, f"{eur:.0f}")
+check("SpreadLimit: 3-digit gold scales up automatically", gold3 > 250, f"{gold3:.0f}")
+# The hard gate is a BACKSTOP (0.50*ATR), not a cost filter -- §24 prices
+# the economics. A normal gold spread must clear the backstop and then be
+# penalized by quality, rather than being silently blocked.
+gold3 = max_spread_pts(0.80, 0.001, frac=0.50)
+check("SpreadLimit: a normal 300pt gold spread clears the backstop",
+      300 <= gold3, f"limit {gold3:.0f}")
+check("SpreadLimit: an abusive 900pt gold spread is still blocked",
+      900 > gold3, f"limit {gold3:.0f}")
+q_tight = trade_quality(300, 0.001, 2.4, 1.0, 0.9, 0.85, 0.95, 1.0, 1.0)
+q_wide  = trade_quality(900, 0.001, 2.4, 1.0, 0.9, 0.85, 0.95, 1.0, 1.0)
+check("SpreadLimit: quality engine still prices the spread it lets through",
+      q_wide < q_tight, f"{q_wide:.1f} vs {q_tight:.1f}")
+check("SpreadLimit: v2.50 fixed limit would have BLOCKED it", 300 > 40)
+check("SpreadLimit: absolute floor still protects tiny-ATR instruments",
+      max_spread_pts(0.00001, 0.00001) >= 40)
+check("SpreadLimit: limit rises monotonically with ATR",
+      all(max_spread_pts(a, 0.001) <= max_spread_pts(a+0.1, 0.001)
+          for a in [0.1, 0.5, 1.0, 5.0]))
+
+# --- affordability: the blocker no code can fix, so it must be REPORTED
+def affordable(equity, min_lot, contract, price, leverage, safety=1.5):
+    margin = min_lot*contract*price/leverage
+    return margin*safety <= equity, margin*safety
+
+ok10, need10 = affordable(10, 0.01, 100, 2000, 100)
+check("Affordability: $10 account CANNOT hold 0.01 lots of gold",
+      not ok10, f"needs ${need10:.2f}")
+ok50, _ = affordable(50, 0.01, 100, 2000, 100)
+check("Affordability: $50 clears the same gold position", ok50)
+okfx, needfx = affordable(10, 0.01, 100000, 1.10, 100)
+check("Affordability: $10 CANNOT hold 0.01 lots of EURUSD either",
+      not okfx, f"needs ${needfx:.2f}")
+okfx500, _ = affordable(10, 0.01, 100000, 1.10, 500)
+check("Affordability: 1:500 leverage brings 0.01 EURUSD within reach of $10",
+      okfx500)
+check("Affordability: requirement scales linearly with price",
+      abs(affordable(10,0.01,100,4000,100)[1] - 2*affordable(10,0.01,100,2000,100)[1]) < 1e-9)
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

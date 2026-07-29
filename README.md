@@ -5,8 +5,8 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 
 - **[MEDULA_FORMULAS.md](MEDULA_FORMULAS.md)** — formula specification for all 21 engines.
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
-- **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.50, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
-- **[tests/verify_medula.py](tests/verify_medula.py)** — 131-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
+- **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.60, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
+- **[tests/verify_medula.py](tests/verify_medula.py)** — 154-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
 
@@ -46,3 +46,24 @@ Three structural changes make idling impossible rather than unlikely:
 
 Profit protection was also added: partial take-profit at +1R and an automatic break-even
 move, so a winner cannot round-trip into a loser.
+
+### v2.60 — the XAUUSD postmortem
+
+A six-year XAUUSD.m M5 backtest logged `conviction 0.0` on every bar and took zero trades.
+Two independent causes:
+
+1. **Spread was multiplied into conviction.** The spread factor reaches *exactly* zero once
+   spread hits the limit, so conviction became exactly zero — and `InpMaxSpreadPoints=40`,
+   calibrated for 5-digit EURUSD, is unreachable on 3-digit gold where a normal $0.30 spread
+   is 300 points. **Fix:** conviction now measures the market only. Spread and execution
+   quality are trading *costs* — they gate entries and feed the Trade Quality Score (§24),
+   and can no longer annihilate the analysis signal.
+2. **The spread limit could not travel between instruments.** **Fix:** the limit is now
+   `max(InpMaxSpreadAtr × ATR, InpMaxSpreadPoints)`, self-calibrating to each symbol's own
+   bar range. It is deliberately permissive — a backstop against news spikes and rollover,
+   not a cost filter, because §24 already prices the economics properly.
+
+A third blocker was **not** fixable in code: a **$10 account cannot hold 0.01 lots of gold**
+(1 oz ≈ $2,000 notional → $20 margin at 1:100, $30 with the safety factor). The startup
+self-test now computes this explicitly and prints a blocking warning when the account cannot
+afford one minimum lot, instead of letting every order fail silently.
