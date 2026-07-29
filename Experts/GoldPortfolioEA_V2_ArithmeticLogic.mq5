@@ -38,6 +38,8 @@ input double WinRateFloor       = 40.0;
 input int    NewsBlackoutMins   = 5;
 input double LearningRate       = 0.01;
 input int    RankIntervalMins   = 15;
+input int    NNWarmupTrades     = 30;   // per symbol: bypass the NN confidence gate until this many trades have closed
+input int    DiagnosticMins     = 5;    // log a rejection-reason tally this often (0 = off)
 input double PyramidL1Mult      = 0.50;
 input double PyramidL2Mult      = 0.25;
 
@@ -107,6 +109,7 @@ input double PyramidL2Mult      = 0.25;
 struct VolatilityRank
 {
    string Symbol;
+   string BaseName;
    double VolScore;
    double SpreadScore;
    double FinalRank;
@@ -128,7 +131,8 @@ struct PriceStructure
 
 struct SymbolConfig
 {
-   string   Name;
+   string   Name;       // broker-resolved name, e.g. "XAUUSD.m"
+   string   BaseName;   // canonical name from the watchlist, e.g. "XAUUSD"
    bool     Available;
    bool     Selected;
    double   MinLot, LotStep, MaxLot;
@@ -219,6 +223,66 @@ bool              g_portfolioRiskBlocked = false;
 // ENUMS
 //======================================================================
 enum ENUM_SESSION { SESSION_ASIAN, SESSION_LONDON, SESSION_NY, SESSION_OVERLAP, SESSION_OFFHOURS };
+
+// Why a candidate entry was rejected - tallied so "no trades" is diagnosable.
+enum ENUM_REJECT
+{
+   REJ_SESSION, REJ_VOLGATE, REJ_SPIKE, REJ_STRUCTURE, REJ_HTF, REJ_ZONE,
+   REJ_CONFLUENCE, REJ_GOLD_FADE, REJ_CANDLE, REJ_NN, REJ_RR,
+   REJ_TRADEABLE, REJ_MAXTRADES, REJ_PORTFOLIO_RISK, REJ_LOT, REJ_COUNT
+};
+
+int      g_reject[REJ_COUNT];
+int      g_entriesTaken = 0;
+datetime g_lastDiagTime = 0;
+
+string RejectName(int r)
+{
+   switch(r)
+   {
+      case REJ_SESSION:        return "session closed";
+      case REJ_VOLGATE:        return "volatility gate";
+      case REJ_SPIKE:          return "volatility spike pause";
+      case REJ_STRUCTURE:      return "no valid H1 structure";
+      case REJ_HTF:            return "no HTF trend majority";
+      case REJ_ZONE:           return "price outside 38.2-61.8% zone";
+      case REJ_CONFLUENCE:     return "confluence below required";
+      case REJ_GOLD_FADE:      return "gold: would fade Asian breakout";
+      case REJ_CANDLE:         return "M1 candle not confirming";
+      case REJ_NN:             return "NN confidence below threshold";
+      case REJ_RR:             return "risk/reward below minimum";
+      case REJ_TRADEABLE:      return "symbol gated (spread/breaker/news/margin)";
+      case REJ_MAXTRADES:      return "max concurrent trades reached";
+      case REJ_PORTFOLIO_RISK: return "portfolio risk cap";
+      case REJ_LOT:            return "lot size below broker minimum";
+   }
+   return "unknown";
+}
+
+void LogDiagnosticsIfDue()
+{
+   if(DiagnosticMins <= 0) return;
+   if(TimeCurrent() - g_lastDiagTime < DiagnosticMins * 60) return;
+   g_lastDiagTime = TimeCurrent();
+
+   int total = 0;
+   for(int r = 0; r < REJ_COUNT; r++) total += g_reject[r];
+   if(total == 0 && g_entriesTaken == 0)
+   {
+      Print("DIAG: no M1 candles evaluated yet (check that symbols are selected and ticks are arriving)");
+      return;
+   }
+
+   string line = "";
+   for(int r = 0; r < REJ_COUNT; r++)
+      if(g_reject[r] > 0) line += StringFormat("%s=%d  ", RejectName(r), g_reject[r]);
+
+   PrintFormat("DIAG (last %d min): entries=%d  rejections=%d | %s",
+               DiagnosticMins, g_entriesTaken, total, line);
+
+   ArrayInitialize(g_reject, 0);
+   g_entriesTaken = 0;
+}
 
 //======================================================================
 // ARITHMETIC LOGIC: Price Structure Detection
@@ -1202,6 +1266,7 @@ void ProcessSymbol(int idx)
    {
       g_cfg[idx].SpikePauseActive = true;
       g_cfg[idx].SpikePauseExpiry = TimeCurrent() + VOL_SPIKE_PAUSE_SEC;
+      g_reject[REJ_SPIKE]++;
       return;
    }
 
@@ -1212,40 +1277,41 @@ void ProcessSymbol(int idx)
       return;
    }
 
-   if(!VolatilityGatePass(sym)) return;
+   if(!VolatilityGatePass(sym)) { g_reject[REJ_VOLGATE]++; return; }
 
    ENUM_SESSION session = GetCurrentSession();
-   if(!IsSessionTradingAllowed(session)) return;
+   if(!IsSessionTradingAllowed(session)) { g_reject[REJ_SESSION]++; return; }
 
    // ===== ARITHMETIC LOGIC PIPELINE =====
    // 1. Get price structure (swings, fibs, support/resistance)
    PriceStructure ps = GetPriceStructure(sym, PERIOD_H1, 20);
-   if(!ps.IsStructureValid) return;
+   if(!ps.IsStructureValid) { g_reject[REJ_STRUCTURE]++; return; }
 
    // 2. Get HTF trend bias
    int htfBias = GetHTFBias(sym);
-   if(htfBias == 0) return;
+   if(htfBias == 0) { g_reject[REJ_HTF]++; return; }
 
    // 3. The retracement trade only exists inside the 38.2-61.8% zone -
    //    outside it the SL/TP geometry below has no meaning.
-   if(!InRetracementZone(htfBias, bid, ps)) return;
+   if(!InRetracementZone(htfBias, bid, ps)) { g_reject[REJ_ZONE]++; return; }
 
    // 4. Confluence - multiple signals must align
    int confluence = CountConfluence(sym, htfBias, ps, bid);
    int requiredConfluence = RequireConfluence ? 2 : 0;
 
    // 4b. GOLD MODULE: Asian-range context during London/NY hours.
-   if(EnableGoldLogic && sym == GOLD_SYMBOL && session != SESSION_ASIAN && session != SESSION_OFFHOURS)
+   bool isGold = (g_cfg[idx].BaseName == GOLD_SYMBOL);
+   if(EnableGoldLogic && isGold && session != SESSION_ASIAN && session != SESSION_OFFHOURS)
    {
       int asianBias = GetAsianRangeBias(sym);
-      if(asianBias != 0 && asianBias != htfBias) return; // never fade a resolved breakout
+      if(asianBias != 0 && asianBias != htfBias) { g_reject[REJ_GOLD_FADE]++; return; } // never fade a resolved breakout
       if(asianBias == 0)
          requiredConfluence = MathMax(requiredConfluence, INSIDE_RANGE_CONFLUENCE); // unresolved range = chop risk
    }
-   if(confluence < requiredConfluence) return;
+   if(confluence < requiredConfluence) { g_reject[REJ_CONFLUENCE]++; return; }
 
    // 5. M1 candle confirmation
-   if(!M1CandleConfirmation(sym, htfBias)) return;
+   if(!M1CandleConfirmation(sym, htfBias)) { g_reject[REJ_CANDLE]++; return; }
 
    // 6. Microstructure signals (NN input)
    double deltaScore   = GetTickDeltaScore(sym);
@@ -1253,10 +1319,18 @@ void ProcessSymbol(int idx)
    double velocityScore = GetTickVelocityScore(g_cfg[idx], sym);
    double spreadRatio   = GetSpreadRatio(sym);
 
-   // 7. Neural net confidence gate
+   // 7. Neural net confidence gate.
+   //    Always run the forward pass so LastInput/LastHidden/LastOutput are
+   //    populated for backprop when the trade closes. During warm-up the gate
+   //    itself is bypassed: with freshly randomised weights the network emits
+   //    ~0.5, far under the 0.89-0.96 session thresholds, and it only learns
+   //    from CLOSED trades - so gating on it from trade zero is a deadlock
+   //    (no entries -> no closes -> no learning -> no entries, forever).
+   //    The arithmetic gates above and the RR check below still apply.
    double confidence = GetNNConfidence(g_cfg[idx], deltaScore, pressureProxy, velocityScore, (double)htfBias, spreadRatio);
    double threshold = GetSignalThreshold(session);
-   if(confidence < threshold) return;
+   bool nnWarmedUp = (g_cfg[idx].RollingTradeCount >= NNWarmupTrades);
+   if(nnWarmedUp && confidence < threshold) { g_reject[REJ_NN]++; return; }
 
    // 8. Retracement geometry: SL beyond the 78.6% invalidation,
    //    TP at the swing extreme. Gold TP additionally capped inside
@@ -1264,33 +1338,33 @@ void ProcessSymbol(int idx)
    //    else's orders cluster.
    double sl = GetStructureSL(htfBias, ps, SL_MIN_POINTS * g_cfg[idx].PointValue);
    double tp = GetStructureTP(htfBias, ps);
-   if(EnableGoldLogic && sym == GOLD_SYMBOL)
+   if(EnableGoldLogic && isGold)
       tp = ApplyGoldRoundNumberCap(htfBias, bid, tp);
 
    // 9. Validate risk/reward ratio BEFORE entry
-   if(!ValidateRiskReward(bid, sl, tp, htfBias))
-   {
-      PrintFormat("Entry rejected - [%s] RR ratio below %.2f:1 required", sym, MinRiskRewardRatio);
-      return;
-   }
+   if(!ValidateRiskReward(bid, sl, tp, htfBias)) { g_reject[REJ_RR]++; return; }
 
    // 10. Pre-flight checks
-   if(!IsSymbolTradeable(idx)) return;
-   if(CountOpenManagedPositions() >= g_maxTrades) return;
-   if(g_portfolioRiskBlocked) return;
+   if(!IsSymbolTradeable(idx))                    { g_reject[REJ_TRADEABLE]++; return; }
+   if(CountOpenManagedPositions() >= g_maxTrades) { g_reject[REJ_MAXTRADES]++; return; }
+   if(g_portfolioRiskBlocked)                     { g_reject[REJ_PORTFOLIO_RISK]++; return; }
 
    // 11. Kelly-adjusted lot sizing
    double slDist = MathAbs(bid - sl);
    double riskAmt;
    double activeRisk = GetActiveRiskPct();
    double lot = CalculateLotSize(idx, activeRisk, slDist, riskAmt);
-   if(lot <= 0.0) return;
+   if(lot <= 0.0) { g_reject[REJ_LOT]++; return; }
 
    if(ComputePortfolioRisk() + riskAmt > AccountInfoDouble(ACCOUNT_EQUITY) * PORTFOLIO_RISK_CAP_FRACTION)
+   {
+      g_reject[REJ_PORTFOLIO_RISK]++;
       return;
+   }
 
    // 12. OPEN
-   OpenPosition(idx, htfBias, lot, sl, tp, riskAmt);
+   if(OpenPosition(idx, htfBias, lot, sl, tp, riskAmt))
+      g_entriesTaken++;
 }
 
 //======================================================================
@@ -1479,6 +1553,7 @@ void RankSymbols()
    for(int i = 0; i < g_symbolCount; i++)
    {
       g_rank[i].Symbol = g_cfg[i].Name;
+      g_rank[i].BaseName = g_cfg[i].BaseName;
       g_rank[i].Selected = false;
 
       if(!g_cfg[i].Available) { g_rank[i].FinalRank = -1.0; continue; }
@@ -1514,11 +1589,13 @@ void RankSymbols()
 
    int selectedCount = 0;
 
+   // Gold keeps a guaranteed slot - match on the canonical base name so a
+   // broker suffix (XAUUSD.m) still counts as gold.
    for(int i = 0; i < g_symbolCount; i++)
    {
-      if(g_rank[i].Symbol == GOLD_SYMBOL)
+      if(g_rank[i].BaseName == GOLD_SYMBOL)
       {
-         int gi = FindCfgIndex(GOLD_SYMBOL);
+         int gi = FindCfgIndex(g_rank[i].Symbol);
          if(gi >= 0 && g_cfg[gi].Available && g_rank[i].FinalRank > -1.0)
          {
             g_rank[i].Selected = true;
@@ -1557,17 +1634,52 @@ void UpdateSessionResetIfNeeded()
    }
 }
 
-bool InitSymbolConfig(int idx, string sym)
+// Brokers append suffixes to symbol names (XAUUSD.m, EURUSD.raw, XAUUSDpro...).
+// Derive that suffix from the chart symbol the EA is attached to, by finding
+// which watchlist base name the chart symbol starts with.
+string DetectBrokerSuffix()
+{
+   string chartSym = _Symbol;
+   for(int i = 0; i < g_symbolCount; i++)
+   {
+      string base = g_watchSymbols[i];
+      int baseLen = StringLen(base);
+      if(StringLen(chartSym) > baseLen && StringFind(chartSym, base) == 0)
+         return StringSubstr(chartSym, baseLen);
+   }
+   return "";
+}
+
+// Resolve a watchlist base name to the broker's actual symbol name.
+// Tries the bare name first, then the detected suffix.
+bool ResolveSymbolName(string base, string suffix, string &resolved)
+{
+   if(SymbolSelect(base, true)) { resolved = base; return true; }
+   if(suffix != "")
+   {
+      string withSuffix = base + suffix;
+      if(SymbolSelect(withSuffix, true)) { resolved = withSuffix; return true; }
+   }
+   resolved = base;
+   return false;
+}
+
+bool InitSymbolConfig(int idx, string baseSym, string suffix)
 {
    ZeroMemory(g_cfg[idx]);
-   g_cfg[idx].Name = sym;
+   g_cfg[idx].BaseName = baseSym;
    g_cfg[idx].PeakEquity = AccountInfoDouble(ACCOUNT_EQUITY);
 
-   if(!SymbolSelect(sym, true))
+   string sym;
+   if(!ResolveSymbolName(baseSym, suffix, sym))
    {
+      g_cfg[idx].Name = baseSym;
       g_cfg[idx].Available = false;
+      PrintFormat("Symbol unavailable on this broker: %s (tried '%s'%s) - skipped",
+                  baseSym, baseSym, suffix != "" ? " and '" + baseSym + suffix + "'" : "");
       return false;
    }
+   g_cfg[idx].Name = sym;
 
    double minLot = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
    double lotStep = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
@@ -1630,10 +1742,21 @@ int OnInit()
    g_hedgingMode = (marginMode == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING);
 
    ParseWatchlist();
+   string suffix = DetectBrokerSuffix();
+   if(suffix != "")
+      PrintFormat("Broker symbol suffix detected from chart symbol '%s': '%s'", _Symbol, suffix);
+
    int availableCount = 0;
    for(int i = 0; i < g_symbolCount; i++)
-      if(InitSymbolConfig(i, g_watchSymbols[i])) availableCount++;
+      if(InitSymbolConfig(i, g_watchSymbols[i], suffix)) availableCount++;
    okScan = (availableCount > 0);
+
+   if(!okScan)
+   {
+      PrintFormat("CRITICAL: none of the %d watchlist symbols could be resolved on this broker.", g_symbolCount);
+      Print("Set Watchlist to names your broker actually lists (check Market Watch), then reload.");
+      return INIT_FAILED;
+   }
 
    if(!LoadWeights())
       InitializeWeights();
@@ -1651,6 +1774,13 @@ int OnInit()
    PrintFormat("[OK] Kelly Criterion sizing: %s", EnableKellySizing ? "ON" : "OFF");
    PrintFormat("[OK] Gold module (Asian range + round numbers): %s", EnableGoldLogic ? "ON" : "OFF");
    PrintFormat("[OK] Confluence required: %d+ signals", RequireConfluence ? 2 : 0);
+   PrintFormat("[OK] NN gate: bypassed until %d closed trades per symbol (warm-up)", NNWarmupTrades);
+
+   string activeList = "";
+   for(int i = 0; i < g_symbolCount; i++)
+      if(g_cfg[i].Selected) activeList += g_cfg[i].Name + " ";
+   PrintFormat("[OK] Active symbols: %s", activeList == "" ? "(none)" : activeList);
+   PrintFormat("[OK] Diagnostics: rejection tally every %d min", DiagnosticMins);
    Print("=========================================================");
 
    return INIT_SUCCEEDED;
@@ -1700,6 +1830,7 @@ void OnTimer()
          ProcessSymbol(i);
 
    ManageOpenPositions();
+   LogDiagnosticsIfDue();
 }
 
 //======================================================================
