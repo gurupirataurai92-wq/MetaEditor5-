@@ -28,7 +28,7 @@
 //|  risk actually taken, and a hard ceiling caps any single trade.  |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "3.00"
+#property version   "3.10"
 
 //============================== INPUTS ==============================
 
@@ -75,7 +75,7 @@ input double InpWMtf       = 0.12;      // Weight: higher-timeframe structure
 input double InpWLiquidity = 0.06;      // Weight: liquidity pools
 input double InpConvGain          = 2.2;   // Conviction tanh gain
 input bool   InpUsePercentile     = true;  // Rank conviction vs its own history
-input double InpEntryPercentile   = 75.0;  // Enter in the top (100-this)%
+input double InpEntryPercentile   = 68.0;  // Enter in the top (100-this)%
 input int    InpConfSampleSize    = 400;   // Rolling distribution size (bars)
 input int    InpMinSamples        = 30;    // Samples before percentile mode engages
 input double InpMinAbsConviction  = 12.0;  // Absolute floor (safety, never relaxed)
@@ -84,10 +84,10 @@ input double InpExitConvFraction  = 0.50;  // Exit below this x entry conviction
 
 input group "Participation Watchdog"
 input bool   InpUseWatchdog      = true;  // Relax selectivity when idle too long
-input int    InpIdleBarsRelax    = 30;    // Idle bars before relaxation starts
-input int    InpRelaxEveryBars   = 8;     // Relax a step per this many further bars
+input int    InpIdleBarsRelax    = 12;    // Idle bars before relaxation starts
+input int    InpRelaxEveryBars   = 5;     // Relax a step per this many further bars
 input double InpRelaxStepPct     = 2.5;   // Percentile points released per step
-input double InpRelaxFloorPct    = 55.0;  // Never relax below this percentile
+input double InpRelaxFloorPct    = 45.0;  // Never relax below this percentile
 
 input group "Risk"
 input double InpRiskPct           = 1.0;   // Risk per trade (% equity)
@@ -102,6 +102,8 @@ input double InpMaxBasketRiskPct  = 4.0;   // Max basket risk (% equity)
 input double InpMaxRiskPctHard    = 20.0;  // ABSOLUTE ceiling on one trade (% equity)
 input bool   InpAllowMinLot       = true;  // Round up to broker min lot
 input bool   InpMinLotOverride    = true;  // Min-lot trade may exceed the planned cap
+input bool   InpFitStopToAccount  = false; // Tighten the stop so min lot fits the ceiling
+input bool   InpSkipUnaffordable  = true;  // Otherwise skip setups whose stop is too wide
 
 input group "Exits"
 input bool   InpUseBreakEven   = true;   // Move stop to entry once in profit
@@ -814,6 +816,21 @@ bool MarginOK(const int dir,const double lots)
                        (dir>0?t.ask:t.bid),m)) return false;
    return AccountInfoDouble(ACCOUNT_MARGIN_FREE)>=m*InpMarginSafety;
   }
+//--- The widest stop this account can carry at the broker minimum lot while
+//    staying inside the hard risk ceiling. On a small account trading a large
+//    contract this is the binding constraint on everything: not the signal,
+//    not the spread, but how far the stop can be from entry.
+double AffordableStopDistance(void)
+  {
+   double eq=AccountInfoDouble(ACCOUNT_EQUITY);
+   double cap=eq*InpMaxRiskPctHard/100.0;
+   double tv=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_VALUE);
+   double ts=SymbolInfoDouble(_Symbol,SYMBOL_TRADE_TICK_SIZE);
+   double lot=MinLot();
+   if(tv<=0.0 || ts<=0.0 || lot<=0.0) return 0.0;
+   return cap/(tv/ts*lot);
+  }
+
 double MaxSpreadPts(void)
   {
    double pt=SymbolInfoDouble(_Symbol,SYMBOL_POINT);
@@ -973,6 +990,36 @@ void TryEnter(const int dir,const SBasket &b)
 
    double slDist=MathAbs(entry-sl);
    if(slDist<=0.0){ Block("stop distance resolved to zero"); return; }
+
+   // Reconcile the structural stop with what the account can actually carry.
+   double afford=AffordableStopDistance();
+   if(afford>0.0 && slDist>afford)
+     {
+      if(InpFitStopToAccount)
+        {
+         // The stop is moved from where price action says the idea fails to
+         // where the account can afford it. This is a real degradation: the
+         // trade can now be stopped out while the setup is still valid, so
+         // expect a lower win rate. It is enabled deliberately, not silently.
+         double old=slDist;
+         slDist=afford;
+         sl=NormalizeDouble(dir>0 ? entry-slDist : entry+slDist,digits);
+         tp=NormalizeDouble(dir>0 ? entry+InpTpRMultiple*slDist
+                                  : entry-InpTpRMultiple*slDist,digits);
+         LogEvent(StringFormat("stop tightened to fit account: %.5f -> %.5f "
+                               "(structural level was %.1fx further away)",
+                               old,slDist,old/MathMax(slDist,1e-9)));
+        }
+      else if(InpSkipUnaffordable)
+        {
+         Block(StringFormat("%s: stop needs %.2f but account can only carry %.2f "
+                            "at min lot — deposit ~%.0f to trade this setup, or enable "
+                            "InpFitStopToAccount",
+                            g_view.setup,slDist,afford,
+                            RiskOfLots(MinLot(),slDist)/(InpMaxRiskPctHard/100.0)));
+         return;
+        }
+     }
 
    double eq=AccountInfoDouble(ACCOUNT_EQUITY);
    double plannedRisk=eq*InpRiskPct/100.0*SessionMult();
@@ -1207,6 +1254,14 @@ void SelfTest(void)
                             "%.0f (to honour the %.1f%% plan)",
                             minRisk/(InpMaxRiskPctHard/100.0),InpMaxRiskPctHard,
                             minRisk/(InpRiskPct/100.0),InpRiskPct));
+      double afford=AffordableStopDistance();
+      LogEvent(StringFormat("widest stop this account can carry at min lot: %.5f (%.2f x ATR)",
+                            afford,(g_view.atr>0.0 ? afford/g_view.atr : 0.0)));
+      if(afford<1.0*g_view.atr)
+         LogEvent(StringFormat("NOTE: that is under 1 ATR — most structural stops will be too wide. "
+                               "Either deposit ~%.0f, or set InpFitStopToAccount=true to trade with "
+                               "stops placed by affordability instead of by structure.",
+                               RiskOfLots(MinLot(),2.0*g_view.atr)/(InpMaxRiskPctHard/100.0)));
       if(minRisk>eq*InpMaxRiskPctHard/100.0)
          LogEvent("*** BLOCKING: one minimum-lot stop-out exceeds the hard risk ceiling on this "
                   "equity. The broker minimum is too large for this account on this symbol — "
@@ -1228,7 +1283,7 @@ void Panel(const SBasket &b)
                 ? StringFormat("rank>=%.0f%s",g_effPct,(g_effPct<g_entryPct-0.01?" (relaxed)":""))
                 : StringFormat("warmup %d/%d",g_convCount,InpMinSamples));
    Comment(StringFormat(
-      "MEDULA v3.00  PRICE ACTION  |  %s %s\n"
+      "MEDULA v3.10  PRICE ACTION  |  %s %s\n"
       "no indicators — structure, zones and candles only\n"
       "──────────────────────────────────────\n"
       "structure   %+6.0f   dir %+d\n"
@@ -1323,7 +1378,7 @@ int OnInit(void)
      }
 
    SelfTest();
-   LogEvent(StringFormat("v3.00 price-action mode ready — entry at rank %.0f pct, floor %.1f",
+   LogEvent(StringFormat("v3.10 price-action mode ready — entry at rank %.0f pct, floor %.1f",
                          g_entryPct,InpMinAbsConviction));
    return INIT_SUCCEEDED;
   }

@@ -1032,6 +1032,49 @@ check("PRICE ACTION: configuration produces trades over a normal stretch",
 check("PRICE ACTION: still selective, not firing on every setup",
       fired < 800*0.12, f"{fired} of ~96 setups taken")
 
+
+# ============= v3.10 AFFORDABILITY-AWARE STOP PLACEMENT ==================
+def affordable_stop(equity, ceiling_pct, min_lot, contract):
+    """Widest stop the account can carry at broker minimum lot."""
+    cap = equity*ceiling_pct/100.0
+    per_unit = min_lot*contract          # currency moved per 1.0 price unit
+    return cap/per_unit if per_unit > 0 else 0.0
+
+a10  = affordable_stop(10, 20, 0.01, 100)
+a50  = affordable_stop(50, 20, 0.01, 100)
+a100 = affordable_stop(100, 20, 0.01, 100)
+check("Affordable stop: $10 gold account can carry only a $2 stop",
+      abs(a10-2.0) < 1e-9, f"${a10:.2f}")
+check("Affordable stop: scales linearly with equity",
+      abs(a100 - 10*a10) < 1e-9 and abs(a50 - 5*a10) < 1e-9)
+check("Affordable stop: $10 cannot cover the logged $7.70 structural stop", a10 < 7.70)
+check("Affordable stop: $50 covers every stop seen in the live log", a50 >= 7.70)
+
+def entry_decision(structural_stop, equity, fit_to_account, skip_unaffordable,
+                   ceiling_pct=20, min_lot=0.01, contract=100):
+    afford = affordable_stop(equity, ceiling_pct, min_lot, contract)
+    if structural_stop <= afford: return ("TRADE", structural_stop)
+    if fit_to_account:            return ("TRADE_TIGHTENED", afford)
+    if skip_unaffordable:         return ("SKIP", 0.0)
+    return ("SKIP", 0.0)
+
+check("v3.10: affordable structural stop is taken as-is",
+      entry_decision(1.50, 10, False, True)[0] == "TRADE")
+check("v3.10: unaffordable stop is skipped by default (structure preserved)",
+      entry_decision(7.70, 10, False, True)[0] == "SKIP")
+check("v3.10: fit-to-account tightens instead of skipping when enabled",
+      entry_decision(7.70, 10, True, True) == ("TRADE_TIGHTENED", 2.0))
+check("v3.10: tightened stop never exceeds the risk ceiling",
+      entry_decision(7.70, 10, True, True)[1] <= affordable_stop(10, 20, 0.01, 100)+1e-9)
+check("v3.10: a funded account needs neither tightening nor skipping",
+      entry_decision(7.70, 100, False, True)[0] == "TRADE")
+
+# the honest cost of Option B: the stop sits inside the real invalidation level
+tightened = entry_decision(7.70, 10, True, True)[1]
+check("v3.10: tightening is a real degradation, not a free lunch",
+      tightened < 7.70 and 7.70/tightened > 3.0,
+      f"stops out {7.70/tightened:.1f}x too early")
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
