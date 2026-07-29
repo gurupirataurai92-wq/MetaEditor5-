@@ -180,10 +180,13 @@ int               g_currentTier   = 0;
 int               g_maxTrades     = 0;
 double            g_tierRiskPct   = 0.0;
 
-matrix            g_W1(NN_INPUTS, NN_HIDDEN);
-matrix            g_W2(NN_HIDDEN, 1);
-vector            g_B1(NN_HIDDEN);
-vector            g_B2(1);
+// Plain arrays rather than matrix/vector types: the network is 5x8x1, so the
+// matrix class buys nothing here and its element-access syntax has varied
+// between MetaEditor builds. File layout on disk is unchanged: W1, W2, B1, B2.
+double            g_W1[NN_INPUTS][NN_HIDDEN];
+double            g_W2[NN_HIDDEN];
+double            g_B1[NN_HIDDEN];
+double            g_B2;
 
 int               g_dbHandle = INVALID_HANDLE;
 int               g_tickLogCounter = 0;
@@ -374,11 +377,11 @@ void InitializeWeights()
    MathSrand((int)TimeLocal());
    for(int i = 0; i < NN_INPUTS; i++)
       for(int j = 0; j < NN_HIDDEN; j++)
-         g_W1[i, j] = ((MathRand() / 32767.0) * 2.0 - 1.0) * WEIGHT_INIT_RANGE;
+         g_W1[i][j] = ((MathRand() / 32767.0) * 2.0 - 1.0) * WEIGHT_INIT_RANGE;
    for(int j = 0; j < NN_HIDDEN; j++)
-      g_W2[j, 0] = ((MathRand() / 32767.0) * 2.0 - 1.0) * WEIGHT_INIT_RANGE;
-   g_B1.Fill(0.0);
-   g_B2.Fill(0.0);
+      g_W2[j] = ((MathRand() / 32767.0) * 2.0 - 1.0) * WEIGHT_INIT_RANGE;
+   ArrayInitialize(g_B1, 0.0);
+   g_B2 = 0.0;
    Print("Neural network initialized with random weights - learning begins");
 }
 
@@ -393,12 +396,12 @@ bool LoadWeights()
    }
    for(int i = 0; i < NN_INPUTS; i++)
       for(int j = 0; j < NN_HIDDEN; j++)
-         g_W1[i, j] = FileReadDouble(fh);
+         g_W1[i][j] = FileReadDouble(fh);
    for(int j = 0; j < NN_HIDDEN; j++)
-      g_W2[j, 0] = FileReadDouble(fh);
+      g_W2[j] = FileReadDouble(fh);
    for(int j = 0; j < NN_HIDDEN; j++)
       g_B1[j] = FileReadDouble(fh);
-   g_B2[0] = FileReadDouble(fh);
+   g_B2 = FileReadDouble(fh);
    FileClose(fh);
    Print("Neural network weights loaded from ", WEIGHTS_FILENAME);
    return true;
@@ -414,12 +417,12 @@ void SaveWeights()
    }
    for(int i = 0; i < NN_INPUTS; i++)
       for(int j = 0; j < NN_HIDDEN; j++)
-         FileWriteDouble(fh, g_W1[i, j]);
+         FileWriteDouble(fh, g_W1[i][j]);
    for(int j = 0; j < NN_HIDDEN; j++)
-      FileWriteDouble(fh, g_W2[j, 0]);
+      FileWriteDouble(fh, g_W2[j]);
    for(int j = 0; j < NN_HIDDEN; j++)
       FileWriteDouble(fh, g_B1[j]);
-   FileWriteDouble(fh, g_B2[0]);
+   FileWriteDouble(fh, g_B2);
    FileClose(fh);
 }
 
@@ -429,28 +432,29 @@ void SaveWeights()
 double GetNNConfidence(SymbolConfig &cfg, double deltaScore, double pressureProxy,
                         double velocityScore, double htfBias, double spreadRatio)
 {
-   double input[NN_INPUTS];
-   input[0] = deltaScore;
-   input[1] = pressureProxy;
-   input[2] = velocityScore;
-   input[3] = htfBias;
-   input[4] = spreadRatio;
+   // 'input' is a reserved MQL5 keyword - the feature vector must not use it.
+   double nnInput[NN_INPUTS];
+   nnInput[0] = deltaScore;
+   nnInput[1] = pressureProxy;
+   nnInput[2] = velocityScore;
+   nnInput[3] = htfBias;
+   nnInput[4] = spreadRatio;
 
    double hidden[NN_HIDDEN];
    for(int j = 0; j < NN_HIDDEN; j++)
    {
       double sum = g_B1[j];
       for(int i = 0; i < NN_INPUTS; i++)
-         sum += input[i] * g_W1[i, j];
+         sum += nnInput[i] * g_W1[i][j];
       hidden[j] = Sigmoid(sum);
    }
 
-   double outSum = g_B2[0];
+   double outSum = g_B2;
    for(int j = 0; j < NN_HIDDEN; j++)
-      outSum += hidden[j] * g_W2[j, 0];
+      outSum += hidden[j] * g_W2[j];
    double output = Sigmoid(outSum);
 
-   for(int i = 0; i < NN_INPUTS; i++) cfg.LastInput[i] = input[i];
+   for(int i = 0; i < NN_INPUTS; i++) cfg.LastInput[i] = nnInput[i];
    for(int j = 0; j < NN_HIDDEN; j++) cfg.LastHidden[j] = hidden[j];
    cfg.LastOutput = output;
 
@@ -468,16 +472,16 @@ void UpdateWeights(SymbolConfig &cfg, double tradePnL)
    for(int j = 0; j < NN_HIDDEN; j++)
    {
       double h = cfg.LastHidden[j];
-      dHidden[j] = dOut * g_W2[j, 0] * h * (1.0 - h);
+      dHidden[j] = dOut * g_W2[j] * h * (1.0 - h);
    }
 
    for(int j = 0; j < NN_HIDDEN; j++)
-      g_W2[j, 0] += LearningRate * cfg.LastHidden[j] * dOut;
-   g_B2[0] += LearningRate * dOut;
+      g_W2[j] += LearningRate * cfg.LastHidden[j] * dOut;
+   g_B2 += LearningRate * dOut;
 
    for(int i = 0; i < NN_INPUTS; i++)
       for(int j = 0; j < NN_HIDDEN; j++)
-         g_W1[i, j] += LearningRate * cfg.LastInput[i] * dHidden[j];
+         g_W1[i][j] += LearningRate * cfg.LastInput[i] * dHidden[j];
    for(int j = 0; j < NN_HIDDEN; j++)
       g_B1[j] += LearningRate * dHidden[j];
 
@@ -998,12 +1002,20 @@ void LogEquitySnapshotIfDue()
    LogEquitySnapshot();
 }
 
-double MatrixChecksum(matrix &m)
+double W1Checksum()
 {
    double sum = 0.0;
-   for(ulong i = 0; i < m.Rows(); i++)
-      for(ulong j = 0; j < m.Cols(); j++)
-         sum += m[i, j];
+   for(int i = 0; i < NN_INPUTS; i++)
+      for(int j = 0; j < NN_HIDDEN; j++)
+         sum += g_W1[i][j];
+   return sum;
+}
+
+double W2Checksum()
+{
+   double sum = 0.0;
+   for(int j = 0; j < NN_HIDDEN; j++)
+      sum += g_W2[j];
    return sum;
 }
 
@@ -1014,7 +1026,7 @@ void LogNNCheckpointIfDue()
    double wr = (g_nnTotalTrades > 0) ? (double)g_nnWins / (double)g_nnTotalTrades : 0.0;
    string sql = StringFormat(
       "INSERT INTO nn_weights(ts,w1_checksum,w2_checksum,total_trades,win_rate) VALUES(%d,%.6f,%.6f,%d,%.4f)",
-      (int)TimeCurrent(), MatrixChecksum(g_W1), MatrixChecksum(g_W2), g_nnTotalTrades, wr);
+      (int)TimeCurrent(), W1Checksum(), W2Checksum(), g_nnTotalTrades, wr);
    DatabaseExecute(g_dbHandle, sql);
 }
 
