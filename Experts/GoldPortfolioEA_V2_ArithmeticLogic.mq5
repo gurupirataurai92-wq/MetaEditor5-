@@ -25,10 +25,27 @@ input bool   TradeAsian         = true;
 input bool   TradeLondon        = true;
 input bool   TradeNewYork       = true;
 input bool   TradeOffHours      = true;
-input double MinRiskRewardRatio = 1.5;      // DO NOT trade unless TP/SL ratio is at least 1.5:1
-input bool   RequireConfluence  = true;      // require 2+ confluence signals before entry
+//---- FILTER TOGGLES ------------------------------------------------
+// All default OFF for maximum trade frequency. Each one you switch on
+// trades fewer, higher-quality setups. Hard stop-losses are NOT optional
+// and always apply - see SL/TP placement in ProcessSymbol.
+input bool   UseRetracementZone = false;     // only enter inside the 38.2-61.8% pullback zone
+input bool   RequireConfluence  = false;     // require 2+ aligned signals before entry
+input bool   UseStructureSLTP   = false;     // SL/TP from swing structure instead of ATR multiples
+input double MinRiskRewardRatio = 0.0;       // 0 = disabled; e.g. 1.5 rejects setups under 1.5:1
+input bool   UseCandleConfirm   = false;     // require the last M1 body to agree and exceed 30% of its range
+input bool   UseVolatilityGate  = false;     // skip when M1 ATR is very quiet vs H1 ATR
+input bool   UseNNFilter        = false;     // gate entries on neural-net confidence
+input bool   UseNewsBlackout    = false;     // pause around high-impact calendar events
+input bool   UseCircuitBreakers = false;     // 3-loss lockout + rolling win-rate guard
+input bool   UseSpreadCeiling   = true;      // block entries when spread is abnormally wide
+input bool   UsePortfolioRiskCap= false;     // block new entries past 5% aggregate open risk
+input bool   EnableGoldLogic    = false;     // XAUUSD Asian-range filter + $10 round-number TP capping
+input bool   RequireHTFAlignment= false;     // require H4/H1/M15 majority; else fall back to M1 momentum
+//--------------------------------------------------------------------
+input double SL_ATR_Multiplier  = 1.5;       // stop distance = this x M1 ATR (always applied)
+input double TP_ATR_Multiplier  = 2.0;       // target distance = this x M1 ATR
 input bool   EnableKellySizing  = true;      // use Kelly Criterion for position sizing
-input bool   EnableGoldLogic    = true;      // XAUUSD-specific: Asian-range filter + $10 round-number TP capping
 input bool   EnablePartialClose = true;
 input bool   EnablePyramid      = true;
 input bool   EnableCompounding  = true;
@@ -1003,20 +1020,33 @@ bool IsSymbolTradeable(int idx)
    SymbolConfig cfg = g_cfg[idx];
    if(!cfg.Available) return false;
    if(!cfg.Selected) return false;
-   if(cfg.CircuitBreakerActive) return false;
-   if(cfg.SpikePauseActive) return false;
-   if(cfg.SpreadEmergencyActive) return false;
    if(cfg.LatencyFlag) return false;
 
-   double spread = SymbolInfoInteger(cfg.Name, SYMBOL_SPREAD) * cfg.PointValue;
-   if(spread > cfg.SpreadCeiling) return false;
-   if(spread > cfg.SpreadCeiling * SPREAD_EMERGENCY_MULT)
+   // Circuit breaker + rolling win-rate guard (optional)
+   if(UseCircuitBreakers)
    {
-      g_cfg[idx].SpreadEmergencyActive = true;
-      g_cfg[idx].SpreadEmergencyExpiry = TimeCurrent() + SPREAD_EMERGENCY_PAUSE_SEC;
-      return false;
+      if(cfg.CircuitBreakerActive) return false;
+      if(cfg.WinRateGuardCooldown > 0) return false;
    }
 
+   // Spread protection (optional, but on by default: a blown-out spread
+   // turns any entry into an instant loss regardless of signal quality)
+   if(UseSpreadCeiling)
+   {
+      if(cfg.SpikePauseActive) return false;
+      if(cfg.SpreadEmergencyActive) return false;
+
+      double spread = SymbolInfoInteger(cfg.Name, SYMBOL_SPREAD) * cfg.PointValue;
+      if(spread > cfg.SpreadCeiling * SPREAD_EMERGENCY_MULT)
+      {
+         g_cfg[idx].SpreadEmergencyActive = true;
+         g_cfg[idx].SpreadEmergencyExpiry = TimeCurrent() + SPREAD_EMERGENCY_PAUSE_SEC;
+         return false;
+      }
+      if(spread > cfg.SpreadCeiling) return false;
+   }
+
+   // Margin headroom is never optional - the broker rejects the order anyway
    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    double marginReq = 0.0;
    if(freeMargin > 0.0 &&
@@ -1026,8 +1056,7 @@ bool IsSymbolTradeable(int idx)
       if(marginReq > freeMargin * MARGIN_USAGE_CAP_FRACTION) return false;
    }
 
-   if(cfg.WinRateGuardCooldown > 0) return false;
-   if(InNewsBlackout()) return false;
+   if(UseNewsBlackout && InNewsBlackout()) return false;
 
    return true;
 }
@@ -1262,7 +1291,9 @@ void ProcessSymbol(int idx)
 
    double m1ATR = GetATR(sym, PERIOD_M1, ATR_PERIOD);
    double h1ATR = GetATR(sym, PERIOD_H1, ATR_PERIOD);
-   if(h1ATR > 0.0 && m1ATR > h1ATR * M1_ATR_SPIKE_FACTOR)
+   if(m1ATR <= 0.0) return; // no usable ATR yet - SL/TP cannot be sized
+
+   if(UseVolatilityGate && h1ATR > 0.0 && m1ATR > h1ATR * M1_ATR_SPIKE_FACTOR)
    {
       g_cfg[idx].SpikePauseActive = true;
       g_cfg[idx].SpikePauseExpiry = TimeCurrent() + VOL_SPIKE_PAUSE_SEC;
@@ -1277,29 +1308,41 @@ void ProcessSymbol(int idx)
       return;
    }
 
-   if(!VolatilityGatePass(sym)) { g_reject[REJ_VOLGATE]++; return; }
+   if(UseVolatilityGate && !VolatilityGatePass(sym)) { g_reject[REJ_VOLGATE]++; return; }
 
    ENUM_SESSION session = GetCurrentSession();
    if(!IsSessionTradingAllowed(session)) { g_reject[REJ_SESSION]++; return; }
 
-   // ===== ARITHMETIC LOGIC PIPELINE =====
-   // 1. Get price structure (swings, fibs, support/resistance)
+   // ===== SIGNAL PIPELINE =====
+   // Structure is still computed (fibs/swings drive the optional filters and
+   // the optional structure SL/TP), but a failure here is only fatal when a
+   // filter that depends on it is actually switched on.
    PriceStructure ps = GetPriceStructure(sym, PERIOD_H1, 20);
-   if(!ps.IsStructureValid) { g_reject[REJ_STRUCTURE]++; return; }
+   bool haveStructure = ps.IsStructureValid;
+   if(!haveStructure && (UseRetracementZone || UseStructureSLTP || RequireConfluence))
+   {
+      g_reject[REJ_STRUCTURE]++;
+      return;
+   }
 
-   // 2. Get HTF trend bias
+   // DIRECTION: prefer the H4/H1/M15 majority. When that is neutral and
+   // alignment is not required, fall back to M1 momentum so the EA still has
+   // a side to trade rather than standing down.
    int htfBias = GetHTFBias(sym);
-   if(htfBias == 0) { g_reject[REJ_HTF]++; return; }
+   if(htfBias == 0)
+   {
+      if(RequireHTFAlignment) { g_reject[REJ_HTF]++; return; }
+      double pressure = GetCandlePressure(sym); // -1..+1 from last closed M1 body
+      if(pressure > 0.0)      htfBias = 1;
+      else if(pressure < 0.0) htfBias = -1;
+      else { g_reject[REJ_HTF]++; return; }     // perfect doji, genuinely no side
+   }
 
-   // 3. The retracement trade only exists inside the 38.2-61.8% zone -
-   //    outside it the SL/TP geometry below has no meaning.
-   if(!InRetracementZone(htfBias, bid, ps)) { g_reject[REJ_ZONE]++; return; }
+   if(UseRetracementZone && !InRetracementZone(htfBias, bid, ps)) { g_reject[REJ_ZONE]++; return; }
 
-   // 4. Confluence - multiple signals must align
-   int confluence = CountConfluence(sym, htfBias, ps, bid);
    int requiredConfluence = RequireConfluence ? 2 : 0;
 
-   // 4b. GOLD MODULE: Asian-range context during London/NY hours.
+   // GOLD MODULE: Asian-range context during London/NY hours.
    bool isGold = (g_cfg[idx].BaseName == GOLD_SYMBOL);
    if(EnableGoldLogic && isGold && session != SESSION_ASIAN && session != SESSION_OFFHOURS)
    {
@@ -1308,61 +1351,76 @@ void ProcessSymbol(int idx)
       if(asianBias == 0)
          requiredConfluence = MathMax(requiredConfluence, INSIDE_RANGE_CONFLUENCE); // unresolved range = chop risk
    }
-   if(confluence < requiredConfluence) { g_reject[REJ_CONFLUENCE]++; return; }
+   if(requiredConfluence > 0)
+   {
+      int confluence = CountConfluence(sym, htfBias, ps, bid);
+      if(confluence < requiredConfluence) { g_reject[REJ_CONFLUENCE]++; return; }
+   }
 
-   // 5. M1 candle confirmation
-   if(!M1CandleConfirmation(sym, htfBias)) { g_reject[REJ_CANDLE]++; return; }
+   if(UseCandleConfirm && !M1CandleConfirmation(sym, htfBias)) { g_reject[REJ_CANDLE]++; return; }
 
-   // 6. Microstructure signals (NN input)
-   double deltaScore   = GetTickDeltaScore(sym);
+   // Microstructure signals (also the NN feature vector)
+   double deltaScore    = GetTickDeltaScore(sym);
    double pressureProxy = GetCandlePressure(sym);
    double velocityScore = GetTickVelocityScore(g_cfg[idx], sym);
    double spreadRatio   = GetSpreadRatio(sym);
 
-   // 7. Neural net confidence gate.
-   //    Always run the forward pass so LastInput/LastHidden/LastOutput are
-   //    populated for backprop when the trade closes. During warm-up the gate
-   //    itself is bypassed: with freshly randomised weights the network emits
-   //    ~0.5, far under the 0.89-0.96 session thresholds, and it only learns
-   //    from CLOSED trades - so gating on it from trade zero is a deadlock
-   //    (no entries -> no closes -> no learning -> no entries, forever).
-   //    The arithmetic gates above and the RR check below still apply.
+   // Neural net. The forward pass ALWAYS runs so LastInput/LastHidden/
+   // LastOutput are populated for backprop when the trade closes - the net
+   // keeps learning in the background even while it is not gating entries.
+   // Gating additionally waits for NNWarmupTrades closed trades, because
+   // random initial weights emit ~0.5 against 0.89-0.96 thresholds and the
+   // net only learns from closes (gating from trade zero deadlocks forever).
    double confidence = GetNNConfidence(g_cfg[idx], deltaScore, pressureProxy, velocityScore, (double)htfBias, spreadRatio);
-   double threshold = GetSignalThreshold(session);
-   bool nnWarmedUp = (g_cfg[idx].RollingTradeCount >= NNWarmupTrades);
-   if(nnWarmedUp && confidence < threshold) { g_reject[REJ_NN]++; return; }
+   if(UseNNFilter)
+   {
+      double threshold = GetSignalThreshold(session);
+      bool nnWarmedUp = (g_cfg[idx].RollingTradeCount >= NNWarmupTrades);
+      if(nnWarmedUp && confidence < threshold) { g_reject[REJ_NN]++; return; }
+   }
 
-   // 8. Retracement geometry: SL beyond the 78.6% invalidation,
-   //    TP at the swing extreme. Gold TP additionally capped inside
-   //    the first $10 round number so it isn't parked where everyone
-   //    else's orders cluster.
-   double sl = GetStructureSL(htfBias, ps, SL_MIN_POINTS * g_cfg[idx].PointValue);
-   double tp = GetStructureTP(htfBias, ps);
+   // SL/TP. Structure mode places the stop beyond the 78.6% invalidation and
+   // targets the swing extreme; ATR mode uses straight ATR multiples. Either
+   // way a hard stop is ALWAYS attached - that is not optional.
+   double sl, tp;
+   if(UseStructureSLTP && haveStructure)
+   {
+      sl = GetStructureSL(htfBias, ps, SL_MIN_POINTS * g_cfg[idx].PointValue);
+      tp = GetStructureTP(htfBias, ps);
+   }
+   else
+   {
+      double slDistAtr = MathMax(m1ATR * SL_ATR_Multiplier, SL_MIN_POINTS * g_cfg[idx].PointValue);
+      double tpDistAtr = MathMax(m1ATR * TP_ATR_Multiplier, SL_MIN_POINTS * g_cfg[idx].PointValue);
+      sl = (htfBias > 0) ? bid - slDistAtr : bid + slDistAtr;
+      tp = (htfBias > 0) ? bid + tpDistAtr : bid - tpDistAtr;
+   }
    if(EnableGoldLogic && isGold)
       tp = ApplyGoldRoundNumberCap(htfBias, bid, tp);
 
-   // 9. Validate risk/reward ratio BEFORE entry
-   if(!ValidateRiskReward(bid, sl, tp, htfBias)) { g_reject[REJ_RR]++; return; }
+   // Risk/reward gate (0 = disabled)
+   if(MinRiskRewardRatio > 0.0 && !ValidateRiskReward(bid, sl, tp, htfBias)) { g_reject[REJ_RR]++; return; }
 
-   // 10. Pre-flight checks
+   // Pre-flight checks
    if(!IsSymbolTradeable(idx))                    { g_reject[REJ_TRADEABLE]++; return; }
    if(CountOpenManagedPositions() >= g_maxTrades) { g_reject[REJ_MAXTRADES]++; return; }
-   if(g_portfolioRiskBlocked)                     { g_reject[REJ_PORTFOLIO_RISK]++; return; }
+   if(UsePortfolioRiskCap && g_portfolioRiskBlocked) { g_reject[REJ_PORTFOLIO_RISK]++; return; }
 
-   // 11. Kelly-adjusted lot sizing
+   // Kelly-adjusted lot sizing
    double slDist = MathAbs(bid - sl);
    double riskAmt;
    double activeRisk = GetActiveRiskPct();
    double lot = CalculateLotSize(idx, activeRisk, slDist, riskAmt);
    if(lot <= 0.0) { g_reject[REJ_LOT]++; return; }
 
-   if(ComputePortfolioRisk() + riskAmt > AccountInfoDouble(ACCOUNT_EQUITY) * PORTFOLIO_RISK_CAP_FRACTION)
+   if(UsePortfolioRiskCap &&
+      ComputePortfolioRisk() + riskAmt > AccountInfoDouble(ACCOUNT_EQUITY) * PORTFOLIO_RISK_CAP_FRACTION)
    {
       g_reject[REJ_PORTFOLIO_RISK]++;
       return;
    }
 
-   // 12. OPEN
+   // OPEN
    if(OpenPosition(idx, htfBias, lot, sl, tp, riskAmt))
       g_entriesTaken++;
 }
@@ -1770,11 +1828,23 @@ int OnInit()
    PrintFormat("[%s] Account: TIER %d (MaxTrades=%d)", okAccount ? "OK" : "FAIL", g_currentTier, g_maxTrades);
    PrintFormat("[%s] NN weights: %s", okNN ? "OK" : "FAIL", FileIsExist(WEIGHTS_FILENAME) ? "loaded" : "initialized");
    PrintFormat("[%s] Symbols scanned: %d available", okScan ? "OK" : "FAIL", availableCount);
-   PrintFormat("[OK] Risk/Reward enforcement: MIN %.2f:1", MinRiskRewardRatio);
-   PrintFormat("[OK] Kelly Criterion sizing: %s", EnableKellySizing ? "ON" : "OFF");
-   PrintFormat("[OK] Gold module (Asian range + round numbers): %s", EnableGoldLogic ? "ON" : "OFF");
-   PrintFormat("[OK] Confluence required: %d+ signals", RequireConfluence ? 2 : 0);
-   PrintFormat("[OK] NN gate: bypassed until %d closed trades per symbol (warm-up)", NNWarmupTrades);
+   Print("---- FILTERS ----");
+   PrintFormat("  Retracement zone .... %s", UseRetracementZone ? "ON" : "OFF");
+   PrintFormat("  Confluence .......... %s", RequireConfluence ? "ON (2+)" : "OFF");
+   PrintFormat("  HTF alignment ....... %s", RequireHTFAlignment ? "REQUIRED" : "OFF (M1 momentum fallback)");
+   PrintFormat("  M1 candle confirm ... %s", UseCandleConfirm ? "ON" : "OFF");
+   PrintFormat("  Volatility gate ..... %s", UseVolatilityGate ? "ON" : "OFF");
+   PrintFormat("  NN confidence gate .. %s", UseNNFilter ? "ON (after " + IntegerToString(NNWarmupTrades) + " trades)" : "OFF (net still learns)");
+   PrintFormat("  Risk/reward minimum . %s", MinRiskRewardRatio > 0.0 ? DoubleToString(MinRiskRewardRatio, 2) + ":1" : "OFF");
+   PrintFormat("  News blackout ....... %s", UseNewsBlackout ? "ON" : "OFF");
+   PrintFormat("  Circuit breakers .... %s", UseCircuitBreakers ? "ON" : "OFF");
+   PrintFormat("  Spread ceiling ...... %s", UseSpreadCeiling ? "ON" : "OFF");
+   PrintFormat("  Portfolio risk cap .. %s", UsePortfolioRiskCap ? "ON" : "OFF");
+   PrintFormat("  Gold module ......... %s", EnableGoldLogic ? "ON" : "OFF");
+   PrintFormat("  SL/TP source ........ %s", UseStructureSLTP ? "swing structure"
+               : "ATR x" + DoubleToString(SL_ATR_Multiplier, 2) + " / x" + DoubleToString(TP_ATR_Multiplier, 2));
+   PrintFormat("  Kelly sizing ........ %s", EnableKellySizing ? "ON" : "OFF");
+   Print("  Hard stop-loss ...... ALWAYS ON (not optional)");
 
    string activeList = "";
    for(int i = 0; i < g_symbolCount; i++)
