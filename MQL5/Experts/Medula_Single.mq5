@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                Medula_Single.mq5 |
-//|  Medula EA v2.60 — single-file, zero-dependency build.           |
+//|  Medula EA v2.70 — single-file, zero-dependency build.           |
 //|                                                                  |
 //|  DESIGN NOTE — why this EA does not sit idle:                    |
 //|  v1 compared conviction to a FIXED threshold (60). Because the    |
@@ -31,7 +31,7 @@
 //|  Validation (§21) is performed offline in the Strategy Tester.   |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "2.60"
+#property version   "2.70"
 
 //============================== INPUTS ==============================
 
@@ -117,7 +117,8 @@ input double InpMarginSafety      = 1.5;   // Free-margin safety factor
 input double InpMaxAccountRiskPct = 4.0;   // Max total open risk (% equity)
 input double InpMaxBasketRiskPct  = 2.5;   // Max basket risk (% equity)
 input bool   InpAllowMinLot       = true;  // Round up to broker min lot (small accounts)
-input bool   InpMinLotOverride    = true;  // Let a single min-lot trade exceed the risk cap
+input bool   InpMinLotOverride    = true;  // Let a single min-lot trade exceed the planned cap
+input double InpMaxRiskPctHard    = 20.0;  // ABSOLUTE ceiling on one trade's risk (% equity)
 
 input group "Equity Curve Engine (§25)"
 input bool   InpUseEquityCurve   = true;  // Size down when own equity curve is weak
@@ -2088,6 +2089,30 @@ void TryEnter(const int dir,const bool isInitial,const SBasket &b)
      }
 
    double newRisk=RiskOfLots(lots,slDist);
+
+   // The risk actually carried by the position we are about to open. When the
+   // broker minimum forces a bigger size than planned these differ by orders
+   // of magnitude, and EVERY R-based exit (basket target, break-even, partial
+   // take-profit, time stop) is measured in R -- so the stored figure must be
+   // the real one. Storing the plan instead made a 2R target fire on a few
+   // cents of profit and closed trades within seconds of opening them.
+   riskAmt=newRisk;
+
+   // Absolute ceiling. The min-lot override exists so a small account can
+   // still trade slightly above its planned cap -- not so it can stake the
+   // whole account on one position. Without this, a $10 account took 172%
+   // of equity per trade and latched the circuit breaker on the first loss.
+   double hardCap=eq*InpMaxRiskPctHard/100.0;
+   if(newRisk>hardCap)
+     {
+      Block(StringFormat("risk %.2f = %.0f%% of equity exceeds hard ceiling %.0f%% "
+                         "(min lot %.2f is too large for this account on %s; "
+                         "need about %.0f deposit at this ATR)",
+                         newRisk,100.0*newRisk/MathMax(eq,0.01),InpMaxRiskPctHard,
+                         MinLot(),_Symbol,newRisk/(InpMaxRiskPctHard/100.0)));
+      return;
+     }
+
    double basketCap=eq*InpMaxBasketRiskPct/100.0;
    double acctCap  =eq*InpMaxAccountRiskPct/100.0;
    double basketUsed=BasketRiskUsed();
@@ -2102,8 +2127,10 @@ void TryEnter(const int dir,const bool isInitial,const SBasket &b)
                             basketUsed,newRisk,basketCap));
          return;
         }
-      LogEvent(StringFormat("min-lot override: taking %.2f risk (%.2f%% of equity) vs %.2f%% plan",
-                            newRisk,100.0*newRisk/MathMax(eq,1.0),InpMaxBasketRiskPct));
+      LogEvent(StringFormat("min-lot override: taking %.2f risk (%.1f%% of equity) vs %.1f%% plan, "
+                            "ceiling %.0f%% — R multiples are measured against this real figure",
+                            newRisk,100.0*newRisk/MathMax(eq,0.01),InpMaxBasketRiskPct,
+                            InpMaxRiskPctHard));
      }
    if(acctUsed+newRisk>acctCap)
      {
@@ -2184,6 +2211,26 @@ void SelfTest(void)
                                   "Deposit at least %.2f, lower InpMarginSafety, or trade a smaller-contract symbol.",
                                   _Symbol,needed));
         }
+
+      // Minimum viable deposit: margin is only the entry ticket -- the binding
+      // constraint is that one stop-out must stay inside the risk ceiling.
+      double slDist0=InpSlAtrMult*g_snap.atr;
+      double minLotRisk=RiskOfLots(MinLot(),slDist0);
+      if(minLotRisk>0.0)
+        {
+         double needPlan=minLotRisk/(InpMaxBasketRiskPct/100.0);
+         double needHard=minLotRisk/(InpMaxRiskPctHard/100.0);
+         LogEvent(StringFormat("risk floor: one min-lot stop-out costs %.2f (= %.0f%% of current equity)",
+                               minLotRisk,100.0*minLotRisk/MathMax(eqNow,0.01)));
+         LogEvent(StringFormat("minimum viable deposit at this volatility: %.0f to stay under the %.0f%% hard "
+                               "ceiling, %.0f to honour the %.1f%% risk plan",
+                               needHard,InpMaxRiskPctHard,needPlan,InpMaxBasketRiskPct));
+         if(minLotRisk>eqNow*InpMaxRiskPctHard/100.0)
+            LogEvent(StringFormat("*** BLOCKING: one minimum-lot stop-out (%.2f) exceeds the %.0f%% ceiling "
+                                  "on %.2f equity. No risk setting can make this survivable — the broker "
+                                  "minimum is simply too large for the account on this symbol. ***",
+                                  minLotRisk,InpMaxRiskPctHard,eqNow));
+        }
      }
 
    if(g_confCount>0)
@@ -2228,7 +2275,7 @@ void DrawPanel(const SBasket &b)
       p85=StringFormat("%.0f",DistributionPercentile(85));
      }
    string txt=StringFormat(
-      "MEDULA v2.60  |  %s %s\n"
+      "MEDULA v2.70  |  %s %s\n"
       "──────────────────────────────\n"
       "regime        %s\n"
       "structure     %+7.1f     trend    %+7.1f\n"
@@ -2331,7 +2378,7 @@ int OnInit(void)
 
    SelfTest();
 
-   LogEvent(StringFormat("v2.60 ready on %s %s — entry at rank %.0f pct, floor %.1f, quality %.0f",
+   LogEvent(StringFormat("v2.70 ready on %s %s — entry at rank %.0f pct, floor %.1f, quality %.0f",
                          _Symbol,EnumToString(_Period),g_entryPct,
                          InpMinAbsConfidence,(InpUseQuality?InpMinTradeQuality:0.0)));
    return INIT_SUCCEEDED;

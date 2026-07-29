@@ -5,8 +5,8 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 
 - **[MEDULA_FORMULAS.md](MEDULA_FORMULAS.md)** — formula specification for all 21 engines.
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
-- **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.60, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
-- **[tests/verify_medula.py](tests/verify_medula.py)** — 154-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
+- **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
+- **[tests/verify_medula.py](tests/verify_medula.py)** — 170-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
 
@@ -67,3 +67,28 @@ A third blocker was **not** fixable in code: a **$10 account cannot hold 0.01 lo
 (1 oz ≈ $2,000 notional → $20 margin at 1:100, $30 with the safety factor). The startup
 self-test now computes this explicitly and prints a blocking warning when the account cannot
 afford one minimum lot, instead of letting every order fail silently.
+
+
+### v2.70 — the R-accounting postmortem
+
+The first run that actually traded (XAUUSD.m M5, $10 deposit) closed positions within
+*seconds* at reported "2.2R", "37.6R", "94.3R", then latched the circuit breaker after five
+trades and tested nothing for the remaining six years. Two compounding bugs:
+
+1. **R was measured against planned risk, not actual.** `g_initialRiskAmt` stored the
+   *planned* $0.045 while the position carried $17.15 of real risk — a 381× error. Every
+   R-based exit (basket target, break-even, partial take-profit, time stop) therefore fired
+   on a few cents of movement. The logged "2.2R" was 9.9 cents of profit.
+   **Fix:** the risk actually carried by the position is stored, so R means R.
+2. **The min-lot override had no ceiling.** Built for accounts slightly over the planned cap,
+   it permitted **172% of equity** on a single trade. One loss exceeded the daily limit 57×
+   and latched the breaker permanently. **Fix:** `InpMaxRiskPctHard` (default 20%) is an
+   absolute ceiling the override cannot cross.
+
+The self-test now also reports the **minimum viable deposit** for the symbol at current
+volatility — the binding constraint is not margin but that one stop-out must fit inside the
+risk ceiling. At March-2020 gold volatility (ATR ≈ $11) a single minimum-lot stop-out costs
+about $17, which needs roughly $85 of equity to sit under a 20% ceiling and ~$685 to honour
+a 2.5% plan. At typical gold volatility (ATR ≈ $1.50) those figures fall to about $11 and
+$90. **A $10 account cannot trade gold at COVID-era volatility under any risk setting** —
+that is arithmetic, not configuration.

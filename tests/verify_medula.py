@@ -784,6 +784,71 @@ check("Affordability: 1:500 leverage brings 0.01 EURUSD within reach of $10",
 check("Affordability: requirement scales linearly with price",
       abs(affordable(10,0.01,100,4000,100)[1] - 2*affordable(10,0.01,100,2000,100)[1]) < 1e-9)
 
+
+# ============ v2.70 — THE "R MEASURED AGAINST THE WRONG RISK" BUG ==========
+# Live XAUUSD run closed trades within seconds at "2.2R", "37.6R", "94.3R".
+# Cause: g_initialRiskAmt held the PLANNED risk while the position carried a
+# far larger real risk, so every R-based exit fired on noise.
+
+def r_multiple(float_pl, risk_amt):
+    return float_pl/risk_amt if risk_amt > 0 else 0.0
+
+planned, actual = 0.045, 17.15          # figures straight from the live log
+check("POSTMORTEM: planned vs actual risk differed by orders of magnitude",
+      actual/planned > 100, f"{actual/planned:.0f}x")
+check("POSTMORTEM: 2R target against planned risk fires on cents of profit",
+      r_multiple(0.099, planned) >= 2.0 and 0.099 < 0.15,
+      f"$0.099 registered as {r_multiple(0.099, planned):.1f}R")
+check("POSTMORTEM: same profit against ACTUAL risk is correctly ~0R",
+      r_multiple(0.099, actual) < 0.01, f"{r_multiple(0.099, actual):.4f}R")
+check("v2.70: storing actual risk makes a 2R target require real profit",
+      abs(2.0*actual - 34.30) < 0.01, f"${2.0*actual:.2f} needed")
+check("v2.70: break-even at 1R now needs a real move, not 4 dollars on a 17 dollar risk",
+      1.0*actual > 1.0*planned*94, f"{actual:.2f} vs {planned*94:.2f}")
+
+# --- hard risk ceiling
+def risk_allowed(risk, equity, hard_pct=20.0):
+    return risk <= equity*hard_pct/100.0
+
+check("HardCeiling: v2.50 let a $10 account risk 172% per trade",
+      not risk_allowed(17.15, 10.0), "correctly blocked in v2.70")
+check("HardCeiling: same trade allowed once the account can carry it",
+      risk_allowed(17.15, 100.0), "at $100 equity that is 17%")
+# The override's purpose: permit a min-lot trade that exceeds the PLANNED
+# cap (2.5%) while still refusing anything above the hard ceiling (20%).
+over_plan_under_ceiling = 1.50      # 15% of a $10 account
+over_ceiling            = 17.15     # 172% -- the live run
+check("HardCeiling: override permits over-plan but under-ceiling risk",
+      risk_allowed(over_plan_under_ceiling, 10.0, 20.0) and
+      over_plan_under_ceiling > 10.0*0.025,
+      f"${over_plan_under_ceiling:.2f} = 15% > 2.5% plan, < 20% ceiling")
+check("HardCeiling: override cannot bypass the ceiling",
+      not risk_allowed(over_ceiling, 10.0, 20.0))
+check("HardCeiling: ceiling scales with equity, not a fixed currency amount",
+      risk_allowed(20.0, 100.0) and not risk_allowed(20.0, 50.0))
+
+# --- one loss must no longer be able to latch the breaker instantly
+def breaker_trips(loss, equity, daily_pct=3.0):
+    return loss >= equity*daily_pct/100.0
+check("Breaker: 172% risk trips the 3% daily limit 57x over (the dead run)",
+      breaker_trips(17.15, 10.0) and 17.15/(10.0*0.03) > 50)
+check("Breaker: capped risk still trips it, but only after a real losing streak",
+      breaker_trips(2.0, 10.0) and not breaker_trips(0.25, 10.0))
+
+# --- minimum viable deposit
+def min_deposit(min_lot, contract, sl_distance, ceiling_pct):
+    return (min_lot*contract*sl_distance)/(ceiling_pct/100.0)
+d_covid = min_deposit(0.01, 100, 1.5*11.4, 20.0)
+d_norm  = min_deposit(0.01, 100, 1.5*1.5, 20.0)
+check("MinDeposit: COVID-era gold volatility demands a far larger account",
+      d_covid > 80, f"${d_covid:.0f}")
+check("MinDeposit: typical gold volatility is far more attainable",
+      d_norm < 20, f"${d_norm:.0f}")
+check("MinDeposit: scales linearly with stop distance",
+      abs(min_deposit(0.01,100,3.0,20.0) - 2*min_deposit(0.01,100,1.5,20.0)) < 1e-9)
+check("MinDeposit: a $10 account cannot carry COVID-era gold at any risk setting",
+      d_covid > 10.0, f"needs ${d_covid:.0f}")
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
