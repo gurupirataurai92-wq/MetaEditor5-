@@ -7,8 +7,8 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v4.10, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager. This is the current build.
-- **[tests/verify_medula.py](tests/verify_medula.py)** — 272-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.00, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
 
@@ -198,3 +198,66 @@ Three entry models are recognised and named in the journal, so the log shows whi
 A scalp that has not resolved within `InpMaxHoldBars` and is below +0.3R is closed to release
 the risk, and the basket now works on scalper timings: break-even at 0.5R, partial at 0.6R,
 basket target 1.6R.
+
+
+### v5.00 — filters size the trade, they never block it
+
+v4.10 still took zero trades. The journal named one reason and repeated it all session:
+
+```
+no entry — higher timeframes undecided (bias -0.22, need 0.34)
+```
+
+Two separate faults, and the second is the one that mattered.
+
+**1. Independent gates multiply.** v4.00 required seven conditions simultaneously. Even if
+each is generously true 60% of the time, all seven align on `0.6⁷ ≈ 2.8%` of bars — and they
+are not independent, so in practice it is worse. An EA built that way watches the market; it
+does not trade it. **Fix:** exactly **one** hard condition survives —
+
+> price is trading inside a live, unmitigated fair value gap or order block pointing in the
+> trade's direction.
+
+That *is* the ICT entry; without it there is nothing to take. Higher-timeframe bias, liquidity
+sweep, structure shift, premium/discount, OTE and killzone are now **scored** into a quality
+figure between 0 and 1 which sets the **size**:
+
+```
+risk = planned_risk × ( MinSizeFactor + (1 − MinSizeFactor) × quality )
+```
+
+A bare POI with no confluence trades at 40% of planned risk. A full sweep + MSS + discount +
+OTE + killzone setup trades at 100%. Hostile higher-timeframe bias scores zero and shrinks the
+trade — it can no longer cancel it. Reward:risk became a **target rule**: a liquidity pool is
+used as the target only while it still pays `InpTargetMinRR`, otherwise the target is stretched
+to that minimum. It never refuses a setup.
+
+The suite proves this rather than asserting it: each filter is removed one at a time and must
+(a) fail to produce a refusal and (b) still reduce the size committed. A filter that cannot
+change the size is decoration; a filter that can refuse is a v4.10 relapse.
+
+**2. MetaTester was running the old parameters.** The v4.10 log dumped `48324 bytes of input
+parameters loaded` listing `InpHtfMinAgreement=0.34`, `InpRequireSweep=true`,
+`InpUseKillzones=true`, `InpMinRR=2.0`, `InpFitStopToAccount=false` — all **v4.00** values. A
+saved `.set` had been applied over the new build, so every default relaxed in v4.10 was
+silently discarded. Only the newly *named* inputs (the Scalp Mode group) took their defaults,
+because a `.set` file cannot bind to a name that did not exist when it was written.
+
+**That is the fix.** v5.00 does not merely change those defaults again — it **deletes the
+blocking inputs outright**:
+
+| Removed in v5.00 | Replaced by | Why the rename matters |
+|---|---|---|
+| `InpUseHtfBias`, `InpHtfMinAgreement` | `InpWeightHtf`, `InpHtfFullAt` | a stale `.set` has nothing to bind to |
+| `InpRequireSweep` | `InpWeightSweep` | " |
+| `InpUsePremiumDiscount`, `InpRequireOte` | `InpWeightPD`, `InpWeightOte` | " |
+| `InpUseKillzones` | `InpWeightKillzone` | " |
+| `InpMinRR` | `InpTargetMinRR` (target rule, not a gate) | " |
+| `InpEntryCooldownSec` | `InpEntrySpacingSec` | " |
+| `InpFitStopToAccount` | `InpAutoFitStop` (default `true`) | " |
+
+An old parameter set can now only carry forward settings that cannot stand the EA down.
+
+The panel and journal report the quality, the tags that scored (`HTF STRUCT SWEEP DISC KZ`)
+and the resulting size multiplier on every fill, and when the EA is flat the reason is a
+distance, not a filter name: *"price is not in a POI yet — nearest is 1.84 x avg range away"*.

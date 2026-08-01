@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v4.00 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.00 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -20,21 +20,41 @@
 //|    §7  HTF bias           structure on M15 / H1 / H4             |
 //|    §8  Displacement       impulsive legs that leave imbalance    |
 //|    §9  Basket manager     average entry, basket targets, scaling |
+//|    §10 Confluence score   sizes the trade instead of vetoing it  |
 //|                                                                  |
-//|  THE ENTRY MODEL (all conditions, in order)                      |
-//|    1. Higher timeframe bias agrees                               |
-//|    2. Liquidity is swept — a prior low/high is taken and         |
-//|       rejected (stop hunt / turtle soup)                         |
-//|    3. Market structure shifts against the sweep (CHoCH / BOS)    |
-//|    4. That shift was displacement — it left an FVG or order block|
-//|    5. Price returns into the FVG or order block                  |
-//|    6. The entry sits in discount (longs) or premium (shorts)     |
-//|    7. Optionally inside an ICT killzone                          |
-//|  Stop goes beyond the sweep extreme. Target is the opposing      |
-//|  liquidity pool, or an R multiple if none is in range.           |
+//|  THE ENTRY MODEL — SKILL, NOT CERTAINTY                          |
+//|                                                                  |
+//|  Up to v4.10 the model was seven conditions that all had to be   |
+//|  true at once. Any single one of them could stand the EA down    |
+//|  for a whole session, and one did: a higher-timeframe bias of    |
+//|  -0.22 against a required 0.34 refused every bar of the day.     |
+//|  Seven independent gates each cleared ~50-70% of the time         |
+//|  multiply out to a few percent of bars — that is an EA that      |
+//|  watches, not one that trades.                                   |
+//|                                                                  |
+//|  v5.00 keeps exactly ONE hard condition:                         |
+//|                                                                  |
+//|      price is trading inside a live, unmitigated fair value gap  |
+//|      or order block pointing in the trade's direction.           |
+//|                                                                  |
+//|  That is the ICT entry itself — without it there is no trade to  |
+//|  take. Everything else (HTF bias, liquidity sweep, structure     |
+//|  shift, premium/discount, OTE, killzone) is SCORED into a        |
+//|  quality figure 0..1 which sets the SIZE:                        |
+//|                                                                  |
+//|      risk = planned x (MinSizeFactor + (1-MinSizeFactor)*quality)|
+//|                                                                  |
+//|  A bare POI still trades, at 40% of planned risk. A full sweep + |
+//|  MSS + discount + killzone setup trades at 100%. Reward:risk is  |
+//|  a target RULE — the target is stretched to the minimum R, never |
+//|  used to refuse the setup.                                       |
+//|                                                                  |
+//|  Stop goes just beyond the POI (scalp) or beyond the swept       |
+//|  extreme (swing). Target is the nearer of the R target and the   |
+//|  next liquidity pool.                                            |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "4.10"
+#property version   "5.00"
 
 //============================== INPUTS ==============================
 
@@ -72,19 +92,15 @@ input double InpFvgFillPct      = 50.0;    // Consumed once price fills this % (
 input group "Liquidity (§4)"
 input double InpEqualTolPct     = 0.12;    // Equal-level tolerance (share of avg range)
 input int    InpLiqLookback     = 200;     // Bars scanned for liquidity pools
-input bool   InpRequireSweep    = false;   // Demand a liquidity sweep before entry
-input int    InpSweepMaxAgeBars = 30;      // Sweep must be this recent
+input int    InpSweepMaxAgeBars = 30;      // A sweep counts as fresh for this many bars
 input bool   InpUsePrevDayLevels= true;    // Include previous day high/low as liquidity
 
 input group "Premium / Discount (§5)"
-input bool   InpUsePremiumDiscount = false;// Buy only in discount, sell only in premium
 input int    InpDealingRangeBars   = 120;  // Bars forming the dealing range
 input double InpOteLow              = 0.62; // OTE zone lower retracement
 input double InpOteHigh             = 0.79; // OTE zone upper retracement
-input bool   InpRequireOte          = false;// Demand entry inside the OTE window
 
 input group "Killzones (§6, GMT)"
-input bool   InpUseKillzones    = false;   // Trade only in ICT killzones
 input int    InpLondonStart     = 7;       // London open killzone start hour
 input int    InpLondonEnd       = 10;      // London open killzone end hour
 input int    InpNyStart         = 12;      // New York open killzone start hour
@@ -93,15 +109,31 @@ input int    InpLnCloseStart    = 15;      // London close killzone start hour
 input int    InpLnCloseEnd      = 17;      // London close killzone end hour
 
 input group "Higher Timeframe Bias (§7)"
-input bool   InpUseHtfBias      = true;    // Require higher-timeframe agreement
 input bool   InpHtfM15          = true;    // Include M15 structure
 input bool   InpHtfH1           = true;    // Include H1 structure
 input bool   InpHtfH4           = true;    // Include H4 structure
-input double InpHtfMinAgreement = 0.12;    // Minimum weighted agreement (-1..+1)
 
 input group "Displacement (§8)"
 input double InpDisplacementMult = 1.5;    // Leg range >= this x average range
 input double InpDisplacementBody = 0.50;   // Body must be this share of the leg
+
+//--- §10 CONFLUENCE SCORING.  Nothing in this group can refuse a trade.
+//    Every classical ICT filter is a WEIGHT: it raises or lowers the size
+//    the EA commits, it never vetoes the setup.  The single hard condition
+//    is the setup itself — price trading inside a live, unmitigated FVG or
+//    order block.  A skilled trader takes the trade small when confluence
+//    is thin; it does not stand aside all day waiting for certainty.
+input group "Confluence Scoring (§10) — filters SIZE the trade, never block it"
+input double InpWeightHtf       = 0.28;    // Weight: higher-timeframe agreement
+input double InpWeightStructure = 0.24;    // Weight: structure / MSS support
+input double InpWeightSweep     = 0.18;    // Weight: fresh liquidity sweep
+input double InpWeightPD        = 0.12;    // Weight: discount (buy) / premium (sell)
+input double InpWeightOte       = 0.08;    // Weight: entry inside the OTE window
+input double InpWeightKillzone  = 0.10;    // Weight: inside an ICT killzone
+input double InpHtfFullAt       = 0.35;    // HTF agreement that scores full marks
+input double InpMinSizeFactor   = 0.40;    // Size at zero confluence (x planned risk)
+input double InpQualityFloor    = 0.00;    // Refuse below this quality (0 = never refuse)
+input double InpFlipMinBias     = 0.35;    // HTF bias that counts as a flip against a basket
 
 input group "Scalp Mode"
 input bool   InpScalpMode       = true;    // Scalper profile: POI stops, quick targets
@@ -113,21 +145,21 @@ input int    InpMaxHoldBars     = 24;      // Close a scalp after this many M5 b
 input group "Entries"
 input bool   InpEntryOnFVG      = true;    // Enter on FVG return
 input bool   InpEntryOnOB       = true;    // Enter on order-block return
-input double InpEntryZoneBuffer = 0.10;    // Zone widened by this share of avg range
-input int    InpEntryCooldownSec= 120;     // Min seconds between entries
-input int    InpMaxSetupAgeBars = 40;      // Setup must trigger within this many bars
+input double InpEntryZoneBuffer = 0.25;    // Zone widened by this share of avg range
+input int    InpEntrySpacingSec = 60;      // Min seconds between entries
+input int    InpMaxSetupAgeBars = 40;      // Structure shift counts for this many bars
 
 input group "Risk"
 input double InpRiskPct         = 1.0;     // Risk per trade (% equity)
 input double InpSlBufferPct     = 0.25;    // Stop beyond the sweep by this x avg range
-input double InpMinRR           = 1.5;     // Minimum reward:risk to accept a setup
+input double InpTargetMinRR     = 1.20;    // Target is never set closer than this R
 input double InpTpRMultiple     = 3.0;     // Target when no liquidity pool is in range
 input double InpDailyLossPct    = 5.0;     // Daily loss limit (%)
 input double InpMaxDDPct        = 20.0;    // Max drawdown from peak (%)
 input double InpMaxRiskPctHard  = 20.0;    // ABSOLUTE ceiling on one trade (% equity)
 input double InpMarginSafety    = 1.2;     // Free-margin safety factor
 input bool   InpAllowMinLot     = true;    // Round up to broker minimum lot
-input bool   InpFitStopToAccount= true;    // Tighten stop so min lot fits the ceiling
+input bool   InpAutoFitStop     = true;    // Tighten stop so min lot fits the ceiling
 
 input group "Basket Manager (§9)"
 input bool   InpUseBasket       = true;    // Manage positions as one basket
@@ -216,7 +248,22 @@ struct SView
    double            zoneTop,zoneBottom;   // the POI being entered
    double            stopLevel,targetLevel;
    double            setupRR;
+   // §10 confluence
+   double            quality;              // 0..1, how much confluence backs it
+   double            sizeFactor;           // risk multiplier derived from quality
+   string            confluence;           // the tags that scored
+   double            poiDistance;          // avg-range units to the nearest live POI
    int               obCount,fvgCount,liqCount;
+  };
+
+//--- one evaluated direction, before the two are compared
+struct SSetup
+  {
+   int               dir;
+   double            zoneTop,zoneBottom;
+   double            stop,target,rr;
+   double            quality,sizeFactor;
+   string            model,confluence;
   };
 
 //--- basket state (§9)
@@ -267,7 +314,7 @@ void LogInit(void)
    if(g_logHandle!=INVALID_HANDLE)
      {
       if(FileSize(g_logHandle)==0)
-         FileWriteString(g_logHandle,"time;symbol;setup;dir;htfBias;pd;killzone;entry;sl;tp;rr;lots;risk;basket;reason\n");
+         FileWriteString(g_logHandle,"time;symbol;setup;dir;quality;htfBias;pd;killzone;entry;sl;tp;rr;lots;risk;basket;reason\n");
       FileSeek(g_logHandle,0,SEEK_END);
      }
   }
@@ -278,9 +325,9 @@ void LogTrade(const string dir,const double entry,const double sl,const double t
               const double rr,const double lots,const double risk,const int basket,
               const string reason)
   {
-   string line=StringFormat("%s;%s;%s;%s;%.2f;%.2f;%s;%.5f;%.5f;%.5f;%.2f;%.2f;%.2f;%d;%s",
+   string line=StringFormat("%s;%s;%s;%s;%.2f;%.2f;%.2f;%s;%.5f;%.5f;%.5f;%.2f;%.2f;%.2f;%d;%s",
                             TimeToString(TimeCurrent(),TIME_DATE|TIME_SECONDS),_Symbol,
-                            g_view.setup,dir,g_view.htfBias,g_view.pdPosition,
+                            g_view.setup,dir,g_view.quality,g_view.htfBias,g_view.pdPosition,
                             g_view.killzoneName,entry,sl,tp,rr,lots,risk,basket,reason);
    if(InpVerboseLog) Print("[SMC] ",line);
    if(g_logHandle!=INVALID_HANDLE){ FileWriteString(g_logHandle,line+"\n"); FileFlush(g_logHandle); }
@@ -719,7 +766,6 @@ double HtfStructure(const ENUM_TIMEFRAMES tf)
 
 void BuildHtfBias(void)
   {
-   if(!InpUseHtfBias){ g_view.htfBias=0.0; return; }
    double sum=0.0,w=0.0;
    if(InpHtfM15){ sum+=0.25*HtfStructure(PERIOD_M15); w+=0.25; }
    if(InpHtfH1) { sum+=0.35*HtfStructure(PERIOD_H1);  w+=0.35; }
@@ -729,156 +775,231 @@ void BuildHtfBias(void)
 
 //======================= THE ICT ENTRY MODEL ========================
 
-//--- Assemble the model. Each condition is checked in the order a trader
-//    would check it, and the first failure is reported so the journal shows
-//    exactly which leg of the setup was missing.
+//--- Evaluate one direction.
+//
+//    There is exactly ONE hard condition: price must be trading inside a
+//    live, unmitigated fair value gap or order block pointing this way.
+//    That is the ICT entry itself — without it there is nothing to trade.
+//
+//    Every other classical filter (HTF bias, liquidity sweep, structure
+//    shift, premium/discount, OTE, killzone) is scored, not enforced. They
+//    add up to a quality figure between 0 and 1 which decides HOW MUCH the
+//    EA commits. Thin confluence means a small trade, not no trade — the
+//    edge is in taking many properly-sized setups, not in waiting for the
+//    one moment when every box happens to be ticked at once.
+bool EvaluateDirection(const int dir,SSetup &s)
+  {
+   s.dir=0; s.quality=0.0; s.sizeFactor=0.0; s.rr=0.0;
+   s.zoneTop=0.0; s.zoneBottom=0.0; s.stop=0.0; s.target=0.0;
+   s.model=""; s.confluence="";
+
+   double px=g_view.bid;
+   double buf=InpEntryZoneBuffer*g_view.avgRange;
+
+   //---- THE HARD CONDITION: price inside a live POI of this direction
+   double zt=0.0,zb=0.0;
+   string src="";
+
+   if(InpEntryOnFVG && InpUseFVG)
+      for(int z=0;z<ArraySize(g_fvgs);z++)
+        {
+         if(!g_fvgs[z].alive || g_fvgs[z].filled) continue;
+         if(g_fvgs[z].dir!=dir) continue;
+         if(g_fvgs[z].shift>InpFvgMaxAgeBars) continue;
+         if(px<=g_fvgs[z].top+buf && px>=g_fvgs[z].bottom-buf)
+           { zt=g_fvgs[z].top; zb=g_fvgs[z].bottom; src="FVG"; break; }
+        }
+
+   if(zt<=0.0 && InpEntryOnOB && InpUseOrderBlocks)
+      for(int z=0;z<ArraySize(g_obs);z++)
+        {
+         if(!g_obs[z].alive) continue;
+         if(g_obs[z].dir!=dir) continue;
+         if(g_obs[z].shift>InpObMaxAgeBars) continue;
+         if(px<=g_obs[z].top+buf && px>=g_obs[z].bottom-buf)
+           {
+            zt=g_obs[z].top; zb=g_obs[z].bottom;
+            src=(g_obs[z].breaker ? "breaker block" : "order block");
+            break;
+           }
+        }
+
+   if(zt<=0.0) return false;                 // nothing to trade — the only veto
+
+   //---- CONFLUENCE. Each term is graded 0..1; none of them can return false.
+   bool swept=(dir>0 ? g_view.sweptSellside : g_view.sweptBuyside);
+   bool sweepFresh=(swept && g_view.sweepAgeBars<=InpSweepMaxAgeBars);
+   bool mss=(dir>0 ? (g_view.bullMss || g_view.bullBos)
+                   : (g_view.bearMss || g_view.bearBos));
+   bool mssFresh=(mss && g_view.mssAgeBars<=InpMaxSetupAgeBars);
+   bool aligned=(g_view.structDir==dir);
+   bool opposed=(g_view.structDir==-dir);
+
+   // HTF: graded agreement. Disagreement scores zero and shrinks the trade;
+   // it never cancels it. This is the gate that stood the EA down all day.
+   double htfScore=MClamp((dir*g_view.htfBias)/MathMax(InpHtfFullAt,1e-6),0.0,1.0);
+
+   double structScore;
+   if(mssFresh && aligned)      structScore=1.00;   // shift and trend agree
+   else if(mssFresh)            structScore=0.80;   // a fresh shift our way
+   else if(aligned)             structScore=0.70;   // simply with structure
+   else if(mss)                 structScore=0.50;   // an older break our way
+   else if(opposed)             structScore=0.15;   // counter-trend POI trade
+   else                         structScore=0.40;   // structure undecided
+
+   double sweepScore=(sweepFresh ? 1.0 : (swept ? 0.45 : 0.0));
+
+   // depth of discount for a buy, depth of premium for a sell
+   double pdScore=(dir>0 ? MClamp((0.5-g_view.pdPosition)/0.5,0.0,1.0)
+                         : MClamp((g_view.pdPosition-0.5)/0.5,0.0,1.0));
+   double oteScore=(g_view.inOte    ? 1.0 : 0.0);
+   double kzScore =(g_view.inKillzone ? 1.0 : 0.0);
+
+   double wsum=InpWeightHtf+InpWeightStructure+InpWeightSweep+
+               InpWeightPD +InpWeightOte      +InpWeightKillzone;
+   double q=1.0;
+   if(wsum>0.0)
+      q=(InpWeightHtf*htfScore + InpWeightStructure*structScore +
+         InpWeightSweep*sweepScore + InpWeightPD*pdScore +
+         InpWeightOte*oteScore + InpWeightKillzone*kzScore)/wsum;
+   q=MClamp(q,0.0,1.0);
+
+   if(q<InpQualityFloor) return false;       // off by default (floor = 0)
+
+   //---- stop placement decides whether this is a scalp or a swing
+   double sl,tp;
+   if(InpStopBeyondPOI || InpScalpMode)
+     {
+      double buf2=InpPoiStopBuffer*g_view.avgRange;
+      sl=(dir>0 ? zb-buf2 : zt+buf2);
+     }
+   else
+     {
+      double slBuf=InpSlBufferPct*g_view.avgRange;
+      if(dir>0) sl=(g_view.sweepExtreme>0.0 ? MathMin(g_view.sweepExtreme,zb) : zb)-slBuf;
+      else      sl=(g_view.sweepExtreme>0.0 ? MathMax(g_view.sweepExtreme,zt) : zt)+slBuf;
+     }
+
+   double risk=MathAbs(px-sl);
+   if(risk<0.25*g_view.avgRange)             // never a meaningless stop
+     {
+      risk=0.25*g_view.avgRange;
+      sl=(dir>0 ? px-risk : px+risk);
+     }
+   if(risk<=0.0) return false;
+
+   // Reward:risk is a TARGET RULE, not an entry filter. A nearby liquidity
+   // pool is used only while it still pays at least InpTargetMinRR; below
+   // that the EA reverts to its R target rather than refusing the setup.
+   double rTarget=(InpScalpMode ? InpScalpTargetR : InpTpRMultiple)*risk;
+   double pool=(dir>0 ? g_view.nearestBuyside : g_view.nearestSellside);
+   bool poolValid=(dir>0 ? pool>px : (pool>0.0 && pool<px));
+   tp=(dir>0 ? px+rTarget : px-rTarget);
+   if(poolValid)
+     {
+      double poolR=MathAbs(pool-px)/risk;
+      if(InpScalpMode){ if(poolR>=InpTargetMinRR && poolR<rTarget/risk) tp=pool; }
+      else            { if(poolR>=InpTargetMinRR)                      tp=pool; }
+     }
+   double rr=MathAbs(tp-px)/risk;
+   if(rr<InpTargetMinRR)                     // stretch the target, never skip
+     {
+      rr=InpTargetMinRR;
+      tp=(dir>0 ? px+rr*risk : px-rr*risk);
+     }
+
+   if(sweepFresh && mssFresh) s.model="sweep + MSS + "+src;   // full ICT reversal
+   else if(mssFresh)          s.model="MSS + "+src;           // shift into the POI
+   else if(aligned)           s.model=src+" continuation";    // with-structure scalp
+   else                       s.model=src+" reversion";       // counter-trend POI
+
+   string tags="";
+   if(htfScore   >=0.5) tags+="HTF ";
+   if(structScore>=0.7) tags+="STRUCT ";
+   if(sweepFresh)       tags+="SWEEP ";
+   if(pdScore    >=0.5) tags+=(dir>0?"DISC ":"PREM ");
+   if(g_view.inOte)     tags+="OTE ";
+   if(g_view.inKillzone)tags+="KZ ";
+   if(tags=="") tags="bare POI";
+
+   s.dir=dir; s.zoneTop=zt; s.zoneBottom=zb;
+   s.stop=sl; s.target=tp; s.rr=rr;
+   s.quality=q;
+   s.sizeFactor=MClamp(InpMinSizeFactor+(1.0-InpMinSizeFactor)*q,0.05,1.0);
+   s.confluence=tags;
+   return true;
+  }
+
+//--- how far the nearest live POI is, in average-range units (diagnostics)
+double NearestPoiDistance(void)
+  {
+   double px=g_view.bid,best=-1.0;
+   for(int z=0;z<ArraySize(g_fvgs);z++)
+     {
+      if(!g_fvgs[z].alive || g_fvgs[z].filled) continue;
+      double d=(px>g_fvgs[z].top ? px-g_fvgs[z].top
+                                 : (px<g_fvgs[z].bottom ? g_fvgs[z].bottom-px : 0.0));
+      if(best<0.0 || d<best) best=d;
+     }
+   for(int z=0;z<ArraySize(g_obs);z++)
+     {
+      if(!g_obs[z].alive) continue;
+      double d=(px>g_obs[z].top ? px-g_obs[z].top
+                                : (px<g_obs[z].bottom ? g_obs[z].bottom-px : 0.0));
+      if(best<0.0 || d<best) best=d;
+     }
+   if(best<0.0 || g_view.avgRange<=0.0) return -1.0;
+   return best/g_view.avgRange;
+  }
+
+//--- Score both sides and trade the better one. Two opposing POIs can be
+//    live at once; the EA picks by quality rather than by which loop ran
+//    first, and ties go to the higher timeframes.
 void FindSetup(void)
   {
    g_view.setup="none";
    g_view.setupDir=0;
    g_view.zoneTop=0.0; g_view.zoneBottom=0.0;
    g_view.stopLevel=0.0; g_view.targetLevel=0.0; g_view.setupRR=0.0;
+   g_view.quality=0.0; g_view.sizeFactor=0.0; g_view.confluence="";
+   g_view.poiDistance=NearestPoiDistance();
 
-   double px=g_view.bid;
-   double buf=InpEntryZoneBuffer*g_view.avgRange;
+   SSetup up,dn,best;
+   bool okUp=EvaluateDirection(1,up);
+   bool okDn=EvaluateDirection(-1,dn);
+   if(!okUp && !okDn) return;
 
-   for(int pass=0;pass<2;pass++)
+   bool takeUp;
+   if(okUp && okDn)
      {
-      int dir=(pass==0 ? 1 : -1);
-
-      // 1. higher-timeframe agreement
-      if(InpUseHtfBias && dir*g_view.htfBias<InpHtfMinAgreement) continue;
-
-      // 2. liquidity taken on the opposite side (optional filter)
-      bool swept=(dir>0 ? g_view.sweptSellside : g_view.sweptBuyside);
-      bool sweepFresh=(swept && g_view.sweepAgeBars<=InpSweepMaxAgeBars);
-      if(InpRequireSweep && !sweepFresh) continue;
-
-      // 3. structure. A sweep plus a shift is the textbook reversal entry;
-      //    without a sweep, structure simply has to be on our side and a
-      //    break must have happened recently — the continuation entry a
-      //    scalper takes far more often than the full reversal model.
-      bool mss=(dir>0 ? (g_view.bullMss || g_view.bullBos)
-                      : (g_view.bearMss || g_view.bearBos));
-      bool aligned=(g_view.structDir==dir);
-      if(!mss && !aligned) continue;
-      if(mss && g_view.mssAgeBars>InpMaxSetupAgeBars && !aligned) continue;
-
-      // 4/5. price is back inside the imbalance or block that shift created
-      double zt=0.0,zb=0.0;
-      string src="";
-
-      if(InpEntryOnFVG)
-         for(int z=0;z<ArraySize(g_fvgs);z++)
-           {
-            if(!g_fvgs[z].alive || g_fvgs[z].filled) continue;
-            if(g_fvgs[z].dir!=dir) continue;
-            if(g_fvgs[z].shift>InpMaxSetupAgeBars+10) continue;
-            if(px<=g_fvgs[z].top+buf && px>=g_fvgs[z].bottom-buf)
-              { zt=g_fvgs[z].top; zb=g_fvgs[z].bottom; src="FVG"; break; }
-           }
-
-      if(zt<=0.0 && InpEntryOnOB)
-         for(int z=0;z<ArraySize(g_obs);z++)
-           {
-            if(!g_obs[z].alive) continue;
-            if(g_obs[z].dir!=dir) continue;
-            if(g_obs[z].shift>InpObMaxAgeBars) continue;
-            if(px<=g_obs[z].top+buf && px>=g_obs[z].bottom-buf)
-              {
-               zt=g_obs[z].top; zb=g_obs[z].bottom;
-               src=(g_obs[z].breaker ? "breaker block" : "order block");
-               break;
-              }
-           }
-
-      if(zt<=0.0) continue;
-
-      // 6. premium / discount discipline
-      if(InpUsePremiumDiscount)
-        {
-         if(dir>0 && !g_view.inDiscount) continue;
-         if(dir<0 && !g_view.inPremium)  continue;
-        }
-      if(InpRequireOte && !g_view.inOte) continue;
-
-      // 7. killzone
-      if(InpUseKillzones && !g_view.inKillzone) continue;
-
-      // Stop placement decides whether this is a scalp or a swing.
-      //   Beyond the POI  -> the idea is wrong the moment the zone fails.
-      //                      Typically 0.5-1.5 x average range: tight enough
-      //                      to scalp and small enough for a modest account.
-      //   Beyond the sweep-> the idea is wrong only if the whole raid fails.
-      //                      Typically 2-5 x average range: a swing stop.
-      double sl,tp;
-      if(InpStopBeyondPOI || InpScalpMode)
-        {
-         double buf2=InpPoiStopBuffer*g_view.avgRange;
-         sl=(dir>0 ? zb-buf2 : zt+buf2);
-        }
-      else
-        {
-         double slBuf=InpSlBufferPct*g_view.avgRange;
-         if(dir>0) sl=(g_view.sweepExtreme>0.0 ? MathMin(g_view.sweepExtreme,zb) : zb)-slBuf;
-         else      sl=(g_view.sweepExtreme>0.0 ? MathMax(g_view.sweepExtreme,zt) : zt)+slBuf;
-        }
-
-      double risk=MathAbs(px-sl);
-      if(risk<=0.0) continue;
-      if(risk<0.25*g_view.avgRange)          // never a meaningless stop
-        {
-         risk=0.25*g_view.avgRange;
-         sl=(dir>0 ? px-risk : px+risk);
-        }
-
-      // A scalper banks the nearer of the R target and the next pool; a
-      // swing trader runs to the pool. Same liquidity logic, different
-      // patience.
-      double rTarget=(InpScalpMode ? InpScalpTargetR : InpTpRMultiple)*risk;
-      double pool=(dir>0 ? g_view.nearestBuyside : g_view.nearestSellside);
-      bool poolValid=(dir>0 ? pool>px : (pool>0.0 && pool<px));
-      if(InpScalpMode)
-        {
-         tp=(dir>0 ? px+rTarget : px-rTarget);
-         if(poolValid && MathAbs(pool-px)<rTarget) tp=pool;   // take the closer one
-        }
-      else
-         tp=(poolValid ? pool : (dir>0 ? px+rTarget : px-rTarget));
-
-      double rr=MathAbs(tp-px)/risk;
-      if(rr<InpMinRR) continue;
-
-      string model;
-      if(sweepFresh && mss) model="sweep + MSS + "+src;      // full ICT reversal
-      else if(mss)          model="MSS + "+src;              // shift into the POI
-      else                  model=src+" continuation";       // with-structure scalp
-      g_view.setup=StringFormat("%s %s",(dir>0?"bullish":"bearish"),model);
-      g_view.setupDir=dir;
-      g_view.zoneTop=zt; g_view.zoneBottom=zb;
-      g_view.stopLevel=sl; g_view.targetLevel=tp; g_view.setupRR=rr;
-      return;
+      if(MathAbs(up.quality-dn.quality)<1e-9) takeUp=(g_view.htfBias>=0.0);
+      else                                    takeUp=(up.quality>dn.quality);
      }
+   else takeUp=okUp;
+   if(takeUp) best=up; else best=dn;
+
+   g_view.setup=StringFormat("%s %s",(best.dir>0?"bullish":"bearish"),best.model);
+   g_view.setupDir=best.dir;
+   g_view.zoneTop=best.zoneTop; g_view.zoneBottom=best.zoneBottom;
+   g_view.stopLevel=best.stop;  g_view.targetLevel=best.target;
+   g_view.setupRR=best.rr;
+   g_view.quality=best.quality; g_view.sizeFactor=best.sizeFactor;
+   g_view.confluence=best.confluence;
   }
 
-//--- explain the first missing leg, for the journal
+//--- With confluence scored rather than enforced, only two things can leave
+//    the EA flat: there is no POI on the chart, or price has not reached one.
+//    Both are stated with the distance, so the journal shows progress rather
+//    than a filter name.
 string MissingLeg(void)
   {
-   if(InpUseHtfBias && MathAbs(g_view.htfBias)<InpHtfMinAgreement)
-      return StringFormat("higher timeframes undecided (bias %.2f, need %.2f)",
-                          g_view.htfBias,InpHtfMinAgreement);
-   if(InpRequireSweep && !g_view.sweptBuyside && !g_view.sweptSellside)
-      return "no liquidity sweep yet";
-   if(!g_view.bullMss && !g_view.bearMss && !g_view.bullBos && !g_view.bearBos)
-      return "no market structure shift after the sweep";
    if(g_view.obCount==0 && g_view.fvgCount==0)
-      return "no unmitigated order block or fair value gap";
-   if(InpUseKillzones && !g_view.inKillzone)
-      return "outside the killzones";
-   if(InpUsePremiumDiscount)
-      return StringFormat("waiting for price to reach a POI in %s (now %.0f%% of range)",
-                          (g_view.htfBias>=0?"discount":"premium"),g_view.pdPosition*100.0);
-   return "conditions incomplete";
+      return "no live order block or fair value gap on the chart yet";
+   if(g_view.poiDistance>=0.0)
+      return StringFormat("price is not in a POI yet — nearest is %.2f x avg range away "
+                          "(%d blocks, %d gaps live)",
+                          g_view.poiDistance,g_view.obCount,g_view.fvgCount);
+   return "waiting for price to trade into a POI";
   }
 
 //============================ RISK / SIZE ===========================
@@ -1068,7 +1189,7 @@ void ManageBasket(const SBasket &b)
    if(R<=-InpBasketStopR) { CloseBasket(StringFormat("basket stop %.2fR",R));  return; }
 
    if(InpCloseOnFlip && MSign(g_view.htfBias)!=0 && MSign(g_view.htfBias)!=b.dir &&
-      MathAbs(g_view.htfBias)>=InpHtfMinAgreement)
+      MathAbs(g_view.htfBias)>=InpFlipMinBias)
      { CloseBasket("higher-timeframe bias flipped against the basket"); return; }
 
    if((b.dir>0 && g_view.bearChoch) || (b.dir<0 && g_view.bullChoch))
@@ -1132,9 +1253,9 @@ void TryEnter(const SBasket &b,const bool isScale)
    int dir=g_view.setupDir;
    if(dir==0) return;
 
-   if(InpEntryCooldownSec>0 && g_lastEntry>0 &&
-      (TimeCurrent()-g_lastEntry)<InpEntryCooldownSec)
-     { Block("entry cooldown"); return; }
+   if(InpEntrySpacingSec>0 && g_lastEntry>0 &&
+      (TimeCurrent()-g_lastEntry)<InpEntrySpacingSec)
+     { Block("entry spacing"); return; }
 
    MqlTick t; if(!SymbolInfoTick(_Symbol,t)) return;
    int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
@@ -1153,27 +1274,32 @@ void TryEnter(const SBasket &b,const bool isScale)
    double afford=AffordableStop();
    if(afford>0.0 && dist>afford)
      {
-      if(InpFitStopToAccount)
+      if(InpAutoFitStop)
         {
          double old=dist;
          dist=afford;
+         double rMult=(InpScalpMode ? InpScalpTargetR : InpTpRMultiple);
          sl=NormalizeDouble(dir>0?entry-dist:entry+dist,digits);
-         tp=NormalizeDouble(dir>0?entry+InpTpRMultiple*dist:entry-InpTpRMultiple*dist,digits);
+         tp=NormalizeDouble(dir>0?entry+rMult*dist:entry-rMult*dist,digits);
          LogEvent(StringFormat("stop tightened to fit account: %.5f -> %.5f (%.1fx closer than structure)",
                                old,dist,old/MathMax(dist,1e-9)));
         }
       else
         {
          Block(StringFormat("%s needs a %.5f stop, account carries %.5f at min lot "
-                            "(deposit ~%.0f, or set InpFitStopToAccount)",
+                            "(deposit ~%.0f, or set InpAutoFitStop)",
                             g_view.setup,dist,afford,
                             RiskOfLots(MinLot(),dist)/(InpMaxRiskPctHard/100.0)));
          return;
         }
      }
 
+   // Confluence sizes the trade. A bare POI still trades — at InpMinSizeFactor
+   // of the planned risk — while a full sweep + MSS + discount + killzone
+   // setup gets the whole allowance.
    double eq=AccountInfoDouble(ACCOUNT_EQUITY);
-   double planned=eq*InpRiskPct/100.0;
+   double factor=(g_view.sizeFactor>0.0 ? g_view.sizeFactor : 1.0);
+   double planned=eq*InpRiskPct/100.0*factor;
    double lots=NormalizeLots(LotForRisk(planned,dist));
    if(isScale && g_firstLot>0.0)
       lots=NormalizeLots(g_firstLot*MathPow(InpScaleDecay,b.count));
@@ -1215,8 +1341,9 @@ void TryEnter(const SBasket &b,const bool isScale)
    g_entries++;
    LogTrade(dir>0?"BUY":"SELL",res.price,sl,tp,g_view.setupRR,lots,realRisk,
             b.count+1,
-            StringFormat("%s | htf %.2f | pd %.0f%% | %s%s",
-                         g_view.setup,g_view.htfBias,g_view.pdPosition*100.0,
+            StringFormat("%s | quality %.2f (%s) | size x%.2f | htf %.2f | pd %.0f%% | %s%s",
+                         g_view.setup,g_view.quality,g_view.confluence,factor,
+                         g_view.htfBias,g_view.pdPosition*100.0,
                          g_view.killzoneName,(isScale?" | SCALE-IN":"")));
    g_block="—";
   }
@@ -1304,9 +1431,15 @@ void SelfTest(void)
    LogEvent(StringFormat("average range %.5f  spread %.0f pts",g_view.avgRange,g_view.spreadPts));
    LogEvent(StringFormat("structure dir %d | order blocks %d | FVGs %d | liquidity pools %d",
                          g_view.structDir,g_view.obCount,g_view.fvgCount,g_view.liqCount));
-   LogEvent(StringFormat("HTF bias %.2f (need |%.2f|) | killzone %s | range position %.0f%%",
-                         g_view.htfBias,InpHtfMinAgreement,g_view.killzoneName,
-                         g_view.pdPosition*100.0));
+   LogEvent(StringFormat("HTF bias %.2f (scored, never required) | killzone %s | range position %.0f%%",
+                         g_view.htfBias,g_view.killzoneName,g_view.pdPosition*100.0));
+   LogEvent(StringFormat("gating: ONE hard condition — price inside a live FVG/order block. "
+                         "HTF, sweep, structure, premium/discount, OTE and killzone only SIZE "
+                         "the trade (%.0f%%..100%% of planned risk).",InpMinSizeFactor*100.0));
+   if(InpQualityFloor>0.0)
+      LogEvent(StringFormat("*** InpQualityFloor is %.2f — setups below that quality WILL be "
+                            "refused. Set it to 0 for a pure never-block model. ***",
+                            InpQualityFloor));
    LogEvent(StringFormat("broker: min lot %.2f  contract %.0f  digits %d  stops level %d",
                          MinLot(),SymbolInfoDouble(_Symbol,SYMBOL_TRADE_CONTRACT_SIZE),
                          (int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS),
@@ -1319,13 +1452,14 @@ void SelfTest(void)
                          (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)?"ENABLED":"DISABLED")));
    LogEvent(StringFormat("widest stop this account can carry at min lot: %.5f (%.2f x avg range)",
                          afford,(g_view.avgRange>0.0?afford/g_view.avgRange:0.0)));
-   if(afford<2.0*g_view.avgRange)
-      LogEvent(StringFormat("*** WARNING: SMC stops sit beyond the swept extreme, typically 2-5 x "
-                            "average range. This account can only carry %.1f x. Most setups will be "
-                            "refused. Deposit about %.0f, or set InpFitStopToAccount=true and accept "
-                            "stops placed by affordability rather than by structure. ***",
+   double needStop=(InpStopBeyondPOI||InpScalpMode ? 1.0+InpPoiStopBuffer : 3.0)*g_view.avgRange;
+   if(afford<needStop && !InpAutoFitStop)
+      LogEvent(StringFormat("*** WARNING: this profile needs about %.1f x average range of stop and "
+                            "the account carries %.1f x at min lot. Set InpAutoFitStop=true (default) "
+                            "or deposit about %.0f. ***",
+                            needStop/MathMax(g_view.avgRange,1e-9),
                             (g_view.avgRange>0.0?afford/g_view.avgRange:0.0),
-                            RiskOfLots(MinLot(),3.0*g_view.avgRange)/(InpMaxRiskPctHard/100.0)));
+                            RiskOfLots(MinLot(),needStop)/(InpMaxRiskPctHard/100.0)));
    LogEvent("─────────────────────────────────────────");
   }
 
@@ -1344,18 +1478,20 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v4.10  SMC / ICT SCALPER  |  %s  M5\n"
-      "no indicators — structure, liquidity, OB, FVG only\n"
+      "MEDULA v5.00  SMC / ICT SCALPER  |  %s  M5\n"
+      "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
-      "HTF bias      %+5.2f  (need %.2f)\n"
+      "HTF bias      %+5.2f  (scored, not required)\n"
       "structure     dir %+d   %s\n"
       "liquidity     %s\n"
       "order blocks  %d      FVGs %d      pools %d\n"
       "dealing range %.5f - %.5f\n"
       "position      %.0f%% (%s%s)\n"
       "killzone      %s\n"
+      "nearest POI   %.2f x avg range away\n"
       "──────────────────────────────────────────\n"
       "SETUP   %s\n"
+      "quality %.2f  [%s]  ->  size x%.2f\n"
       "zone    %.5f - %.5f\n"
       "sl %.5f  tp %.5f  RR %.2f\n"
       "──────────────────────────────────────────\n"
@@ -1364,7 +1500,7 @@ void Panel(const SBasket &b)
       "entries %d   spread %.0f pts\n"
       "status  %s",
       _Symbol,
-      g_view.htfBias,InpHtfMinAgreement,
+      g_view.htfBias,
       g_view.structDir,mss,
       sweep,
       g_view.obCount,g_view.fvgCount,g_view.liqCount,
@@ -1372,7 +1508,9 @@ void Panel(const SBasket &b)
       g_view.pdPosition*100.0,
       (g_view.inDiscount?"discount":"premium"),(g_view.inOte?", OTE":""),
       g_view.killzoneName,
+      g_view.poiDistance,
       g_view.setup,
+      g_view.quality,(g_view.confluence==""?"-":g_view.confluence),g_view.sizeFactor,
       g_view.zoneBottom,g_view.zoneTop,
       g_view.stopLevel,g_view.targetLevel,g_view.setupRR,
       b.count,b.volume,b.avgEntry,
@@ -1399,7 +1537,8 @@ int OnInit(void)
                             "regardless of the chart timeframe",EnumToString(_Period)));
 
    if(Analyse()) SelfTest();
-   LogEvent("v4.10 SMC/ICT scalper ready — sweep + MSS + FVG/OB, basket manager active");
+   LogEvent("v5.00 SMC/ICT scalper ready — one hard condition (price in a live POI), "
+            "confluence sizes the trade, basket manager active");
    return INIT_SUCCEEDED;
   }
 

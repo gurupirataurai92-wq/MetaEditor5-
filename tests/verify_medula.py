@@ -1297,37 +1297,131 @@ check("Scalp target: nearer pool -> bank at the pool", why2 == "pool" and abs(tp
 tp3, why3 = scalp_target(1800.0, 1.55, -1, 1798.5)
 check("Scalp target: shorts mirror longs", why3 == "pool" and abs(tp3-1798.5) < 1e-9)
 
-# tiered model: core requirements plus optional filters
-def model_v410(direction, htf, swept, sweep_fresh, mss, aligned, in_poi,
-               require_sweep=False, min_htf=0.12):
-    if direction*htf < min_htf:              return "no HTF agreement"
-    if require_sweep and not sweep_fresh:    return "no sweep"
-    if not mss and not aligned:              return "no structure support"
-    if not in_poi:                           return "not at a POI"
-    if sweep_fresh and mss: return "TRADE:sweep + MSS"
-    if mss:                 return "TRADE:MSS"
-    return "TRADE:continuation"
+# ---------------------------------------------------------------------------
+# §10 v5.00 — confluence SCORES the trade, it never vetoes it
+# ---------------------------------------------------------------------------
+# The v4.10 gate that stood the EA down for a whole session was
+#     if direction*htf_bias < min_agreement: skip
+# with htf oscillating -0.10..-0.26 against a required 0.34. v5.00 keeps one
+# hard condition (price inside a live POI) and turns everything else into a
+# weight on SIZE. These checks are a 1:1 port of EvaluateDirection().
+W_HTF, W_STRUCT, W_SWEEP, W_PD, W_OTE, W_KZ = 0.28, 0.24, 0.18, 0.12, 0.08, 0.10
+HTF_FULL_AT   = 0.35
+MIN_SIZE_FACT = 0.40
 
-check("v4.10 model: full ICT reversal still recognised",
-      model_v410(1, 0.5, True, True, True, True, True) == "TRADE:sweep + MSS")
-check("v4.10 model: shift into a POI without a sweep is tradable",
-      model_v410(1, 0.5, False, False, True, True, True) == "TRADE:MSS")
-check("v4.10 model: with-structure continuation is tradable (the scalper's bread and butter)",
-      model_v410(1, 0.5, False, False, False, True, True) == "TRADE:continuation")
-check("v4.10 model: no structure support at all is still refused",
-      model_v410(1, 0.5, False, False, False, False, True) == "no structure support")
-check("v4.10 model: price not at a POI is still refused",
-      model_v410(1, 0.5, True, True, True, True, False) == "not at a POI")
-check("v4.10 model: HTF still vetoes a counter-bias trade",
-      model_v410(1, -0.5, True, True, True, True, True) == "no HTF agreement")
-check("v4.10 model: sweep can still be made mandatory",
-      model_v410(1, 0.5, False, False, True, True, True, require_sweep=True) == "no sweep")
+def struct_score(mss_fresh, aligned, mss, opposed):
+    if mss_fresh and aligned: return 1.00
+    if mss_fresh:             return 0.80
+    if aligned:               return 0.70
+    if mss:                   return 0.50
+    if opposed:               return 0.15
+    return 0.40
 
-# v4.00 required all seven legs at once; v4.10 needs core plus filters
-def legs_required(scalp):
-    return 3 if scalp else 7
-check("v4.10: scalper needs fewer simultaneous conditions than the swing model",
-      legs_required(True) < legs_required(False))
+def model_v500(direction, htf, swept, sweep_fresh, mss_fresh, aligned, in_poi,
+               pd_position=0.5, in_ote=False, in_kz=False, quality_floor=0.0):
+    """Returns (tradable, quality, size_factor)."""
+    if not in_poi:
+        return (False, 0.0, 0.0)                    # the only veto in the model
+    htf_s = mclamp((direction*htf)/HTF_FULL_AT, 0.0, 1.0)
+    opposed = (not aligned) and (not mss_fresh)
+    st_s  = struct_score(mss_fresh, aligned, mss_fresh or swept, opposed)
+    sw_s  = 1.0 if sweep_fresh else (0.45 if swept else 0.0)
+    pd_s  = (mclamp((0.5-pd_position)/0.5, 0.0, 1.0) if direction > 0
+             else mclamp((pd_position-0.5)/0.5, 0.0, 1.0))
+    wsum  = W_HTF+W_STRUCT+W_SWEEP+W_PD+W_OTE+W_KZ
+    q = (W_HTF*htf_s + W_STRUCT*st_s + W_SWEEP*sw_s + W_PD*pd_s +
+         W_OTE*(1.0 if in_ote else 0.0) + W_KZ*(1.0 if in_kz else 0.0)) / wsum
+    q = mclamp(q, 0.0, 1.0)
+    if q < quality_floor:
+        return (False, q, 0.0)
+    return (True, q, mclamp(MIN_SIZE_FACT + (1.0-MIN_SIZE_FACT)*q, 0.05, 1.0))
+
+# the exact conditions of the log that took zero trades all day
+tradable, q_blocked, size_blocked = model_v500(
+    1, -0.22, swept=False, sweep_fresh=False, mss_fresh=False, aligned=True, in_poi=True)
+check("v5.00: the bias that blocked every bar of the day (-0.22 vs 0.34) now trades",
+      tradable, f"quality {q_blocked:.2f}, size x{size_blocked:.2f}")
+check("v5.00: a counter-bias setup trades SMALL rather than not at all",
+      tradable and size_blocked < 1.0, f"size x{size_blocked:.2f}")
+
+full = model_v500(1, 0.9, True, True, True, True, True,
+                  pd_position=0.1, in_ote=True, in_kz=True)
+check("v5.00: a full sweep + MSS + discount + OTE + killzone setup earns full size",
+      full[0] and full[2] > 0.95, f"quality {full[1]:.2f}, size x{full[2]:.2f}")
+
+bare = model_v500(1, 0.0, False, False, False, False, True, pd_position=0.5)
+check("v5.00: a bare POI with no confluence still trades",
+      bare[0], f"quality {bare[1]:.2f}, size x{bare[2]:.2f}")
+check("v5.00: a bare POI never trades below the minimum size factor",
+      bare[2] >= MIN_SIZE_FACT - 1e-9, f"size x{bare[2]:.2f}")
+check("v5.00: full confluence commits strictly more than a bare POI",
+      full[2] > bare[2], f"{full[2]:.2f} vs {bare[2]:.2f}")
+
+check("v5.00: no POI is the one and only refusal",
+      not model_v500(1, 0.9, True, True, True, True, False)[0])
+
+# every filter, one at a time, must be unable to produce a refusal
+for name, kw in [("hostile HTF",        dict(htf=-1.0)),
+                 ("no sweep",           dict(swept=False, sweep_fresh=False)),
+                 ("no structure shift", dict(mss_fresh=False, aligned=False)),
+                 ("wrong side of range",dict(pd_position=1.0)),
+                 ("outside OTE",        dict(in_ote=False)),
+                 ("outside killzone",   dict(in_kz=False))]:
+    base = dict(direction=1, htf=0.5, swept=True, sweep_fresh=True, mss_fresh=True,
+                aligned=True, in_poi=True, pd_position=0.2, in_ote=True, in_kz=True)
+    base.update(kw)
+    check(f"v5.00: '{name}' alone cannot refuse a setup", model_v500(**base)[0])
+
+# ...and each one must still MATTER — a filter that changes nothing is decoration
+for name, kw in [("HTF",        dict(htf=-1.0)),
+                 ("sweep",      dict(swept=False, sweep_fresh=False)),
+                 ("structure",  dict(mss_fresh=False, aligned=False)),
+                 ("premium/discount", dict(pd_position=1.0)),
+                 ("OTE",        dict(in_ote=False)),
+                 ("killzone",   dict(in_kz=False))]:
+    base = dict(direction=1, htf=0.5, swept=True, sweep_fresh=True, mss_fresh=True,
+                aligned=True, in_poi=True, pd_position=0.2, in_ote=True, in_kz=True)
+    ref = model_v500(**base)[2]
+    base.update(kw)
+    check(f"v5.00: losing '{name}' still reduces the size committed",
+          model_v500(**base)[2] < ref - 1e-9)
+
+check("v5.00: the quality floor is off by default, so nothing is refused on quality",
+      model_v500(1, -1.0, False, False, False, False, True, pd_position=1.0)[0])
+check("v5.00: a quality floor, if switched on, does bite",
+      not model_v500(1, -1.0, False, False, False, False, True,
+                     pd_position=1.0, quality_floor=0.9)[0])
+
+# reward:risk is a target rule, never an entry filter
+def target_rr(entry, risk, direction, pool, scalp_r=1.6, min_rr=1.20):
+    r_tp = entry + direction*scalp_r*risk
+    tp = r_tp
+    valid = (pool > entry) if direction > 0 else (0 < pool < entry)
+    if valid:
+        pool_r = abs(pool-entry)/risk
+        if min_rr <= pool_r < scalp_r:
+            tp = pool
+    rr = abs(tp-entry)/risk
+    if rr < min_rr:
+        rr = min_rr
+        tp = entry + direction*rr*risk
+    return tp, rr
+_, rr_close = target_rr(1800.0, 1.0, 1, 1800.4)     # pool only 0.4R away
+check("v5.00: a too-close liquidity pool is ignored, not used to refuse the trade",
+      rr_close >= 1.20 - 1e-9, f"rr {rr_close:.2f}")
+_, rr_ok = target_rr(1800.0, 1.0, 1, 1801.3)        # pool 1.3R away
+check("v5.00: a pool that pays at least the minimum R is used as the target",
+      abs(rr_ok - 1.3) < 1e-9)
+check("v5.00: no reachable input combination lets RR refuse a setup",
+      all(target_rr(1800.0, 1.0, 1, p)[1] >= 1.20 - 1e-9
+          for p in [0.0, 1799.0, 1800.05, 1800.5, 1801.0, 1805.0]))
+
+# the arithmetic of why v4.10 idled: independent gates multiply
+def all_gates_pass(p_each, n): return p_each**n
+check("v5.00 rationale: seven independent 60% gates clear under 3% of bars",
+      all_gates_pass(0.60, 7) < 0.03, f"{all_gates_pass(0.60, 7)*100:.1f}%")
+check("v5.00 rationale: one hard condition clears far more often than seven",
+      all_gates_pass(0.60, 1) > 20*all_gates_pass(0.60, 7))
 
 def scalp_timeout(bars_held, R, max_bars=24, min_R=0.3):
     return bars_held > max_bars and R < min_R
