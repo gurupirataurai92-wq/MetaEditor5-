@@ -34,7 +34,7 @@
 //|  liquidity pool, or an R multiple if none is in range.           |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "4.00"
+#property version   "4.10"
 
 //============================== INPUTS ==============================
 
@@ -72,19 +72,19 @@ input double InpFvgFillPct      = 50.0;    // Consumed once price fills this % (
 input group "Liquidity (§4)"
 input double InpEqualTolPct     = 0.12;    // Equal-level tolerance (share of avg range)
 input int    InpLiqLookback     = 200;     // Bars scanned for liquidity pools
-input bool   InpRequireSweep    = true;    // Demand a liquidity sweep before entry
+input bool   InpRequireSweep    = false;   // Demand a liquidity sweep before entry
 input int    InpSweepMaxAgeBars = 30;      // Sweep must be this recent
 input bool   InpUsePrevDayLevels= true;    // Include previous day high/low as liquidity
 
 input group "Premium / Discount (§5)"
-input bool   InpUsePremiumDiscount = true; // Buy only in discount, sell only in premium
+input bool   InpUsePremiumDiscount = false;// Buy only in discount, sell only in premium
 input int    InpDealingRangeBars   = 120;  // Bars forming the dealing range
 input double InpOteLow              = 0.62; // OTE zone lower retracement
 input double InpOteHigh             = 0.79; // OTE zone upper retracement
 input bool   InpRequireOte          = false;// Demand entry inside the OTE window
 
 input group "Killzones (§6, GMT)"
-input bool   InpUseKillzones    = true;    // Trade only in ICT killzones
+input bool   InpUseKillzones    = false;   // Trade only in ICT killzones
 input int    InpLondonStart     = 7;       // London open killzone start hour
 input int    InpLondonEnd       = 10;      // London open killzone end hour
 input int    InpNyStart         = 12;      // New York open killzone start hour
@@ -97,41 +97,48 @@ input bool   InpUseHtfBias      = true;    // Require higher-timeframe agreement
 input bool   InpHtfM15          = true;    // Include M15 structure
 input bool   InpHtfH1           = true;    // Include H1 structure
 input bool   InpHtfH4           = true;    // Include H4 structure
-input double InpHtfMinAgreement = 0.34;    // Minimum weighted agreement (-1..+1)
+input double InpHtfMinAgreement = 0.12;    // Minimum weighted agreement (-1..+1)
 
 input group "Displacement (§8)"
 input double InpDisplacementMult = 1.5;    // Leg range >= this x average range
 input double InpDisplacementBody = 0.50;   // Body must be this share of the leg
 
+input group "Scalp Mode"
+input bool   InpScalpMode       = true;    // Scalper profile: POI stops, quick targets
+input bool   InpStopBeyondPOI   = true;    // Stop just past the FVG/OB, not past the sweep
+input double InpPoiStopBuffer   = 0.30;    // Stop beyond the POI by this x average range
+input double InpScalpTargetR    = 1.6;     // Scalp target in R
+input int    InpMaxHoldBars     = 24;      // Close a scalp after this many M5 bars
+
 input group "Entries"
 input bool   InpEntryOnFVG      = true;    // Enter on FVG return
 input bool   InpEntryOnOB       = true;    // Enter on order-block return
 input double InpEntryZoneBuffer = 0.10;    // Zone widened by this share of avg range
-input int    InpEntryCooldownSec= 300;     // Min seconds between entries
+input int    InpEntryCooldownSec= 120;     // Min seconds between entries
 input int    InpMaxSetupAgeBars = 40;      // Setup must trigger within this many bars
 
 input group "Risk"
 input double InpRiskPct         = 1.0;     // Risk per trade (% equity)
 input double InpSlBufferPct     = 0.25;    // Stop beyond the sweep by this x avg range
-input double InpMinRR           = 2.0;     // Minimum reward:risk to accept a setup
+input double InpMinRR           = 1.5;     // Minimum reward:risk to accept a setup
 input double InpTpRMultiple     = 3.0;     // Target when no liquidity pool is in range
 input double InpDailyLossPct    = 5.0;     // Daily loss limit (%)
 input double InpMaxDDPct        = 20.0;    // Max drawdown from peak (%)
 input double InpMaxRiskPctHard  = 20.0;    // ABSOLUTE ceiling on one trade (% equity)
 input double InpMarginSafety    = 1.2;     // Free-margin safety factor
 input bool   InpAllowMinLot     = true;    // Round up to broker minimum lot
-input bool   InpFitStopToAccount= false;   // Tighten stop so min lot fits the ceiling
+input bool   InpFitStopToAccount= true;    // Tighten stop so min lot fits the ceiling
 
 input group "Basket Manager (§9)"
 input bool   InpUseBasket       = true;    // Manage positions as one basket
 input int    InpMaxBasketTrades = 4;       // Max positions in a basket
-input double InpBasketTargetR   = 2.0;     // Close the basket at this R
+input double InpBasketTargetR   = 1.6;     // Close the basket at this R
 input double InpBasketStopR     = 1.5;     // Close the basket at this loss in R
 input double InpMaxBasketRiskPct= 4.0;     // Max combined basket risk (% equity)
 input bool   InpBasketBreakEven = true;    // Move basket to break-even in profit
-input double InpBasketBeAtR     = 1.0;     // Break-even trigger (R)
+input double InpBasketBeAtR     = 0.5;     // Break-even trigger (R)
 input bool   InpBasketPartial   = true;    // Partial close at the first target
-input double InpBasketPartialR  = 1.0;     // Partial trigger (R)
+input double InpBasketPartialR  = 0.6;     // Partial trigger (R)
 input double InpBasketPartialPct= 50.0;    // Percent of volume closed
 input bool   InpAllowScaleIn    = true;    // Add on a fresh confirmation
 input double InpScaleDecay      = 0.6;     // Lot decay per add
@@ -742,19 +749,20 @@ void FindSetup(void)
       // 1. higher-timeframe agreement
       if(InpUseHtfBias && dir*g_view.htfBias<InpHtfMinAgreement) continue;
 
-      // 2. liquidity taken on the opposite side
-      if(InpRequireSweep)
-        {
-         if(dir>0 && !g_view.sweptSellside) continue;
-         if(dir<0 && !g_view.sweptBuyside)  continue;
-         if(g_view.sweepAgeBars>InpSweepMaxAgeBars) continue;
-        }
+      // 2. liquidity taken on the opposite side (optional filter)
+      bool swept=(dir>0 ? g_view.sweptSellside : g_view.sweptBuyside);
+      bool sweepFresh=(swept && g_view.sweepAgeBars<=InpSweepMaxAgeBars);
+      if(InpRequireSweep && !sweepFresh) continue;
 
-      // 3. structure shifted back the other way after the sweep
+      // 3. structure. A sweep plus a shift is the textbook reversal entry;
+      //    without a sweep, structure simply has to be on our side and a
+      //    break must have happened recently — the continuation entry a
+      //    scalper takes far more often than the full reversal model.
       bool mss=(dir>0 ? (g_view.bullMss || g_view.bullBos)
                       : (g_view.bearMss || g_view.bearBos));
-      if(!mss) continue;
-      if(g_view.mssAgeBars>InpMaxSetupAgeBars) continue;
+      bool aligned=(g_view.structDir==dir);
+      if(!mss && !aligned) continue;
+      if(mss && g_view.mssAgeBars>InpMaxSetupAgeBars && !aligned) continue;
 
       // 4/5. price is back inside the imbalance or block that shift created
       double zt=0.0,zb=0.0;
@@ -797,28 +805,55 @@ void FindSetup(void)
       // 7. killzone
       if(InpUseKillzones && !g_view.inKillzone) continue;
 
-      // stop beyond the sweep extreme, target the opposing pool
-      double slBuf=InpSlBufferPct*g_view.avgRange;
+      // Stop placement decides whether this is a scalp or a swing.
+      //   Beyond the POI  -> the idea is wrong the moment the zone fails.
+      //                      Typically 0.5-1.5 x average range: tight enough
+      //                      to scalp and small enough for a modest account.
+      //   Beyond the sweep-> the idea is wrong only if the whole raid fails.
+      //                      Typically 2-5 x average range: a swing stop.
       double sl,tp;
-      if(dir>0)
+      if(InpStopBeyondPOI || InpScalpMode)
         {
-         double anchor=(g_view.sweepExtreme>0.0 ? MathMin(g_view.sweepExtreme,zb) : zb);
-         sl=anchor-slBuf;
-         tp=(g_view.nearestBuyside>px ? g_view.nearestBuyside : 0.0);
+         double buf2=InpPoiStopBuffer*g_view.avgRange;
+         sl=(dir>0 ? zb-buf2 : zt+buf2);
         }
       else
         {
-         double anchor=(g_view.sweepExtreme>0.0 ? MathMax(g_view.sweepExtreme,zt) : zt);
-         sl=anchor+slBuf;
-         tp=(g_view.nearestSellside>0.0 && g_view.nearestSellside<px ? g_view.nearestSellside : 0.0);
+         double slBuf=InpSlBufferPct*g_view.avgRange;
+         if(dir>0) sl=(g_view.sweepExtreme>0.0 ? MathMin(g_view.sweepExtreme,zb) : zb)-slBuf;
+         else      sl=(g_view.sweepExtreme>0.0 ? MathMax(g_view.sweepExtreme,zt) : zt)+slBuf;
         }
+
       double risk=MathAbs(px-sl);
       if(risk<=0.0) continue;
-      if(tp<=0.0) tp=(dir>0 ? px+InpTpRMultiple*risk : px-InpTpRMultiple*risk);
+      if(risk<0.25*g_view.avgRange)          // never a meaningless stop
+        {
+         risk=0.25*g_view.avgRange;
+         sl=(dir>0 ? px-risk : px+risk);
+        }
+
+      // A scalper banks the nearer of the R target and the next pool; a
+      // swing trader runs to the pool. Same liquidity logic, different
+      // patience.
+      double rTarget=(InpScalpMode ? InpScalpTargetR : InpTpRMultiple)*risk;
+      double pool=(dir>0 ? g_view.nearestBuyside : g_view.nearestSellside);
+      bool poolValid=(dir>0 ? pool>px : (pool>0.0 && pool<px));
+      if(InpScalpMode)
+        {
+         tp=(dir>0 ? px+rTarget : px-rTarget);
+         if(poolValid && MathAbs(pool-px)<rTarget) tp=pool;   // take the closer one
+        }
+      else
+         tp=(poolValid ? pool : (dir>0 ? px+rTarget : px-rTarget));
+
       double rr=MathAbs(tp-px)/risk;
       if(rr<InpMinRR) continue;
 
-      g_view.setup=StringFormat("%s sweep + MSS + %s",(dir>0?"bullish":"bearish"),src);
+      string model;
+      if(sweepFresh && mss) model="sweep + MSS + "+src;      // full ICT reversal
+      else if(mss)          model="MSS + "+src;              // shift into the POI
+      else                  model=src+" continuation";       // with-structure scalp
+      g_view.setup=StringFormat("%s %s",(dir>0?"bullish":"bearish"),model);
       g_view.setupDir=dir;
       g_view.zoneTop=zt; g_view.zoneBottom=zb;
       g_view.stopLevel=sl; g_view.targetLevel=tp; g_view.setupRR=rr;
@@ -1022,6 +1057,14 @@ void ManageBasket(const SBasket &b)
    double R=b.floatPL/g_basketRisk;
 
    if(R>=InpBasketTargetR){ CloseBasket(StringFormat("basket target %.2fR",R)); return; }
+
+   // a scalp that has not resolved is dead money — release the risk
+   if(InpScalpMode && b.firstTime>0)
+     {
+      int held=(int)((TimeCurrent()-b.firstTime)/MathMax(PeriodSeconds(PERIOD_M5),1));
+      if(held>InpMaxHoldBars && R<0.3)
+        { CloseBasket(StringFormat("scalp timed out after %d M5 bars at %.2fR",held,R)); return; }
+     }
    if(R<=-InpBasketStopR) { CloseBasket(StringFormat("basket stop %.2fR",R));  return; }
 
    if(InpCloseOnFlip && MSign(g_view.htfBias)!=0 && MSign(g_view.htfBias)!=b.dir &&
@@ -1301,7 +1344,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v4.00  SMC / ICT  |  %s  M5\n"
+      "MEDULA v4.10  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — structure, liquidity, OB, FVG only\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (need %.2f)\n"
@@ -1356,7 +1399,7 @@ int OnInit(void)
                             "regardless of the chart timeframe",EnumToString(_Period)));
 
    if(Analyse()) SelfTest();
-   LogEvent("v4.00 SMC/ICT ready — sweep + MSS + FVG/OB, basket manager active");
+   LogEvent("v4.10 SMC/ICT scalper ready — sweep + MSS + FVG/OB, basket manager active");
    return INIT_SUCCEEDED;
   }
 

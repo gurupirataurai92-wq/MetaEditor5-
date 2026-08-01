@@ -1265,6 +1265,77 @@ check("Basket: scale-in respects minimum spacing",
 check("Basket: valid scale-in is permitted",
       scale_allowed(1, 1, 1, 4, 2.0, 0.75))
 
+
+# ============ v4.10 SCALPER PROFILE: POI STOPS, TIERED MODEL =============
+AR = 1.547        # XAUUSD M5 average range from the live self-test
+AFFORD = 2.00     # what a $10 account carries at 0.01 lot gold
+
+def stop_beyond_sweep(sweep_mult, buf=0.25): return (sweep_mult+buf)*AR
+def stop_beyond_poi(zone_h, buf=0.30):       return (zone_h+buf)*AR
+
+check("Scalp stops: swing anchor (sweep) is unaffordable on this account",
+      all(stop_beyond_sweep(m) > AFFORD for m in [2.0, 3.0, 5.0]))
+check("Scalp stops: POI anchor is affordable for typical zones",
+      stop_beyond_poi(0.3) <= AFFORD and stop_beyond_poi(0.6) <= AFFORD)
+check("Scalp stops: POI anchor is 2-6x tighter than the sweep anchor",
+      stop_beyond_sweep(3.0)/stop_beyond_poi(0.6) > 2.0,
+      f"{stop_beyond_sweep(3.0)/stop_beyond_poi(0.6):.1f}x")
+check("Scalp stops: a wide zone still exceeds the account (fit-to-account catches it)",
+      stop_beyond_poi(1.5) > AFFORD)
+check("Scalp stops: never smaller than the floor",
+      max(stop_beyond_poi(0.0), 0.25*AR) >= 0.25*AR)
+
+def scalp_target(entry, risk, direction, pool, scalp_r=1.6):
+    r_tp = entry + direction*scalp_r*risk
+    valid = (pool > entry) if direction > 0 else (0 < pool < entry)
+    if valid and abs(pool-entry) < scalp_r*risk: return pool, "pool"
+    return r_tp, "R"
+tp, why = scalp_target(1800.0, 1.55, 1, 1810.0)
+check("Scalp target: distant pool -> take the R target", why == "R" and abs(tp-1802.48) < 0.01)
+tp2, why2 = scalp_target(1800.0, 1.55, 1, 1801.5)
+check("Scalp target: nearer pool -> bank at the pool", why2 == "pool" and abs(tp2-1801.5) < 1e-9)
+tp3, why3 = scalp_target(1800.0, 1.55, -1, 1798.5)
+check("Scalp target: shorts mirror longs", why3 == "pool" and abs(tp3-1798.5) < 1e-9)
+
+# tiered model: core requirements plus optional filters
+def model_v410(direction, htf, swept, sweep_fresh, mss, aligned, in_poi,
+               require_sweep=False, min_htf=0.12):
+    if direction*htf < min_htf:              return "no HTF agreement"
+    if require_sweep and not sweep_fresh:    return "no sweep"
+    if not mss and not aligned:              return "no structure support"
+    if not in_poi:                           return "not at a POI"
+    if sweep_fresh and mss: return "TRADE:sweep + MSS"
+    if mss:                 return "TRADE:MSS"
+    return "TRADE:continuation"
+
+check("v4.10 model: full ICT reversal still recognised",
+      model_v410(1, 0.5, True, True, True, True, True) == "TRADE:sweep + MSS")
+check("v4.10 model: shift into a POI without a sweep is tradable",
+      model_v410(1, 0.5, False, False, True, True, True) == "TRADE:MSS")
+check("v4.10 model: with-structure continuation is tradable (the scalper's bread and butter)",
+      model_v410(1, 0.5, False, False, False, True, True) == "TRADE:continuation")
+check("v4.10 model: no structure support at all is still refused",
+      model_v410(1, 0.5, False, False, False, False, True) == "no structure support")
+check("v4.10 model: price not at a POI is still refused",
+      model_v410(1, 0.5, True, True, True, True, False) == "not at a POI")
+check("v4.10 model: HTF still vetoes a counter-bias trade",
+      model_v410(1, -0.5, True, True, True, True, True) == "no HTF agreement")
+check("v4.10 model: sweep can still be made mandatory",
+      model_v410(1, 0.5, False, False, True, True, True, require_sweep=True) == "no sweep")
+
+# v4.00 required all seven legs at once; v4.10 needs core plus filters
+def legs_required(scalp):
+    return 3 if scalp else 7
+check("v4.10: scalper needs fewer simultaneous conditions than the swing model",
+      legs_required(True) < legs_required(False))
+
+def scalp_timeout(bars_held, R, max_bars=24, min_R=0.3):
+    return bars_held > max_bars and R < min_R
+check("Scalp timeout: a stalled scalp releases its risk",
+      scalp_timeout(30, 0.1))
+check("Scalp timeout: a working scalp is left alone",
+      not scalp_timeout(30, 0.8) and not scalp_timeout(10, 0.1))
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

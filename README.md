@@ -7,8 +7,8 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v4.00, Smart Money Concepts / ICT.** M5 execution, zero indicators, full basket manager. This is the current build.
-- **[tests/verify_medula.py](tests/verify_medula.py)** — 254-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v4.10, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager. This is the current build.
+- **[tests/verify_medula.py](tests/verify_medula.py)** — 272-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
 
@@ -164,3 +164,37 @@ an R multiple when none is in range.
 entry, one R unit taken from the first fill and shared by all legs, basket-level target and
 stop in R, break-even set on the *basket average*, partial closes, decaying scale-ins that
 can never martingale, and a full close when higher-timeframe bias or structure flips.
+
+
+### v4.10 — the scalper profile
+
+The first SMC run took no trades and the self-test named the cause: stops were anchored
+**beyond the swept extreme**, which on XAUUSD M5 is 2–5× the average range ($3–8), while a
+$10 account carries $2.00. That is a swing trader's stop, and it is also why the EA held no
+scalper character at all.
+
+**Stop placement decides which trader the EA is:**
+
+| Anchor | Distance | Meaning |
+|---|---|---|
+| Beyond the swept extreme | 2–5× avg range | The idea is wrong only if the whole liquidity raid fails |
+| **Beyond the POI** (v4.10 default) | **0.5–1.5× avg range** | The idea is wrong the moment the FVG/order block fails |
+
+The POI anchor is 2–6× tighter, which makes it both scalper-appropriate and affordable on a
+small account. Targets follow the same logic: a scalper banks at the **nearer** of the R
+target and the next liquidity pool, a swing trader runs to the pool.
+
+**The model is now tiered** rather than seven mandatory conditions at once:
+
+- **Core** (always required): price at an unmitigated FVG or order block, with structure
+  supporting the direction.
+- **Optional filters** (each independently switchable): liquidity sweep, killzone,
+  premium/discount, OTE, higher-timeframe agreement threshold.
+
+Three entry models are recognised and named in the journal, so the log shows which one fired:
+`sweep + MSS + FVG` (full ICT reversal), `MSS + order block` (shift into a POI), and
+`FVG continuation` (with-structure scalp — the one that actually occurs often on M5).
+
+A scalp that has not resolved within `InpMaxHoldBars` and is below +0.3R is closed to release
+the risk, and the basket now works on scalper timings: break-even at 0.5R, partial at 0.6R,
+basket target 1.6R.
