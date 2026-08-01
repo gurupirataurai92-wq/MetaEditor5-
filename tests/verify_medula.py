@@ -1075,6 +1075,196 @@ check("v3.10: tightening is a real degradation, not a free lunch",
       tightened < 7.70 and 7.70/tightened > 3.0,
       f"stops out {7.70/tightened:.1f}x too early")
 
+
+# ================ v4.00 SMART MONEY CONCEPTS / ICT =======================
+
+# --- §3 Fair Value Gap: three-candle imbalance
+def find_fvg(bars, min_gap):
+    """bars: list of (o,h,l,c), index 0 = newest. Returns (dir, top, bottom)."""
+    out = []
+    for i in range(1, len(bars)-1):
+        newer, older = bars[i-1], bars[i+1]
+        up = newer[2] - older[1]          # low[i-1] - high[i+1]
+        if up >= min_gap: out.append((1, newer[2], older[1], i))
+        dn = older[2] - newer[1]          # low[i+1] - high[i-1]
+        if dn >= min_gap: out.append((-1, older[2], newer[1], i))
+    return out
+
+# displacement up leaves a gap: candle1 high 100.2, candle3 low 101.0
+bull_gap = [(101.5,102.0,101.4,101.9),   # [0] newest
+            (100.5,101.6,101.0,101.5),   # [1] displacement
+            (100.0,100.2, 99.8,100.1)]   # [2] oldest
+f = find_fvg(bull_gap, 0.5)
+check("ICT FVG: displacement up leaves a bullish gap",
+      any(d == 1 for d,_,_,_ in f), str(f))
+# the gap runs from the OLDEST candle's high (100.2) up to the NEWEST
+# candle's low (101.4) -- that untouched span is the imbalance
+check("ICT FVG: gap spans candle3 high up to candle1 low",
+      any(abs(t-101.4) < 1e-9 and abs(b-100.2) < 1e-9 for d,t,b,_ in f if d == 1), str(f))
+check("ICT FVG: gap size equals the untraded distance",
+      any(abs((t-b)-1.2) < 1e-9 for d,t,b,_ in f if d == 1), str(f))
+bear_gap = [(99.5,99.6,99.0,99.1),
+            (100.5,100.6,99.4,99.5),
+            (101.0,101.2,100.8,100.9)]
+f2 = find_fvg(bear_gap, 0.5)
+check("ICT FVG: displacement down leaves a bearish gap",
+      any(d == -1 for d,_,_,_ in f2), str(f2))
+# overlapping candles = no imbalance
+no_gap = [(100.5,101.0,100.0,100.8),(100.3,100.9,99.9,100.6),(100.0,100.7,99.8,100.4)]
+check("ICT FVG: overlapping candles produce no gap", len(find_fvg(no_gap, 0.5)) == 0)
+check("ICT FVG: gap smaller than the minimum is ignored",
+      len(find_fvg(bull_gap, 5.0)) == 0)
+
+# --- §2 Order Block: last opposing candle before displacement
+def find_ob(bars, avg_range, disp_mult=1.5, body_frac=0.50, lookback=6):
+    for i in range(1, len(bars)-1):
+        o,h,l,c = bars[i]
+        rng, body = h-l, abs(c-o)
+        up = rng >= disp_mult*avg_range and body >= body_frac*rng and c > o
+        dn = rng >= disp_mult*avg_range and body >= body_frac*rng and c < o
+        if not (up or dn): continue
+        for b in range(i+1, min(i+1+lookback, len(bars))):
+            ob,oh,ol,oc = bars[b]
+            if up and oc < ob:  return (1, oh, ol, b)
+            if dn and oc > ob:  return (-1, oh, ol, b)
+    return None
+
+ob_bull = [(103.0,103.2,102.8,103.1),
+           (100.1,102.5,100.0,102.4),      # displacement up, range 2.5
+           (100.3,100.4,100.0,100.1),      # last DOWN candle -> the order block
+           (100.0,100.3, 99.9,100.2)]
+r = find_ob(ob_bull, 1.0)
+check("ICT OB: bullish order block is the last down candle before displacement",
+      r is not None and r[0] == 1 and abs(r[1]-100.4) < 1e-9, str(r))
+ob_bear = [(97.0,97.2,96.8,96.9),
+           (100.0,100.1,97.5,97.6),        # displacement down
+           (99.8,100.2,99.7,100.1),        # last UP candle -> the order block
+           (99.9,100.0,99.6,99.7)]
+r2 = find_ob(ob_bear, 1.0)
+check("ICT OB: bearish order block is the last up candle before displacement",
+      r2 is not None and r2[0] == -1, str(r2))
+weak = [(100.5,100.6,100.4,100.5),(100.2,100.5,100.1,100.4),(100.3,100.4,100.0,100.1)]
+check("ICT OB: no displacement means no order block", find_ob(weak, 1.0) is None)
+
+# --- §4 liquidity sweep (stop hunt / turtle soup)
+def is_sweep(level, side, bar):
+    o,h,l,c = bar
+    if side > 0: return h > level and c < level      # buyside taken, closed back below
+    return l < level and c > level                   # sellside taken, closed back above
+check("ICT sweep: wick above equal highs closing back below is a buyside sweep",
+      is_sweep(100.0, 1, (99.8, 100.5, 99.7, 99.9)))
+check("ICT sweep: wick below equal lows closing back above is a sellside sweep",
+      is_sweep(100.0, -1, (100.2, 100.3, 99.5, 100.1)))
+check("ICT sweep: closing BEYOND the level is a break, not a sweep",
+      not is_sweep(100.0, 1, (99.8, 100.5, 99.7, 100.4)))
+check("ICT sweep: never reaching the level is not a sweep",
+      not is_sweep(100.0, 1, (99.0, 99.5, 98.9, 99.2)))
+
+# --- §5 premium / discount / OTE
+def pd_state(price, lo, hi, ote_lo=0.62, ote_hi=0.79, struct_dir=1):
+    span = hi-lo
+    pos = (price-lo)/span if span > 0 else 0.5
+    retr = 1.0-pos if struct_dir >= 0 else pos
+    return pos, pos < 0.5, pos > 0.5, (ote_lo <= retr <= ote_hi)
+
+pos, disc, prem, ote = pd_state(102.0, 100.0, 110.0)
+check("ICT premium/discount: 20% of range is discount", disc and not prem, f"{pos:.2f}")
+pos2, disc2, prem2, _ = pd_state(108.0, 100.0, 110.0)
+check("ICT premium/discount: 80% of range is premium", prem2 and not disc2, f"{pos2:.2f}")
+_, _, _, ote3 = pd_state(103.0, 100.0, 110.0)   # 70% retracement of an up leg
+check("ICT OTE: 62-79% retracement is inside the optimal entry window", ote3)
+_, _, _, ote4 = pd_state(109.0, 100.0, 110.0)
+check("ICT OTE: shallow retracement is outside the window", not ote4)
+check("ICT equilibrium: exact midpoint is neither premium nor discount",
+      not pd_state(105.0, 100.0, 110.0)[1] and not pd_state(105.0, 100.0, 110.0)[2])
+
+# --- §6 killzones
+def killzone(h, lon=(7,10), ny=(12,15), lnc=(15,17)):
+    if lon[0] <= h < lon[1]: return "London"
+    if ny[0]  <= h < ny[1]:  return "NewYork"
+    if lnc[0] <= h < lnc[1]: return "LondonClose"
+    return "outside"
+check("ICT killzone: 08:00 GMT is the London window", killzone(8) == "London")
+check("ICT killzone: 13:00 GMT is the New York window", killzone(13) == "NewYork")
+check("ICT killzone: 16:00 GMT is the London close window", killzone(16) == "LondonClose")
+check("ICT killzone: 03:00 GMT (Asia) is outside", killzone(3) == "outside")
+check("ICT killzone: windows do not overlap ambiguously",
+      len({killzone(h) for h in range(24)}) == 4)
+
+# --- the full entry model: every leg required, in order
+def ict_model(htf_bias, swept, sweep_age, mss, in_zone, in_discount, in_killzone,
+              rr, direction, min_bias=0.34, max_sweep_age=30, min_rr=2.0):
+    if direction*htf_bias < min_bias:            return "no HTF agreement"
+    if not swept:                                return "no liquidity sweep"
+    if sweep_age > max_sweep_age:                return "sweep too old"
+    if not mss:                                  return "no structure shift"
+    if not in_zone:                              return "price not in the POI"
+    if direction > 0 and not in_discount:        return "not in discount"
+    if direction < 0 and in_discount:            return "not in premium"
+    if not in_killzone:                          return "outside killzone"
+    if rr < min_rr:                              return "reward:risk too low"
+    return "TRADE"
+
+check("ICT model: every leg present -> TRADE",
+      ict_model(0.8, True, 5, True, True, True, True, 3.0, 1) == "TRADE")
+for leg, args in [
+    ("HTF disagrees",      (-0.8, True, 5, True, True, True, True, 3.0, 1)),
+    ("no sweep",           (0.8, False, 5, True, True, True, True, 3.0, 1)),
+    ("stale sweep",        (0.8, True, 99, True, True, True, True, 3.0, 1)),
+    ("no MSS",             (0.8, True, 5, False, True, True, True, 3.0, 1)),
+    ("not at the POI",     (0.8, True, 5, True, False, True, True, 3.0, 1)),
+    ("in premium not disc",(0.8, True, 5, True, True, False, True, 3.0, 1)),
+    ("outside killzone",   (0.8, True, 5, True, True, True, False, 3.0, 1)),
+    ("RR too low",         (0.8, True, 5, True, True, True, True, 1.2, 1))]:
+    check(f"ICT model: rejects when {leg}", ict_model(*args) != "TRADE", ict_model(*args))
+check("ICT model: short mirrors long (premium instead of discount)",
+      ict_model(-0.8, True, 5, True, True, False, True, 3.0, -1) == "TRADE")
+
+# --- §9 basket manager
+def basket_metrics(legs):
+    """legs: list of (price, volume)."""
+    vol = sum(v for _, v in legs)
+    avg = sum(p*v for p, v in legs)/vol
+    return avg, vol
+avg, vol = basket_metrics([(1.1000, 0.10), (1.0950, 0.06), (1.0900, 0.036)])
+manual = (1.1000*0.10 + 1.0950*0.06 + 1.0900*0.036)/0.196
+check("Basket: volume-weighted average entry", abs(avg-manual) < 1e-12, f"{avg:.5f}")
+check("Basket: total volume is the sum of the legs", abs(vol-0.196) < 1e-12)
+
+def basket_action(float_pl, risk_unit, target_r=2.0, stop_r=1.5, be_r=1.0, partial_r=1.0):
+    R = float_pl/risk_unit
+    if R >= target_r:  return ("CLOSE_ALL", R)
+    if R <= -stop_r:   return ("CLOSE_ALL", R)
+    if R >= be_r:      return ("BREAK_EVEN", R)
+    return ("HOLD", R)
+check("Basket: closes the whole basket at target R",
+      basket_action(20.0, 10.0)[0] == "CLOSE_ALL")
+check("Basket: closes the whole basket at stop R",
+      basket_action(-15.0, 10.0)[0] == "CLOSE_ALL")
+check("Basket: moves to break-even between BE and target",
+      basket_action(12.0, 10.0)[0] == "BREAK_EVEN")
+check("Basket: holds inside the band", basket_action(3.0, 10.0)[0] == "HOLD")
+check("Basket: R is measured on the FIRST entry's risk, shared by every leg",
+      basket_action(20.0, 10.0)[1] == 2.0)
+
+def scale_lots(first, decay, count): return first*decay**count
+seq = [scale_lots(0.10, 0.6, n) for n in range(1, 4)]
+check("Basket: scale-ins decay, never martingale",
+      all(seq[i] < seq[i-1] for i in range(1, 3)) and seq[0] < 0.10, str(seq))
+check("Basket: total basket volume stays bounded",
+      0.10 + sum(seq) < 0.10/(1-0.6))
+
+def scale_allowed(setup_dir, basket_dir, count, max_trades, spacing, min_spacing):
+    return setup_dir == basket_dir and count < max_trades and spacing >= min_spacing
+check("Basket: scale-in needs a same-direction setup",
+      not scale_allowed(-1, 1, 1, 4, 2.0, 0.75))
+check("Basket: scale-in respects the position cap",
+      not scale_allowed(1, 1, 4, 4, 2.0, 0.75))
+check("Basket: scale-in respects minimum spacing",
+      not scale_allowed(1, 1, 1, 4, 0.3, 0.75))
+check("Basket: valid scale-in is permitted",
+      scale_allowed(1, 1, 1, 4, 2.0, 0.75))
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

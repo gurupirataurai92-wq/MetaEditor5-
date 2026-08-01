@@ -7,7 +7,8 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[tests/verify_medula.py](tests/verify_medula.py)** — 198-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v4.00, Smart Money Concepts / ICT.** M5 execution, zero indicators, full basket manager. This is the current build.
+- **[tests/verify_medula.py](tests/verify_medula.py)** — 254-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
 
@@ -125,3 +126,41 @@ idea, with ATR only as a buffer. Targets are a configured R multiple of that rea
 
 Risk carries the v2.70 corrections: R is measured against the risk actually taken, and
 `InpMaxRiskPctHard` caps any single trade regardless of the min-lot override.
+
+
+## v4.00 — Smart Money Concepts / ICT
+
+`Medula_SMC.mq5` trades a single ICT model on **M5**. Verified by the suite: zero indicator
+handles and zero `CopyBuffer` calls in executable code — the only market data read is
+`CopyHigh`, `CopyLow`, `CopyOpen`, `CopyClose`, `CopyTime`, `CopyTickVolume`.
+
+| Engine | Concept |
+|---|---|
+| §1 Market structure | Swing points, BOS, CHoCH, and market structure shift (MSS) |
+| §2 Order blocks | Last opposing candle before displacement; mitigation and breaker flip |
+| §3 Fair value gaps | Three-candle imbalance, consequent-encroachment fill tracking |
+| §4 Liquidity | EQH/EQL pools, previous-day high/low, sweep (stop-hunt) detection |
+| §5 Premium / discount | Dealing range, equilibrium, 62–79% OTE window |
+| §6 Killzones | London, New York, London Close (GMT) |
+| §7 HTF bias | M15 / H1 / H4 swing structure, weighted |
+| §8 Displacement | Impulsive legs that leave imbalance behind |
+| §9 Basket manager | Average entry, basket R, targets, break-even, partials, scaling |
+
+**The entry model** — every leg required, checked in order, and the first missing one is
+named in the journal:
+
+1. Higher-timeframe bias agrees
+2. Liquidity is swept — a prior high/low taken and rejected
+3. Market structure shifts against the sweep (CHoCH / BOS)
+4. That shift was displacement, leaving an FVG or order block
+5. Price returns into that FVG or order block
+6. Entry sits in discount (longs) or premium (shorts)
+7. Inside a killzone, and reward:risk clears the minimum
+
+Stops go beyond the swept extreme. Targets are the opposing liquidity pool, falling back to
+an R multiple when none is in range.
+
+**The basket manager** treats every position on the symbol as one exposure: a single average
+entry, one R unit taken from the first fill and shared by all legs, basket-level target and
+stop in R, break-even set on the *basket average*, partial closes, decaying scale-ins that
+can never martingale, and a full close when higher-timeframe bias or structure flips.
