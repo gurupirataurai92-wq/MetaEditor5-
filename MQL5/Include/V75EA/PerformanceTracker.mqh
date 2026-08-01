@@ -9,7 +9,9 @@
 
 #property strict
 
-#include <V75EA\RegimeDetector.mqh>
+//--- Bucket index is caller-defined (market regime, setup type, ...) so this
+//--- tracker carries no dependency on any particular analysis module.
+#define PERF_BUCKETS 8
 
 class CPerformanceTracker
   {
@@ -22,8 +24,8 @@ private:
    double   m_maxDrawdown;    // in account currency
 
    //--- per-regime net profit and count (indexed by ENUM_REGIME 0..6)
-   double   m_regimeProfit[7];
-   int      m_regimeCount[7];
+   double   m_regimeProfit[PERF_BUCKETS];
+   int      m_regimeCount[PERF_BUCKETS];
 
 public:
                      CPerformanceTracker(void) { Reset(); }
@@ -34,17 +36,17 @@ public:
       m_grossProfit = 0.0; m_grossLoss = 0.0;
       m_peakEquity  = AccountInfoDouble(ACCOUNT_EQUITY);
       m_maxDrawdown = 0.0;
-      for(int i = 0; i < 7; i++) { m_regimeProfit[i] = 0.0; m_regimeCount[i] = 0; }
+      for(int i = 0; i < PERF_BUCKETS; i++) { m_regimeProfit[i] = 0.0; m_regimeCount[i] = 0; }
      }
 
    //--- call whenever a position closes
-   void              RecordClosedTrade(const double profit, const ENUM_REGIME regimeAtEntry)
+   void              RecordClosedTrade(const double profit, const int bucketAtEntry)
      {
       if(profit >= 0.0) { m_wins++;   m_grossProfit += profit; }
       else              { m_losses++; m_grossLoss   += -profit; }
 
-      int idx = (int)regimeAtEntry;
-      if(idx >= 0 && idx < 7)
+      int idx = bucketAtEntry;
+      if(idx >= 0 && idx < PERF_BUCKETS)
         {
          m_regimeProfit[idx] += profit;
          m_regimeCount[idx]++;
@@ -74,9 +76,9 @@ public:
       Print("=== V75EA performance ===");
       PrintFormat("Trades=%d  WinRate=%.1f%%  ProfitFactor=%.2f  AvgWin=%.2f  AvgLoss=%.2f  MaxDD=%.2f",
                   TotalTrades(), WinRate(), ProfitFactor(), AvgWin(), AvgLoss(), MaxDrawdown());
-      for(int i = 0; i < 7; i++)
+      for(int i = 0; i < PERF_BUCKETS; i++)
          if(m_regimeCount[i] > 0)
-            PrintFormat("  regime[%d]: trades=%d  netProfit=%.2f", i, m_regimeCount[i], m_regimeProfit[i]);
+            PrintFormat("  bucket[%d]: trades=%d  netProfit=%.2f", i, m_regimeCount[i], m_regimeProfit[i]);
      }
   };
 
