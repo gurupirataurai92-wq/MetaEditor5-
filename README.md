@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.00, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.10, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -138,7 +138,7 @@ handles and zero `CopyBuffer` calls in executable code — the only market data 
 |---|---|
 | §1 Market structure | Swing points, BOS, CHoCH, and market structure shift (MSS) |
 | §2 Order blocks | Last opposing candle before displacement; mitigation and breaker flip |
-| §3 Fair value gaps | Three-candle imbalance, consequent-encroachment fill tracking |
+| §3 Fair value gaps | Three-candle imbalance, **graded**: breakaway / measuring / exhaustion, partial fill, consequent encroachment, inversion |
 | §4 Liquidity | EQH/EQL pools, previous-day high/low, sweep (stop-hunt) detection |
 | §5 Premium / discount | Dealing range, equilibrium, 62–79% OTE window |
 | §6 Killzones | London, New York, London Close (GMT) |
@@ -261,3 +261,60 @@ An old parameter set can now only carry forward settings that cannot stand the E
 The panel and journal report the quality, the tags that scored (`HTF STRUCT SWEEP DISC KZ`)
 and the resulting size multiplier on every fill, and when the EA is flat the reason is a
 distance, not a filter name: *"price is not in a POI yet — nearest is 1.84 x avg range away"*.
+
+
+### v5.10 — what a gap is worth
+
+v5.00 traded. The journal then showed *why it was still standing aside*, and the count gave
+it away: **`13 blocks, 3 gaps live`**. Order blocks outnumbered fair value gaps four to one,
+so the EA kept waiting on blocks whose stops were 2–6× too wide for the account, and the
+`InpAutoFitStop` clamp then dragged the stop back to whatever the equity could carry —
+decoupling it from the structure it was supposed to protect. The first trade lasted 26
+seconds.
+
+The gap inventory was starved by the gap model itself. v5.00 knew two states, alive and
+filled, and both threw work away:
+
+| v5.00 behaviour | What was actually happening | v5.10 |
+|---|---|---|
+| Price closes through a gap → **delete it** | A gap traded fully through **inverts** — those prices now hold from the other side | `inverted`, the zone flips direction and keeps trading (IFVG) |
+| Gap 50% consumed → struck off as **filled** | Price reaching the consequent encroachment **is** the entry | `filledPct` 0..1 discounts the grade instead of deleting the zone |
+| Every gap is the same object | A gap that starts a move and a gap that ends one are opposite trades | `kind`: breakaway / measuring / exhaustion |
+| First POI the loop reached wins | A sprawling breaker block beat a two-candle gap | Best **quality per unit of risk** wins |
+
+**The three kinds:**
+
+| Kind | Formed | Behaviour | Used as |
+|---|---|---|---|
+| **Breakaway (BAG)** | The candle that breaks structure at the start of an expansion — short run in, large body, close takes the last swing | Price defends it | The highest-graded entry on the chart |
+| **Measuring** | Mid-leg imbalance | Ordinary continuation | A normal entry |
+| **Exhaustion** | Into a pool once the run is already extended | Gets filled | A **target**, graded near zero as an entry |
+
+Grade (0..1) combines gap size, the displacement behind it, kind, freshness, and how much has
+already been given back. It feeds three decisions:
+
+1. **Which POI to enter** — `PoiScore = grade / (0.60 + stop distance in avg ranges)`. A tight
+   breakaway gap now outranks a wide breaker block, which is also the honest fix for the
+   over-tight stop clamp: pick a POI whose *natural* stop the account can carry.
+2. **How much size** — `InpWeightPoiGrade` puts the POI's own quality into the confluence
+   score, tagged `A+POI` in the journal.
+3. **Where the target goes** — `FvgDraw()` finds the nearest unrebalanced gap ahead of price
+   and competes it against the liquidity pool. Whichever draw is nearer and still pays
+   `InpTargetMinRR` takes the target.
+
+New inputs: `InpUseInversionFvg`, `InpBagDisplaceMult`, `InpBagMaxRunIn`, `InpExhaustRunMult`,
+`InpExhaustLookback`, `InpFvgGradeFloor`, `InpFvgTargetPull`, `InpBestPoi`,
+`InpWeightPoiGrade`.
+
+**Two fixes to the surrounding machinery**, both of which destroyed the graded setups that
+did fire:
+
+- `InpBreakerMinLosses` (default 3). A 5% daily loss limit on a $10 account is $0.50, while a
+  single minimum-lot stop-out risks $0.28–1.65 — so one loss latched the breaker and ended
+  the day. The daily limit now also requires a *run* of losers. Max drawdown from peak is
+  unchanged and still latches on its own.
+- `stop tightened to fit account` printed on every tick for hours. It is throttled to
+  `InpDiagThrottleSec`, or to a real change in the distance.
+
+The panel adds a gap census (`gaps  N breakaway   N inverted`) and the POI grade of the live
+setup; gap boxes are coloured by kind, with inversions drawn in their new direction.

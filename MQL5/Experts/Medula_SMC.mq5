@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.00 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.10 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -12,7 +12,10 @@
 //|    §1  Market structure   swings, BOS, CHoCH, MSS                |
 //|    §2  Order blocks       last opposing candle before            |
 //|                           displacement that breaks structure     |
-//|    §3  Fair value gaps    three-candle imbalance, fill tracking  |
+//|    §3  Fair value gaps    three-candle imbalance, GRADED:        |
+//|                           breakaway / measuring / exhaustion,    |
+//|                           partial fill, consequent encroachment, |
+//|                           inversion, and gaps as draws on price  |
 //|    §4  Liquidity          EQH/EQL pools, session and prior-day   |
 //|                           highs and lows, sweep detection        |
 //|    §5  Premium / discount dealing range, equilibrium, OTE        |
@@ -50,11 +53,46 @@
 //|  used to refuse the setup.                                       |
 //|                                                                  |
 //|  Stop goes just beyond the POI (scalp) or beyond the swept       |
-//|  extreme (swing). Target is the nearer of the R target and the   |
-//|  next liquidity pool.                                            |
+//|  extreme (swing). Target is the nearer of the R target, the      |
+//|  next liquidity pool and the next unrebalanced gap.              |
+//|                                                                  |
+//|  v5.10 — WHAT A GAP IS WORTH                                     |
+//|                                                                  |
+//|  v5.00 treated every fair value gap as the same object: it was   |
+//|  alive or it was rubbish. Two consequences followed, and both    |
+//|  showed up in the journal.                                       |
+//|                                                                  |
+//|  First, a gap price had closed through was deleted. But a gap    |
+//|  traded fully through does not stop existing — it INVERTS. Those |
+//|  same prices now hold from the other side, and that is half of   |
+//|  the model. Deleting them left three gaps live against fifteen   |
+//|  order blocks, so the EA sat waiting on blocks whose stops were  |
+//|  six times too wide for the account.                             |
+//|                                                                  |
+//|  Second, a gap 50% consumed was struck off as "filled" — yet     |
+//|  price trading to the consequent encroachment IS the entry. The  |
+//|  EA was throwing away the setup at the exact moment it armed.    |
+//|                                                                  |
+//|  v5.10 grades instead of deleting. Every gap carries its size,   |
+//|  the displacement that made it, how deeply it has been consumed, |
+//|  and WHICH KIND of gap it is:                                    |
+//|                                                                  |
+//|    BREAKAWAY (BAG)  the gap left by the candle that broke        |
+//|                     structure at the start of an expansion.      |
+//|                     It tends to hold. Trade with it.             |
+//|    MEASURING        mid-leg imbalance. Ordinary, tradeable.      |
+//|    EXHAUSTION       printed into a pool after the run is already |
+//|                     extended. It tends to get filled — so it is  |
+//|                     a TARGET, not an entry.                      |
+//|                                                                  |
+//|  Grade feeds three decisions: which POI to enter (best quality   |
+//|  per unit of risk, so a two-tick breakaway gap beats a sprawling |
+//|  breaker block), how much size the setup earns, and where the    |
+//|  target goes — the nearest unfilled gap ahead of price is a draw |
+//|  on liquidity and is used as a take-profit.                      |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.00"
+#property version   "5.10"
 
 //============================== INPUTS ==============================
 
@@ -87,7 +125,15 @@ input bool   InpUseFVG          = true;    // Trade FVG returns
 input int    InpMaxFVGs         = 20;      // FVGs tracked
 input int    InpFvgMaxAgeBars   = 200;     // Forget FVGs older than this
 input double InpFvgMinPct       = 0.25;    // Gap must be >= this share of avg range
-input double InpFvgFillPct      = 50.0;    // Consumed once price fills this % (CE)
+input double InpFvgFillPct      = 50.0;    // Reported as consumed past this % (CE)
+input bool   InpUseInversionFvg = true;    // A violated gap inverts and keeps trading (IFVG)
+input double InpBagDisplaceMult = 1.80;    // Breakaway gap: its candle >= this x avg range
+input double InpBagMaxRunIn     = 1.50;    // Breakaway only if the run into it is under this
+input double InpExhaustRunMult  = 3.00;    // Exhaustion once the run already exceeds this
+input int    InpExhaustLookback = 12;      // Bars measured for the run into the gap
+input double InpFvgGradeFloor   = 0.00;    // Drop gaps graded below this (0 = keep all)
+input bool   InpFvgTargetPull   = true;    // Unfilled gaps ahead of price are targets
+input bool   InpBestPoi         = true;    // Enter the best-graded POI, not the first found
 
 input group "Liquidity (§4)"
 input double InpEqualTolPct     = 0.12;    // Equal-level tolerance (share of avg range)
@@ -130,6 +176,7 @@ input double InpWeightSweep     = 0.18;    // Weight: fresh liquidity sweep
 input double InpWeightPD        = 0.12;    // Weight: discount (buy) / premium (sell)
 input double InpWeightOte       = 0.08;    // Weight: entry inside the OTE window
 input double InpWeightKillzone  = 0.10;    // Weight: inside an ICT killzone
+input double InpWeightPoiGrade  = 0.20;    // Weight: grade of the POI itself (BAG > FVG > OB)
 input double InpHtfFullAt       = 0.35;    // HTF agreement that scores full marks
 input double InpMinSizeFactor   = 0.40;    // Size at zero confluence (x planned risk)
 input double InpQualityFloor    = 0.00;    // Refuse below this quality (0 = never refuse)
@@ -155,6 +202,7 @@ input double InpSlBufferPct     = 0.25;    // Stop beyond the sweep by this x av
 input double InpTargetMinRR     = 1.20;    // Target is never set closer than this R
 input double InpTpRMultiple     = 3.0;     // Target when no liquidity pool is in range
 input double InpDailyLossPct    = 5.0;     // Daily loss limit (%)
+input int    InpBreakerMinLosses= 3;       // Losing trades before the daily limit latches
 input double InpMaxDDPct        = 20.0;    // Max drawdown from peak (%)
 input double InpMaxRiskPctHard  = 20.0;    // ABSOLUTE ceiling on one trade (% equity)
 input double InpMarginSafety    = 1.2;     // Free-margin safety factor
@@ -196,13 +244,28 @@ struct SOB
    bool              alive;
   };
 
+//--- where a gap sits inside the leg that made it (§3 / §8)
+enum ENUM_GAPKIND
+  {
+   GAP_MEASURING  =0,   // mid-leg imbalance — ordinary, tradeable
+   GAP_BREAKAWAY  =1,   // BAG: the candle that broke structure, start of expansion
+   GAP_EXHAUSTION =2    // printed into a pool on an extended run — a target, not an entry
+  };
+
 //--- a fair value gap: three-candle imbalance (§3)
 struct SFVG
   {
    double            top,bottom;
-   int               dir;          // +1 bullish gap, -1 bearish gap
+   double            ce;           // consequent encroachment — the midpoint
+   int               dir;          // +1 bullish gap, -1 bearish gap (flips on inversion)
    int               shift;
-   bool              filled;
+   double            size;         // height in average-range units
+   double            strength;     // displacement of the gap candle, in avg-range units
+   ENUM_GAPKIND      kind;
+   double            filledPct;    // 0..1, deepest consumption so far
+   double            grade;        // 0..1, what this gap is worth trading
+   bool              filled;       // consumed past InpFvgFillPct (reporting only)
+   bool              inverted;     // closed fully through — now works the other way
    bool              alive;
   };
 
@@ -253,7 +316,9 @@ struct SView
    double            sizeFactor;           // risk multiplier derived from quality
    string            confluence;           // the tags that scored
    double            poiDistance;          // avg-range units to the nearest live POI
+   double            poiGrade;             // 0..1 grade of the POI actually entered
    int               obCount,fvgCount,liqCount;
+   int               bagCount,invCount;    // breakaway gaps and inversions live
   };
 
 //--- one evaluated direction, before the two are compared
@@ -262,7 +327,7 @@ struct SSetup
    int               dir;
    double            zoneTop,zoneBottom;
    double            stop,target,rr;
-   double            quality,sizeFactor;
+   double            quality,sizeFactor,poiGrade;
    string            model,confluence;
   };
 
@@ -295,6 +360,9 @@ ulong    g_partialDone[],g_beDone[];
 
 double   g_dayStartEquity=0.0,g_peakEquity=0.0;
 int      g_dayKey=-1;
+datetime g_dayStart=0;
+datetime g_lastFitLog=0;
+double   g_lastFitDist=0.0;
 bool     g_breaker=false,g_breakerLogged=false;
 
 datetime g_lastBar=0,g_lastEntry=0;
@@ -536,6 +604,97 @@ void BuildOrderBlocks(void)
 
 //====================== §3 FAIR VALUE GAPS ==========================
 
+//--- the most recent confirmed swing level strictly older than bar i
+double SwingBefore(const int i,const bool wantHigh)
+  {
+   int k=InpSwingK;
+   for(int j=i+1;j<i+1+InpStructureLookback && j+k<g_bars;j++)
+     {
+      if(wantHigh){ if(IsSwingHigh(j,k)) return g_h[j]; }
+      else        { if(IsSwingLow(j,k))  return g_l[j];  }
+     }
+   return 0.0;
+  }
+
+//--- Not every gap is the same trade.
+//
+//    A BREAKAWAY gap is left by the candle that breaks structure at the START
+//    of an expansion: the run into it is short, the candle itself is large,
+//    and its close takes the last swing. That gap is where the move began and
+//    price defends it — it is the highest-value entry on the chart.
+//
+//    An EXHAUSTION gap prints at the END of a run that is already extended,
+//    typically as price reaches for a pool. It gets filled. Entering there is
+//    stepping in front of the reversal, so the EA grades it down to near zero
+//    and uses it as a TARGET instead.
+//
+//    Everything between the two is a MEASURING gap: ordinary continuation.
+ENUM_GAPKIND ClassifyGap(const int i,const int dir,const double strength)
+  {
+   int n=MathMin(InpExhaustLookback,g_bars-i-2);
+   if(n<3) return GAP_MEASURING;
+
+   double hi=g_h[i+1],lo=g_l[i+1];
+   for(int b=i+1;b<=i+n && b<g_bars;b++)
+     { hi=MathMax(hi,g_h[b]); lo=MathMin(lo,g_l[b]); }
+
+   // how far the market had already travelled before this candle printed
+   double runIn=(dir>0 ? g_h[i]-lo : hi-g_l[i])/MathMax(g_view.avgRange,1e-9);
+   double swing=SwingBefore(i,dir>0);
+   double buf=InpBosBufferPct*g_view.avgRange;
+   bool   bos=(swing>0.0 && (dir>0 ? g_c[i]>swing+buf : g_c[i]<swing-buf));
+
+   // the gap candle contributes its own range to the run, so it is allowed for
+   if(bos && strength>=InpBagDisplaceMult && runIn<=InpBagMaxRunIn+strength)
+      return GAP_BREAKAWAY;
+   if(runIn>=InpExhaustRunMult && (dir>0 ? g_h[i]>=hi : g_l[i]<=lo))
+      return GAP_EXHAUSTION;
+   return GAP_MEASURING;
+  }
+
+//--- What a gap is worth, 0..1. Size and the displacement behind it say how
+//    real the imbalance is, kind says whether price defends it or fills it,
+//    age says whether it is still in play, and consumption discounts what has
+//    already been given back. Nothing here refuses a trade — it prices one.
+double GradeGap(const int z)
+  {
+   double sizeScore =MClamp(g_fvgs[z].size,0.0,1.0);
+   double strScore  =MClamp((g_fvgs[z].strength-1.0)/MathMax(InpBagDisplaceMult,0.1),0.0,1.0);
+   double kindScore =(g_fvgs[z].kind==GAP_BREAKAWAY  ? 1.00 :
+                      g_fvgs[z].kind==GAP_EXHAUSTION ? 0.15 : 0.60);
+   double fresh     =MClamp(1.0-(double)g_fvgs[z].shift/MathMax((double)InpFvgMaxAgeBars,1.0),
+                            0.0,1.0);
+   double g=0.28*sizeScore+0.27*strScore+0.27*kindScore+0.18*fresh;
+   g*=(1.0-0.60*MClamp(g_fvgs[z].filledPct,0.0,1.0));  // a half-given-back gap is half the trade
+   if(g_fvgs[z].inverted) g*=0.85;                     // an inversion is real, just second-hand
+   return MClamp(g,0.0,1.0);
+  }
+
+string FvgName(const SFVG &f)
+  {
+   if(f.inverted)                 return "inversion FVG";
+   if(f.kind==GAP_BREAKAWAY)      return "breakaway gap";
+   if(f.kind==GAP_EXHAUSTION)     return "exhaustion gap";
+   return "FVG";
+  }
+
+void PushFVG(const double top,const double bottom,const int dir,const int i)
+  {
+   int n=ArraySize(g_fvgs);
+   if(n>=InpMaxFVGs*2) return;
+   double rng=g_h[i]-g_l[i];
+   double strength=(g_view.avgRange>0.0 ? rng/g_view.avgRange : 0.0);
+   ArrayResize(g_fvgs,n+1);
+   g_fvgs[n].top=top; g_fvgs[n].bottom=bottom;
+   g_fvgs[n].ce=(top+bottom)*0.5;
+   g_fvgs[n].dir=dir; g_fvgs[n].shift=i;
+   g_fvgs[n].size=(top-bottom)/MathMax(g_view.avgRange,1e-9);
+   g_fvgs[n].strength=strength;
+   g_fvgs[n].kind=ClassifyGap(i,dir,strength);
+   g_fvgs[n].filledPct=0.0; g_fvgs[n].grade=0.0;
+   g_fvgs[n].filled=false; g_fvgs[n].inverted=false; g_fvgs[n].alive=true;
+  }
+
 //--- A fair value gap is a three-candle imbalance: price moved so fast that
 //    candle 1 and candle 3 do not overlap. The unfilled space is inefficient
 //    pricing that price tends to revisit.
@@ -549,49 +708,78 @@ void BuildFVGs(void)
    for(int i=scan;i>=1;i--)
      {
       // bullish: low of the newer candle above the high of the older one
-      double gapUp=g_l[i-1]-g_h[i+1];
-      if(gapUp>=minGap)
-        {
-         int n=ArraySize(g_fvgs);
-         if(n<InpMaxFVGs*2)
-           {
-            ArrayResize(g_fvgs,n+1);
-            g_fvgs[n].top=g_l[i-1]; g_fvgs[n].bottom=g_h[i+1];
-            g_fvgs[n].dir=1; g_fvgs[n].shift=i;
-            g_fvgs[n].filled=false; g_fvgs[n].alive=true;
-           }
-        }
-      double gapDn=g_l[i+1]-g_h[i-1];
-      if(gapDn>=minGap)
-        {
-         int n=ArraySize(g_fvgs);
-         if(n<InpMaxFVGs*2)
-           {
-            ArrayResize(g_fvgs,n+1);
-            g_fvgs[n].top=g_l[i+1]; g_fvgs[n].bottom=g_h[i-1];
-            g_fvgs[n].dir=-1; g_fvgs[n].shift=i;
-            g_fvgs[n].filled=false; g_fvgs[n].alive=true;
-           }
-        }
+      if(g_l[i-1]-g_h[i+1]>=minGap) PushFVG(g_l[i-1],g_h[i+1], 1,i);
+      if(g_l[i+1]-g_h[i-1]>=minGap) PushFVG(g_l[i+1],g_h[i-1],-1,i);
      }
 
-   // consumption: price trading through the consequent encroachment (mid)
+   // Consumption and inversion. The old engine deleted any gap price closed
+   // through; that is the moment the gap becomes useful in the other
+   // direction, not the moment it stops mattering. Fill is tracked as a
+   // fraction so the consequent encroachment — the classic entry — still
+   // leaves a tradeable, correctly discounted zone.
    for(int z=ArraySize(g_fvgs)-1;z>=0;z--)
      {
-      double ce=(g_fvgs[z].top+g_fvgs[z].bottom)*0.5;
-      double lim=(g_fvgs[z].dir>0
-                  ? g_fvgs[z].top-(g_fvgs[z].top-g_fvgs[z].bottom)*InpFvgFillPct/100.0
-                  : g_fvgs[z].bottom+(g_fvgs[z].top-g_fvgs[z].bottom)*InpFvgFillPct/100.0);
+      double h=g_fvgs[z].top-g_fvgs[z].bottom;
+      if(h<=0.0){ g_fvgs[z].alive=false; continue; }
+
       for(int i=g_fvgs[z].shift-1;i>=0;i--)
         {
-         if(g_fvgs[z].dir>0 && g_l[i]<=lim){ g_fvgs[z].filled=true; }
-         if(g_fvgs[z].dir<0 && g_h[i]>=lim){ g_fvgs[z].filled=true; }
-         if(g_fvgs[z].dir>0 && g_c[i]<g_fvgs[z].bottom){ g_fvgs[z].alive=false; break; }
-         if(g_fvgs[z].dir<0 && g_c[i]>g_fvgs[z].top)   { g_fvgs[z].alive=false; break; }
+         double depth=(g_fvgs[z].dir>0 ? (g_fvgs[z].top-g_l[i])
+                                       : (g_h[i]-g_fvgs[z].bottom))/h;
+         if(depth>g_fvgs[z].filledPct) g_fvgs[z].filledPct=MClamp(depth,0.0,1.0);
+
+         bool through=(g_fvgs[z].dir>0 ? g_c[i]<g_fvgs[z].bottom
+                                       : g_c[i]>g_fvgs[z].top);
+         if(!through) continue;
+
+         // a second violation means the zone has failed both ways — drop it
+         if(!InpUseInversionFvg || g_fvgs[z].inverted){ g_fvgs[z].alive=false; break; }
+
+         g_fvgs[z].dir      =-g_fvgs[z].dir;
+         g_fvgs[z].inverted =true;
+         g_fvgs[z].filledPct=0.0;
+         g_fvgs[z].shift    =i;              // it dates from the violation, not the print
+         if(g_fvgs[z].kind==GAP_EXHAUSTION) g_fvgs[z].kind=GAP_MEASURING;
+        }
+
+      g_fvgs[z].filled=(g_fvgs[z].filledPct*100.0>=InpFvgFillPct);
+      g_fvgs[z].grade =GradeGap(z);
+      if(g_fvgs[z].grade<InpFvgGradeFloor) g_fvgs[z].alive=false;
+     }
+
+   g_view.fvgCount=0; g_view.bagCount=0; g_view.invCount=0;
+   for(int z=0;z<ArraySize(g_fvgs);z++)
+     {
+      if(!g_fvgs[z].alive) continue;
+      g_view.fvgCount++;
+      if(g_fvgs[z].kind==GAP_BREAKAWAY) g_view.bagCount++;
+      if(g_fvgs[z].inverted)            g_view.invCount++;
+     }
+  }
+
+//--- The nearest unrebalanced gap ahead of price is a draw on liquidity: the
+//    market goes there to fix the inefficiency. Used as a TARGET only — the
+//    consequent encroachment is where fills reliably reach.
+double FvgDraw(const int dir,const double px)
+  {
+   if(!InpFvgTargetPull) return 0.0;
+   double best=0.0;
+   for(int z=0;z<ArraySize(g_fvgs);z++)
+     {
+      if(!g_fvgs[z].alive || g_fvgs[z].filledPct>=0.99) continue;
+      double lvl=g_fvgs[z].ce;
+      if(dir>0)
+        {
+         if(g_fvgs[z].bottom<=px) continue;
+         if(best<=0.0 || lvl<best) best=lvl;
+        }
+      else
+        {
+         if(g_fvgs[z].top>=px) continue;
+         if(best<=0.0 || lvl>best) best=lvl;
         }
      }
-   g_view.fvgCount=0;
-   for(int z=0;z<ArraySize(g_fvgs);z++) if(g_fvgs[z].alive) g_view.fvgCount++;
+   return best;
   }
 
 //==================== §4 LIQUIDITY AND SWEEPS =======================
@@ -775,6 +963,21 @@ void BuildHtfBias(void)
 
 //======================= THE ICT ENTRY MODEL ========================
 
+//--- What a point of interest is worth per unit of risk.
+//
+//    Two live POIs are not equal even at the same grade: the one whose stop
+//    sits closer returns more for the same money, and on a small account it is
+//    the only one the risk ceiling can actually carry at minimum lot. The
+//    constant keeps a zero-width zone from scoring infinity.
+double PoiScore(const double grade,const double px,const double top,
+                const double bottom,const int dir)
+  {
+   double far=(dir>0 ? bottom-InpPoiStopBuffer*g_view.avgRange
+                     : top   +InpPoiStopBuffer*g_view.avgRange);
+   double risk=MathAbs(px-far)/MathMax(g_view.avgRange,1e-9);
+   return grade/(0.60+risk);
+  }
+
 //--- Evaluate one direction.
 //
 //    There is exactly ONE hard condition: price must be trading inside a
@@ -789,39 +992,52 @@ void BuildHtfBias(void)
 //    one moment when every box happens to be ticked at once.
 bool EvaluateDirection(const int dir,SSetup &s)
   {
-   s.dir=0; s.quality=0.0; s.sizeFactor=0.0; s.rr=0.0;
+   s.dir=0; s.quality=0.0; s.sizeFactor=0.0; s.rr=0.0; s.poiGrade=0.0;
    s.zoneTop=0.0; s.zoneBottom=0.0; s.stop=0.0; s.target=0.0;
    s.model=""; s.confluence="";
 
    double px=g_view.bid;
    double buf=InpEntryZoneBuffer*g_view.avgRange;
 
-   //---- THE HARD CONDITION: price inside a live POI of this direction
-   double zt=0.0,zb=0.0;
+   //---- THE HARD CONDITION: price inside a live POI of this direction.
+   //
+   //     v5.00 took the first POI the loop happened to reach and stopped. That
+   //     is how a sprawling breaker block, whose stop sat six average ranges
+   //     away, kept winning over a tight breakaway gap two candles old. Now
+   //     every POI price is inside is scored on what it is worth PER UNIT OF
+   //     RISK, and the best one is the trade.
+   double zt=0.0,zb=0.0,poiGrade=0.0,bestScore=-1.0;
    string src="";
 
    if(InpEntryOnFVG && InpUseFVG)
       for(int z=0;z<ArraySize(g_fvgs);z++)
         {
-         if(!g_fvgs[z].alive || g_fvgs[z].filled) continue;
+         if(!g_fvgs[z].alive || g_fvgs[z].filledPct>=1.0) continue;
          if(g_fvgs[z].dir!=dir) continue;
          if(g_fvgs[z].shift>InpFvgMaxAgeBars) continue;
-         if(px<=g_fvgs[z].top+buf && px>=g_fvgs[z].bottom-buf)
-           { zt=g_fvgs[z].top; zb=g_fvgs[z].bottom; src="FVG"; break; }
+         if(px>g_fvgs[z].top+buf || px<g_fvgs[z].bottom-buf) continue;
+         double sc=PoiScore(g_fvgs[z].grade,px,g_fvgs[z].top,g_fvgs[z].bottom,dir);
+         if(sc<=bestScore) continue;
+         bestScore=sc; zt=g_fvgs[z].top; zb=g_fvgs[z].bottom;
+         poiGrade=g_fvgs[z].grade; src=FvgName(g_fvgs[z]);
+         if(!InpBestPoi) break;
         }
 
-   if(zt<=0.0 && InpEntryOnOB && InpUseOrderBlocks)
+   if(InpEntryOnOB && InpUseOrderBlocks && (InpBestPoi || zt<=0.0))
       for(int z=0;z<ArraySize(g_obs);z++)
         {
          if(!g_obs[z].alive) continue;
          if(g_obs[z].dir!=dir) continue;
          if(g_obs[z].shift>InpObMaxAgeBars) continue;
-         if(px<=g_obs[z].top+buf && px>=g_obs[z].bottom-buf)
-           {
-            zt=g_obs[z].top; zb=g_obs[z].bottom;
-            src=(g_obs[z].breaker ? "breaker block" : "order block");
-            break;
-           }
+         if(px>g_obs[z].top+buf || px<g_obs[z].bottom-buf) continue;
+         double og=MClamp(0.35+0.20*MClamp((g_obs[z].strength-1.0)/1.5,0.0,1.0)
+                          +(g_obs[z].breaker  ? 0.10 : 0.0)
+                          -(g_obs[z].mitigated? 0.10 : 0.0),0.05,1.0);
+         double sc=PoiScore(og,px,g_obs[z].top,g_obs[z].bottom,dir);
+         if(sc<=bestScore) continue;
+         bestScore=sc; zt=g_obs[z].top; zb=g_obs[z].bottom; poiGrade=og;
+         src=(g_obs[z].breaker ? "breaker block" : "order block");
+         if(!InpBestPoi) break;
         }
 
    if(zt<=0.0) return false;                 // nothing to trade — the only veto
@@ -855,13 +1071,19 @@ bool EvaluateDirection(const int dir,SSetup &s)
    double oteScore=(g_view.inOte    ? 1.0 : 0.0);
    double kzScore =(g_view.inKillzone ? 1.0 : 0.0);
 
+   // the POI itself is confluence. A breakaway gap with real displacement
+   // behind it deserves more size than a stale mitigated block, and that
+   // judgement belongs in the score rather than in a filter.
+   double gradeScore=MClamp(poiGrade,0.0,1.0);
+
    double wsum=InpWeightHtf+InpWeightStructure+InpWeightSweep+
-               InpWeightPD +InpWeightOte      +InpWeightKillzone;
+               InpWeightPD +InpWeightOte      +InpWeightKillzone+InpWeightPoiGrade;
    double q=1.0;
    if(wsum>0.0)
       q=(InpWeightHtf*htfScore + InpWeightStructure*structScore +
          InpWeightSweep*sweepScore + InpWeightPD*pdScore +
-         InpWeightOte*oteScore + InpWeightKillzone*kzScore)/wsum;
+         InpWeightOte*oteScore + InpWeightKillzone*kzScore +
+         InpWeightPoiGrade*gradeScore)/wsum;
    q=MClamp(q,0.0,1.0);
 
    if(q<InpQualityFloor) return false;       // off by default (floor = 0)
@@ -891,15 +1113,32 @@ bool EvaluateDirection(const int dir,SSetup &s)
    // Reward:risk is a TARGET RULE, not an entry filter. A nearby liquidity
    // pool is used only while it still pays at least InpTargetMinRR; below
    // that the EA reverts to its R target rather than refusing the setup.
+   //
+   // Two things draw price: resting liquidity, and unrebalanced price. An
+   // unfilled gap ahead of the trade — an exhaustion gap above all — is where
+   // the market is headed to fix itself, so it competes with the pool for the
+   // target. Whichever is nearer and still pays takes it.
    double rTarget=(InpScalpMode ? InpScalpTargetR : InpTpRMultiple)*risk;
-   double pool=(dir>0 ? g_view.nearestBuyside : g_view.nearestSellside);
-   bool poolValid=(dir>0 ? pool>px : (pool>0.0 && pool<px));
    tp=(dir>0 ? px+rTarget : px-rTarget);
-   if(poolValid)
+
+   double cand[2];
+   cand[0]=(dir>0 ? g_view.nearestBuyside : g_view.nearestSellside);
+   cand[1]=FvgDraw(dir,px);
+
+   double drawLvl=0.0,drawR=0.0;
+   for(int c=0;c<2;c++)
      {
-      double poolR=MathAbs(pool-px)/risk;
-      if(InpScalpMode){ if(poolR>=InpTargetMinRR && poolR<rTarget/risk) tp=pool; }
-      else            { if(poolR>=InpTargetMinRR)                      tp=pool; }
+      double lvl=cand[c];
+      if(lvl<=0.0) continue;
+      if(dir>0 ? lvl<=px : lvl>=px) continue;
+      double lvlR=MathAbs(lvl-px)/risk;
+      if(lvlR<InpTargetMinRR) continue;
+      if(drawLvl<=0.0 || lvlR<drawR){ drawLvl=lvl; drawR=lvlR; }
+     }
+   if(drawLvl>0.0)
+     {
+      if(InpScalpMode){ if(drawR<rTarget/risk) tp=drawLvl; }
+      else                                     tp=drawLvl;
      }
    double rr=MathAbs(tp-px)/risk;
    if(rr<InpTargetMinRR)                     // stretch the target, never skip
@@ -920,11 +1159,12 @@ bool EvaluateDirection(const int dir,SSetup &s)
    if(pdScore    >=0.5) tags+=(dir>0?"DISC ":"PREM ");
    if(g_view.inOte)     tags+="OTE ";
    if(g_view.inKillzone)tags+="KZ ";
+   if(gradeScore >=0.55)tags+="A+POI ";
    if(tags=="") tags="bare POI";
 
    s.dir=dir; s.zoneTop=zt; s.zoneBottom=zb;
    s.stop=sl; s.target=tp; s.rr=rr;
-   s.quality=q;
+   s.quality=q; s.poiGrade=poiGrade;
    s.sizeFactor=MClamp(InpMinSizeFactor+(1.0-InpMinSizeFactor)*q,0.05,1.0);
    s.confluence=tags;
    return true;
@@ -936,7 +1176,7 @@ double NearestPoiDistance(void)
    double px=g_view.bid,best=-1.0;
    for(int z=0;z<ArraySize(g_fvgs);z++)
      {
-      if(!g_fvgs[z].alive || g_fvgs[z].filled) continue;
+      if(!g_fvgs[z].alive || g_fvgs[z].filledPct>=1.0) continue;
       double d=(px>g_fvgs[z].top ? px-g_fvgs[z].top
                                  : (px<g_fvgs[z].bottom ? g_fvgs[z].bottom-px : 0.0));
       if(best<0.0 || d<best) best=d;
@@ -984,6 +1224,7 @@ void FindSetup(void)
    g_view.stopLevel=best.stop;  g_view.targetLevel=best.target;
    g_view.setupRR=best.rr;
    g_view.quality=best.quality; g_view.sizeFactor=best.sizeFactor;
+   g_view.poiGrade=best.poiGrade;
    g_view.confluence=best.confluence;
   }
 
@@ -997,8 +1238,9 @@ string MissingLeg(void)
       return "no live order block or fair value gap on the chart yet";
    if(g_view.poiDistance>=0.0)
       return StringFormat("price is not in a POI yet — nearest is %.2f x avg range away "
-                          "(%d blocks, %d gaps live)",
-                          g_view.poiDistance,g_view.obCount,g_view.fvgCount);
+                          "(%d blocks, %d gaps live: %d breakaway, %d inverted)",
+                          g_view.poiDistance,g_view.obCount,g_view.fvgCount,
+                          g_view.bagCount,g_view.invCount);
    return "waiting for price to trade into a POI";
   }
 
@@ -1009,14 +1251,46 @@ void RiskUpdate(void)
    MqlDateTime dt; TimeToStruct(TimeCurrent(),dt);
    int key=dt.year*1000+dt.day_of_year;
    double eq=AccountInfoDouble(ACCOUNT_EQUITY);
-   if(key!=g_dayKey){ g_dayKey=key; g_dayStartEquity=eq; g_breaker=false; }
+   if(key!=g_dayKey)
+     {
+      g_dayKey=key; g_dayStartEquity=eq; g_breaker=false;
+      dt.hour=0; dt.min=0; dt.sec=0;
+      g_dayStart=StructToTime(dt);
+     }
    if(eq>g_peakEquity) g_peakEquity=eq;
   }
+
+//--- closed losing trades of ours since midnight
+int DayLosingTrades(void)
+  {
+   if(g_dayStart<=0) return 0;
+   if(!HistorySelect(g_dayStart,TimeCurrent()+1)) return 0;
+   int losses=0,total=HistoryDealsTotal();
+   for(int i=0;i<total;i++)
+     {
+      ulong tk=HistoryDealGetTicket(i);
+      if(tk==0) continue;
+      if(HistoryDealGetInteger(tk,DEAL_MAGIC)!=InpMagic) continue;
+      if(HistoryDealGetInteger(tk,DEAL_ENTRY)!=DEAL_ENTRY_OUT) continue;
+      double net=HistoryDealGetDouble(tk,DEAL_PROFIT)
+                +HistoryDealGetDouble(tk,DEAL_SWAP)
+                +HistoryDealGetDouble(tk,DEAL_COMMISSION);
+      if(net<0.0) losses++;
+     }
+   return losses;
+  }
+
+//--- The daily loss limit is a percentage, which on a small account can be
+//    less than one minimum-lot stop. Latching the breaker on a single trade
+//    ends the session before the model has been given a chance to work, so
+//    the day limit also requires a run of losers. Max drawdown from peak is
+//    the hard rail and still latches on its own.
 bool CircuitBreaker(void)
   {
    if(g_breaker) return true;
    double eq=AccountInfoDouble(ACCOUNT_EQUITY);
-   if((g_dayStartEquity-eq)>=g_dayStartEquity*InpDailyLossPct/100.0) g_breaker=true;
+   if((g_dayStartEquity-eq)>=g_dayStartEquity*InpDailyLossPct/100.0 &&
+      DayLosingTrades()>=InpBreakerMinLosses)                        g_breaker=true;
    if((g_peakEquity-eq)>=g_peakEquity*InpMaxDDPct/100.0)             g_breaker=true;
    return g_breaker;
   }
@@ -1281,8 +1555,16 @@ void TryEnter(const SBasket &b,const bool isScale)
          double rMult=(InpScalpMode ? InpScalpTargetR : InpTpRMultiple);
          sl=NormalizeDouble(dir>0?entry-dist:entry+dist,digits);
          tp=NormalizeDouble(dir>0?entry+rMult*dist:entry-rMult*dist,digits);
-         LogEvent(StringFormat("stop tightened to fit account: %.5f -> %.5f (%.1fx closer than structure)",
-                               old,dist,old/MathMax(dist,1e-9)));
+         // this fires on every tick the account is too small for the structure;
+         // say it once per throttle window, or when the distance actually moves
+         if((TimeCurrent()-g_lastFitLog)>=InpDiagThrottleSec ||
+            MathAbs(dist-g_lastFitDist)>0.05*MathMax(g_lastFitDist,1e-9))
+           {
+            g_lastFitLog=TimeCurrent(); g_lastFitDist=dist;
+            LogEvent(StringFormat("stop tightened to fit account: %.5f -> %.5f "
+                                  "(%.1fx closer than structure)",
+                                  old,dist,old/MathMax(dist,1e-9)));
+           }
         }
       else
         {
@@ -1341,8 +1623,9 @@ void TryEnter(const SBasket &b,const bool isScale)
    g_entries++;
    LogTrade(dir>0?"BUY":"SELL",res.price,sl,tp,g_view.setupRR,lots,realRisk,
             b.count+1,
-            StringFormat("%s | quality %.2f (%s) | size x%.2f | htf %.2f | pd %.0f%% | %s%s",
-                         g_view.setup,g_view.quality,g_view.confluence,factor,
+            StringFormat("%s | quality %.2f (%s) | POI grade %.2f | size x%.2f | htf %.2f | "
+                         "pd %.0f%% | %s%s",
+                         g_view.setup,g_view.quality,g_view.confluence,g_view.poiGrade,factor,
                          g_view.htfBias,g_view.pdPosition*100.0,
                          g_view.killzoneName,(isScale?" | SCALE-IN":"")));
    g_block="—";
@@ -1387,9 +1670,13 @@ void DrawZones(void)
    drawn=0;
    for(int z=0;z<ArraySize(g_fvgs) && drawn<10;z++)
      {
-      if(!g_fvgs[z].alive || g_fvgs[z].filled || g_fvgs[z].shift>=g_bars) continue;
+      if(!g_fvgs[z].alive || g_fvgs[z].filledPct>=1.0 || g_fvgs[z].shift>=g_bars) continue;
+      color c=(g_fvgs[z].dir>0 ? clrSteelBlue : clrIndianRed);
+      if(g_fvgs[z].kind==GAP_BREAKAWAY)  c=(g_fvgs[z].dir>0 ? clrDodgerBlue : clrCrimson);
+      if(g_fvgs[z].kind==GAP_EXHAUSTION) c=clrDimGray;
+      if(g_fvgs[z].inverted)             c=(g_fvgs[z].dir>0 ? clrMediumSpringGreen : clrOrange);
       DrawBox(StringFormat("SMC_FVG_%d",z),g_t[g_fvgs[z].shift],g_fvgs[z].top,fwd,g_fvgs[z].bottom,
-              (g_fvgs[z].dir>0?clrSteelBlue:clrIndianRed),false);
+              c,false);
       drawn++;
      }
   }
@@ -1429,8 +1716,15 @@ void SelfTest(void)
    LogEvent(StringFormat("symbol %s  execution timeframe M5  bars loaded %d  (NO INDICATORS)",
                          _Symbol,g_bars));
    LogEvent(StringFormat("average range %.5f  spread %.0f pts",g_view.avgRange,g_view.spreadPts));
-   LogEvent(StringFormat("structure dir %d | order blocks %d | FVGs %d | liquidity pools %d",
-                         g_view.structDir,g_view.obCount,g_view.fvgCount,g_view.liqCount));
+   LogEvent(StringFormat("structure dir %d | order blocks %d | FVGs %d (%d breakaway, %d inverted) "
+                         "| liquidity pools %d",
+                         g_view.structDir,g_view.obCount,g_view.fvgCount,
+                         g_view.bagCount,g_view.invCount,g_view.liqCount));
+   LogEvent(StringFormat("gap model: graded breakaway/measuring/exhaustion, partial fill tracked, "
+                         "inversion %s, gaps as targets %s, best-POI selection %s",
+                         (InpUseInversionFvg?"on":"off"),
+                         (InpFvgTargetPull  ?"on":"off"),
+                         (InpBestPoi        ?"on":"off")));
    LogEvent(StringFormat("HTF bias %.2f (scored, never required) | killzone %s | range position %.0f%%",
                          g_view.htfBias,g_view.killzoneName,g_view.pdPosition*100.0));
    LogEvent(StringFormat("gating: ONE hard condition — price inside a live FVG/order block. "
@@ -1478,20 +1772,21 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.00  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.10  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"
       "structure     dir %+d   %s\n"
       "liquidity     %s\n"
       "order blocks  %d      FVGs %d      pools %d\n"
+      "gaps          %d breakaway   %d inverted\n"
       "dealing range %.5f - %.5f\n"
       "position      %.0f%% (%s%s)\n"
       "killzone      %s\n"
       "nearest POI   %.2f x avg range away\n"
       "──────────────────────────────────────────\n"
       "SETUP   %s\n"
-      "quality %.2f  [%s]  ->  size x%.2f\n"
+      "quality %.2f  [%s]  ->  size x%.2f   POI grade %.2f\n"
       "zone    %.5f - %.5f\n"
       "sl %.5f  tp %.5f  RR %.2f\n"
       "──────────────────────────────────────────\n"
@@ -1504,6 +1799,7 @@ void Panel(const SBasket &b)
       g_view.structDir,mss,
       sweep,
       g_view.obCount,g_view.fvgCount,g_view.liqCount,
+      g_view.bagCount,g_view.invCount,
       g_view.rangeLow,g_view.rangeHigh,
       g_view.pdPosition*100.0,
       (g_view.inDiscount?"discount":"premium"),(g_view.inOte?", OTE":""),
@@ -1511,6 +1807,7 @@ void Panel(const SBasket &b)
       g_view.poiDistance,
       g_view.setup,
       g_view.quality,(g_view.confluence==""?"-":g_view.confluence),g_view.sizeFactor,
+      g_view.poiGrade,
       g_view.zoneBottom,g_view.zoneTop,
       g_view.stopLevel,g_view.targetLevel,g_view.setupRR,
       b.count,b.volume,b.avgEntry,

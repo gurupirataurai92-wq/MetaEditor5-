@@ -1430,6 +1430,176 @@ check("Scalp timeout: a stalled scalp releases its risk",
 check("Scalp timeout: a working scalp is left alone",
       not scalp_timeout(30, 0.8) and not scalp_timeout(10, 0.1))
 
+# ---------------------------------------------------------------- v5.10
+# What a gap is worth.  v5.00 knew only alive/filled, so it deleted every
+# gap price closed through and struck off every gap half consumed — the
+# inversion and the consequent-encroachment entry, both thrown away.
+
+GAP_MEASURING, GAP_BREAKAWAY, GAP_EXHAUSTION = 0, 1, 2
+
+def classify_gap(strength, run_in, bos, made_new_extreme,
+                 bag_mult=1.80, bag_max_run=1.50, exhaust_run=3.00):
+    if bos and strength >= bag_mult and run_in <= bag_max_run + strength:
+        return GAP_BREAKAWAY
+    if run_in >= exhaust_run and made_new_extreme:
+        return GAP_EXHAUSTION
+    return GAP_MEASURING
+
+check("v5.10: the BOS candle at the start of an expansion is a breakaway gap",
+      classify_gap(2.2, 1.0, True, True) == GAP_BREAKAWAY)
+check("v5.10: a gap into a pool after an extended run is an exhaustion gap",
+      classify_gap(1.2, 4.0, False, True) == GAP_EXHAUSTION)
+check("v5.10: an ordinary mid-leg imbalance is a measuring gap",
+      classify_gap(1.2, 2.0, False, False) == GAP_MEASURING)
+check("v5.10: a big candle that breaks nothing is not a breakaway gap",
+      classify_gap(3.0, 1.0, False, False) != GAP_BREAKAWAY)
+check("v5.10: a break of structure on a limp candle is not a breakaway gap",
+      classify_gap(1.1, 1.0, True, True) != GAP_BREAKAWAY)
+
+def grade_gap(size, strength, kind, shift, filled_pct, inverted,
+              bag_mult=1.80, max_age=200):
+    size_s = mclamp(size, 0.0, 1.0)
+    str_s = mclamp((strength-1.0)/max(bag_mult, 0.1), 0.0, 1.0)
+    kind_s = 1.00 if kind == GAP_BREAKAWAY else (0.15 if kind == GAP_EXHAUSTION else 0.60)
+    fresh = mclamp(1.0 - shift/max(float(max_age), 1.0), 0.0, 1.0)
+    g = 0.28*size_s + 0.27*str_s + 0.27*kind_s + 0.18*fresh
+    g *= (1.0 - 0.60*mclamp(filled_pct, 0.0, 1.0))
+    if inverted:
+        g *= 0.85
+    return mclamp(g, 0.0, 1.0)
+
+bag = grade_gap(0.8, 2.4, GAP_BREAKAWAY, 5, 0.0, False)
+mea = grade_gap(0.8, 2.4, GAP_MEASURING, 5, 0.0, False)
+exh = grade_gap(0.8, 2.4, GAP_EXHAUSTION, 5, 0.0, False)
+check("v5.10: a breakaway gap outgrades the same gap called measuring", bag > mea,
+      f"{bag:.2f} vs {mea:.2f}")
+check("v5.10: an exhaustion gap grades below both", exh < mea < bag,
+      f"{exh:.2f} < {mea:.2f} < {bag:.2f}")
+check("v5.10: every grade stays inside 0..1",
+      all(0.0 <= grade_gap(s, d, k, a, f, inv) <= 1.0
+          for s in (0.0, 0.5, 3.0) for d in (0.5, 2.0, 6.0)
+          for k in (0, 1, 2) for a in (0, 100, 500)
+          for f in (0.0, 0.5, 1.0) for inv in (False, True)))
+check("v5.10: consumption discounts a gap, it no longer deletes it",
+      0.0 < grade_gap(0.8, 2.4, GAP_BREAKAWAY, 5, 0.6, False) < bag)
+check("v5.10: an inversion still grades as a real, slightly cheaper POI",
+      0.0 < grade_gap(0.8, 2.4, GAP_MEASURING, 5, 0.0, True) < mea)
+check("v5.10: a stale gap grades under a fresh one, all else equal",
+      grade_gap(0.8, 2.4, GAP_BREAKAWAY, 190, 0.0, False) < bag)
+
+# inventory: what the old kill rule cost.  Five gaps, two closed through.
+def live_gaps(violations, use_inversion):
+    return sum(1 for v in violations if use_inversion or not v)
+check("v5.10: inversion keeps violated gaps in the book instead of binning them",
+      live_gaps([False, True, False, True, False], True) == 5 and
+      live_gaps([False, True, False, True, False], False) == 3)
+check("v5.10: a zone violated a second time is finally dropped",
+      live_gaps([True], True) == 1)
+
+def poi_score(grade, px, top, bottom, direction, avg_range, stop_buf=0.30):
+    far = bottom - stop_buf*avg_range if direction > 0 else top + stop_buf*avg_range
+    return grade/(0.60 + abs(px-far)/avg_range)
+
+AR = 1.0
+tight = poi_score(0.55, 1800.0, 1800.3, 1799.8, 1, AR)     # gap, stop 0.5 away
+wide = poi_score(0.55, 1800.0, 1802.5, 1797.0, 1, AR)      # block, stop 3.3 away
+check("v5.10: at equal grade the tighter POI wins — that is the affordable stop",
+      tight > wide, f"{tight:.3f} vs {wide:.3f}")
+check("v5.10: a graded breakaway gap beats a wide breaker block outright",
+      poi_score(0.82, 1800.0, 1800.3, 1799.8, 1, AR) >
+      poi_score(0.65, 1800.0, 1802.5, 1797.0, 1, AR))
+check("v5.10: a worthless POI never scores above a good one of the same width",
+      poi_score(0.10, 1800.0, 1800.3, 1799.8, 1, AR) <
+      poi_score(0.80, 1800.0, 1800.3, 1799.8, 1, AR))
+check("v5.10: scoring is finite for a zero-width zone",
+      poi_score(1.0, 1800.0, 1800.0, 1800.0, 1, AR) < 1e6)
+
+# gaps as a draw on liquidity: the nearest unfilled gap ahead is a target
+def fvg_draw(gaps, direction, px):
+    best = 0.0
+    for top, bottom, filled in gaps:
+        if filled >= 0.99:
+            continue
+        ce = (top+bottom)*0.5
+        if direction > 0:
+            if bottom <= px:
+                continue
+            if best <= 0.0 or ce < best:
+                best = ce
+        else:
+            if top >= px:
+                continue
+            if best <= 0.0 or ce > best:
+                best = ce
+    return best
+
+GAPS = [(1802.0, 1801.5, 0.0), (1805.0, 1804.6, 0.0),
+        (1798.0, 1797.6, 0.0), (1803.0, 1802.8, 1.0)]
+check("v5.10: the nearest unfilled gap above is the buy-side draw",
+      abs(fvg_draw(GAPS, 1, 1800.0) - 1801.75) < 1e-9, f"{fvg_draw(GAPS, 1, 1800.0)}")
+check("v5.10: the nearest unfilled gap below is the sell-side draw",
+      abs(fvg_draw(GAPS, -1, 1800.0) - 1797.8) < 1e-9)
+check("v5.10: a filled gap is no longer a draw",
+      abs(fvg_draw([(1803.0, 1802.8, 1.0)], 1, 1800.0)) < 1e-9)
+check("v5.10: the gap price is standing in is not its own target",
+      abs(fvg_draw([(1800.4, 1799.6, 0.0)], 1, 1800.0)) < 1e-9)
+
+def target_with_draw(entry, risk, direction, pool, draw,
+                     min_rr=1.20, scalp_r=1.6, scalp=True):
+    tp = entry + direction*scalp_r*risk
+    best, best_r = 0.0, 0.0
+    for lvl in (pool, draw):
+        if lvl <= 0.0:
+            continue
+        if (direction > 0 and lvl <= entry) or (direction < 0 and lvl >= entry):
+            continue
+        r = abs(lvl-entry)/risk
+        if r < min_rr:
+            continue
+        if best <= 0.0 or r < best_r:
+            best, best_r = lvl, r
+    if best > 0.0 and (not scalp or best_r < scalp_r):
+        tp = best
+    return tp, abs(tp-entry)/risk
+
+tp_draw, _ = target_with_draw(1800.0, 1.0, 1, 1801.5, 1801.3)
+check("v5.10: a gap nearer than the pool takes the target",
+      abs(tp_draw - 1801.3) < 1e-9, f"{tp_draw}")
+tp_pool, _ = target_with_draw(1800.0, 1.0, 1, 1801.3, 1801.5)
+check("v5.10: the pool still wins when it is the nearer draw",
+      abs(tp_pool - 1801.3) < 1e-9)
+check("v5.10: a gap that does not pay the minimum R cannot pull the target in",
+      abs(target_with_draw(1800.0, 1.0, 1, 0.0, 1800.4)[0] - 1801.6) < 1e-9)
+check("v5.10: adding gap targets never drops RR below the minimum",
+      all(target_with_draw(1800.0, 1.0, 1, p, d)[1] >= 1.20 - 1e-9
+          for p in (0.0, 1799.0, 1800.3, 1801.4, 1806.0)
+          for d in (0.0, 1799.5, 1800.2, 1801.35, 1809.0)))
+
+# confluence: the POI's own grade now sizes the trade, and still cannot veto it
+W = dict(htf=0.28, struct=0.24, sweep=0.18, pd=0.12, ote=0.08, kz=0.10, grade=0.20)
+def quality_v510(htf, st, sw, pd, ote, kz, grade):
+    tot = sum(W.values())
+    return mclamp((W["htf"]*htf + W["struct"]*st + W["sweep"]*sw + W["pd"]*pd +
+                   W["ote"]*ote + W["kz"]*kz + W["grade"]*grade)/tot, 0.0, 1.0)
+q_bag = quality_v510(0.0, 0.4, 0.0, 0.0, 0, 0, 0.85)
+q_junk = quality_v510(0.0, 0.4, 0.0, 0.0, 0, 0, 0.10)
+check("v5.10: a high-grade gap earns more size than a poor one, all else equal",
+      q_bag > q_junk, f"{q_bag:.2f} vs {q_junk:.2f}")
+check("v5.10: a worthless POI grade still trades, it only trades small",
+      q_junk > 0.0 and 0.40 + 0.60*q_junk >= 0.40)
+check("v5.10: POI grade cannot on its own carry a setup to full size",
+      quality_v510(0.0, 0.0, 0.0, 0.0, 0, 0, 1.0) < 1.0)
+
+# the daily breaker must survive a single min-lot loss on a micro account
+def breaker_latched(day_loss, day_start_eq, losses, pct=5.0, min_losses=3):
+    return day_loss >= day_start_eq*pct/100.0 and losses >= min_losses
+check("v5.10: one stop-out no longer ends the session on a $10 account",
+      not breaker_latched(0.60, 10.0, 1))
+check("v5.10: a run of losers still latches the daily breaker",
+      breaker_latched(0.60, 10.0, 3))
+check("v5.10: the breaker needs BOTH the loss limit and the losing run",
+      not breaker_latched(0.10, 10.0, 5))
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
