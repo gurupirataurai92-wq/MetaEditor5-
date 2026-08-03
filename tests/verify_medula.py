@@ -1783,6 +1783,71 @@ check("v5.13: on a normal account the 4% cap is unchanged in spirit — "
       "one trade at 1% still stacks four times",
       not basket_blocks(0.03*1000, 0.01*1000, 1000.0))
 
+# ---------------------------------------------------------------- v5.14
+# The mandate: every POI is executed. Grade sets the size, never the
+# permission. Only the physical rails may refuse.
+
+def quality_floor_eff(take_every, floor):   return 0.0 if take_every else floor
+def grade_floor_eff(take_every, floor):     return 0.0 if take_every else floor
+def skip_exhaust_eff(take_every, skip):     return False if take_every else skip
+
+check("v5.14: the mandate forces the quality floor to zero",
+      quality_floor_eff(True, 0.55) == 0.0)
+check("v5.14: the mandate forces the gap grade floor to zero",
+      grade_floor_eff(True, 0.40) == 0.0)
+check("v5.14: the mandate trades exhaustion gaps too, at their low grade",
+      skip_exhaust_eff(True, True) is False)
+check("v5.14: turning the mandate off restores every floor deliberately",
+      quality_floor_eff(False, 0.55) == 0.55 and
+      grade_floor_eff(False, 0.40) == 0.40 and
+      skip_exhaust_eff(False, True) is True)
+
+def refused(quality, grade, hour, in_killzone, htf_bias,
+            real_risk, equity, free_margin_ok, breaker,
+            take_every=True, trade_pct=20.0):
+    """The complete set of refusals under the mandate."""
+    if not take_every and quality < 0.55:
+        return "confidence"
+    if breaker:
+        return "circuit breaker"
+    if real_risk > equity*trade_pct/100.0*1.005 + 1e-8:
+        return "risk ceiling"
+    if not free_margin_ok:
+        return "margin"
+    return None
+
+EQ = 10.0
+check("v5.14: no hour of the day can refuse a trade",
+      all(refused(0.05, 0.05, h, False, -1.0, 0.50, EQ, True, False) is None
+          for h in range(24)))
+check("v5.14: being outside every killzone cannot refuse a trade",
+      refused(0.05, 0.05, 3, False, -1.0, 0.50, EQ, True, False) is None)
+check("v5.14: a fully hostile HTF bias cannot refuse a trade",
+      refused(0.05, 0.05, 12, True, -1.0, 0.50, EQ, True, False) is None)
+check("v5.14: the lowest possible quality and grade still trade",
+      refused(0.00, 0.00, 12, True, 0.0, 0.50, EQ, True, False) is None)
+check("v5.14: the risk ceiling still refuses",
+      refused(0.90, 0.90, 12, True, 1.0, 5.00, EQ, True, False) == "risk ceiling")
+check("v5.14: the circuit breaker still refuses",
+      refused(0.90, 0.90, 12, True, 1.0, 0.50, EQ, True, True) == "circuit breaker")
+check("v5.14: insufficient margin still refuses",
+      refused(0.90, 0.90, 12, True, 1.0, 0.50, EQ, False, False) == "margin")
+check("v5.14: exactly four things can refuse a trade under the mandate",
+      len({refused(0.9, 0.9, 12, True, 1.0, 5.0, EQ, True, False),
+           refused(0.9, 0.9, 12, True, 1.0, 0.5, EQ, True, True),
+           refused(0.9, 0.9, 12, True, 1.0, 0.5, EQ, False, False),
+           refused(0.9, 0.9, 12, True, 1.0, 0.5, EQ, True, False)}) == 4)
+
+# size still tracks grade — executing everything is not sizing everything alike
+def size_factor(quality, min_factor=0.40):
+    return mclamp(min_factor + (1.0-min_factor)*quality, 0.05, 1.0)
+check("v5.14: a low-grade setup executes at the minimum size, not full size",
+      abs(size_factor(0.0) - 0.40) < 1e-9)
+check("v5.14: a high-grade setup still earns the full allowance",
+      abs(size_factor(1.0) - 1.00) < 1e-9)
+check("v5.14: executing everything never means sizing everything the same",
+      size_factor(0.85) > size_factor(0.15))
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

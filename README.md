@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.13, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.14, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -406,3 +406,46 @@ both rails on attach.
 The block message now names the numbers (`basket risk 1.80 + 1.50 over the 20% basket cap`)
 instead of the bare `basket risk cap reached`, so the journal says *which* rail refused and by
 how much.
+
+
+### v5.14 — take every POI
+
+One switch, `InpTakeEveryPOI` (default on), states the mandate: **every live fair value gap,
+breakaway gap and order block is executed — small or large, high grade or low.** Grade decides
+the *size*, never the permission.
+
+Under the mandate, exactly **four** things can refuse a trade:
+
+| Rail | Why it is allowed to refuse |
+|---|---|
+| Per-trade risk ceiling | solvency |
+| Basket cap | solvency |
+| Free margin | the broker will reject the order |
+| Circuit breaker | the day/drawdown limit has been hit |
+
+Nothing else. **No hour of the day, no session, no killzone, no HTF bias, no confidence level
+and no grade floor can stand this EA down.** Killzones were already scoring-only — London, New
+York and London Close raise the size a setup earns and have never been able to veto one — and
+the self-test now prints that in plain language so it can be checked rather than assumed.
+
+Every floor that could refuse on grounds of confidence rather than solvency is routed through
+an `...Eff()` accessor and forced to zero while the mandate is on: `InpQualityFloor`,
+`InpFvgGradeFloor`, `InpFreshGapMinGrade`, and the exhaustion-gap skip. They remain as inputs
+so the behaviour can be restored deliberately with `InpTakeEveryPOI=false`, but no code path
+quietly re-introduces a confidence gate.
+
+Defaults opened up to match the mandate:
+
+| Input | Was | Now |
+|---|---|---|
+| `InpEntrySpacingSec` | 15 | **0** |
+| `InpFreshGapMaxAge` | 3 | **5** |
+| `InpFreshGapMaxRun` | 1.25 | **2.50** |
+| `InpFreshGapSkipExh` | true | **false** — exhaustion gaps trade too, at their low grade |
+| `InpMaxBasketTrades` | 4 | **6** |
+| `InpScaleMinSpacing` | 0.75 | **0.25** |
+
+Executing everything is **not** sizing everything alike. A bare, low-grade POI still enters at
+`InpMinSizeFactor` (40%) of planned risk while a full breakaway-gap-plus-sweep-plus-MSS setup
+earns 100%. That is the whole design: the edge is in taking every properly-sized setup, not in
+waiting for certainty.

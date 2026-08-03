@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.13 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.14 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.13"
+#property version   "5.14"
 
 //============================== INPUTS ==============================
 
@@ -200,9 +200,9 @@ input bool   InpBestPoi         = true;    // Enter the best-graded POI, not the
 //    gaps as much as to breakaway gaps.
 input group "Fresh Gap Continuation (§3b)"
 input bool   InpTradeFreshGaps  = true;    // Trade the candle after a gap prints (no retrace needed)
-input int    InpFreshGapMaxAge  = 3;       // A gap counts as fresh for this many bars
-input double InpFreshGapMaxRun  = 1.25;    // Stop chasing once price has run this far past it
-input bool   InpFreshGapSkipExh = true;    // Never chase an exhaustion gap
+input int    InpFreshGapMaxAge  = 5;       // A gap counts as fresh for this many bars
+input double InpFreshGapMaxRun  = 2.50;    // Stop chasing once price has run this far past it
+input bool   InpFreshGapSkipExh = false;   // Skip exhaustion gaps (off: trade them too, small)
 input double InpFreshGapMinGrade= 0.00;    // Minimum gap grade to chase (0 = any gap)
 
 input group "Liquidity (§4)"
@@ -259,11 +259,21 @@ input double InpPoiStopBuffer   = 0.30;    // Stop beyond the POI by this x aver
 input double InpScalpTargetR    = 1.6;     // Scalp target in R
 input int    InpMaxHoldBars     = 24;      // Close a scalp after this many M5 bars
 
+//--- TAKE EVERY POI.  The single switch that states the mandate: every live
+//    fair value gap, breakaway gap and order block is executed, small or
+//    large, high grade or low. Grade decides the SIZE, never the permission.
+//    With this on, the ONLY things that can refuse a trade are the four
+//    physical rails: the per-trade risk ceiling, the basket cap, free margin
+//    and the circuit breaker. No hour of the day, no session, no confidence
+//    level and no grade floor can stand the EA down.
+input group "Execution Mandate"
+input bool   InpTakeEveryPOI    = true;    // Trade every POI; only risk rails may refuse
+
 input group "Entries"
 input bool   InpEntryOnFVG      = true;    // Enter on FVG return
 input bool   InpEntryOnOB       = true;    // Enter on order-block return
 input double InpEntryZoneBuffer = 0.25;    // Zone widened by this share of avg range
-input int    InpEntrySpacingSec = 15;      // Min seconds between entries
+input int    InpEntrySpacingSec = 0;       // Min seconds between entries
 input int    InpMaxSetupAgeBars = 40;      // Structure shift counts for this many bars
 
 input group "Risk"
@@ -281,7 +291,7 @@ input bool   InpAutoFitStop     = true;    // Tighten stop so min lot fits the c
 
 input group "Basket Manager (§9)"
 input bool   InpUseBasket       = true;    // Manage positions as one basket
-input int    InpMaxBasketTrades = 4;       // Max positions in a basket
+input int    InpMaxBasketTrades = 6;       // Max positions in a basket
 input double InpBasketTargetR   = 1.6;     // Close the basket at this R
 input double InpBasketStopR     = 1.5;     // Close the basket at this loss in R
 input double InpMaxBasketRiskPct= 4.0;     // Max combined basket risk (% equity)
@@ -292,7 +302,7 @@ input double InpBasketPartialR  = 0.6;     // Partial trigger (R)
 input double InpBasketPartialPct= 50.0;    // Percent of volume closed
 input bool   InpAllowScaleIn    = true;    // Add on a fresh confirmation
 input double InpScaleDecay      = 0.6;     // Lot decay per add
-input double InpScaleMinSpacing = 0.75;    // Min spacing between adds (x avg range)
+input double InpScaleMinSpacing = 0.25;    // Min spacing between adds (x avg range)
 input bool   InpCloseOnFlip     = true;    // Close basket when HTF bias flips
 
 //========================= TYPES & HELPERS ==========================
@@ -301,6 +311,15 @@ enum ENUM_DEC { DEC_WAIT=0, DEC_BUY, DEC_SELL, DEC_HOLD, DEC_EXIT };
 
 double MClamp(const double x,const double lo,const double hi){ return MathMin(MathMax(x,lo),hi); }
 int    MSign(const double x){ if(x>0.0) return 1; if(x<0.0) return -1; return 0; }
+
+//--- THE MANDATE, applied.  Every floor that could refuse a setup on grounds
+//    of confidence rather than solvency is forced to zero when InpTakeEveryPOI
+//    is on. They stay as inputs so the behaviour can be restored deliberately,
+//    but nothing in the model quietly re-introduces a confidence gate.
+double QualityFloorEff(void)   { return (InpTakeEveryPOI ? 0.0   : InpQualityFloor);    }
+double FvgGradeFloorEff(void)  { return (InpTakeEveryPOI ? 0.0   : InpFvgGradeFloor);   }
+double FreshGradeFloorEff(void){ return (InpTakeEveryPOI ? 0.0   : InpFreshGapMinGrade);}
+bool   SkipExhaustEff(void)    { return (InpTakeEveryPOI ? false : InpFreshGapSkipExh); }
 
 //--- an order block: the last opposing candle before displacement (§2)
 struct SOB
@@ -840,7 +859,7 @@ void BuildFVGs(void)
 
       g_fvgs[z].filled=(g_fvgs[z].filledPct*100.0>=InpFvgFillPct);
       g_fvgs[z].grade =GradeGap(z);
-      if(g_fvgs[z].grade<InpFvgGradeFloor) g_fvgs[z].alive=false;
+      if(g_fvgs[z].grade<FvgGradeFloorEff()) g_fvgs[z].alive=false;
      }
 
    g_view.fvgCount=0; g_view.bagCount=0; g_view.invCount=0; g_view.freshCount=0;
@@ -1164,8 +1183,8 @@ bool EvaluateDirection(const int dir,SSetup &s)
          if(!g_fvgs[z].alive || g_fvgs[z].filledPct>=1.0) continue;
          if(g_fvgs[z].dir!=dir) continue;
          if(g_fvgs[z].shift>InpFreshGapMaxAge) continue;
-         if(g_fvgs[z].grade<InpFreshGapMinGrade) continue;
-         if(InpFreshGapSkipExh && g_fvgs[z].kind==GAP_EXHAUSTION) continue;
+         if(g_fvgs[z].grade<FreshGradeFloorEff()) continue;
+         if(SkipExhaustEff() && g_fvgs[z].kind==GAP_EXHAUSTION) continue;
 
          // how far past the gap price has already travelled; <=0 means price
          // is still in the zone, which the loop above has already handled
@@ -1226,7 +1245,7 @@ bool EvaluateDirection(const int dir,SSetup &s)
          InpWeightPoiGrade*gradeScore)/wsum;
    q=MClamp(q,0.0,1.0);
 
-   if(q<InpQualityFloor) return false;       // off by default (floor = 0)
+   if(q<QualityFloorEff()) return false;     // off by default (floor = 0)
 
    //---- stop placement decides whether this is a scalp or a swing
    double sl,tp;
@@ -1892,6 +1911,23 @@ void SelfTest(void)
                          (InpUseInversionFvg?"on":"off"),
                          (InpFvgTargetPull  ?"on":"off"),
                          (InpBestPoi        ?"on":"off")));
+   if(InpTakeEveryPOI)
+     {
+      LogEvent("MANDATE: TAKE EVERY POI. Every live FVG, breakaway gap and order block is "
+               "executed — small or large, high grade or low. Grade sets the SIZE, never "
+               "the permission.");
+      LogEvent("The ONLY things that can refuse a trade: the per-trade risk ceiling, the "
+               "basket cap, free margin, and the circuit breaker. No hour of the day, no "
+               "session, no killzone, no HTF bias, no confidence level and no grade floor "
+               "can stand this EA down.");
+      if(InpQualityFloor>0.0 || InpFvgGradeFloor>0.0 || InpFreshGapMinGrade>0.0 ||
+         InpFreshGapSkipExh)
+         LogEvent("(quality floor, grade floors and the exhaustion skip are all overridden "
+                  "to zero/off by the mandate — set InpTakeEveryPOI=false to honour them)");
+     }
+   LogEvent(StringFormat("killzones: SCORING ONLY — London/NY/London-close raise the size a "
+                         "setup earns (weight %.2f) and can never refuse one. Outside every "
+                         "session the EA still trades.",InpWeightKillzone));
    LogEvent(StringFormat("risk rails: %.0f%% ceiling on one trade, %.0f%% on the whole basket "
                          "(a basket cap below the per-trade ceiling would refuse trades the "
                          "ceiling had just approved, so the larger of the two governs)",
@@ -1955,7 +1991,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.13  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.14  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"
