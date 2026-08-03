@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Sakura Auto Imports — demo catalogue data
+   Lymond Services — demo catalogue data
    --------------------------------------------------------------------------
    This is sample content for the front-end. Swap this file for a real API
    response (same field names) when the site is wired to a back office.
@@ -8,12 +8,12 @@
 
 window.SITE = {
   company: {
-    name: 'Sakura Auto Imports',
+    name: 'Lymond Services',
     tagline: 'Japanese imports & spare parts',
     phone: '+255 754 000 111',
     whatsapp: '+255 754 000 111',
-    email: 'sales@sakura-autoimports.example',
-    parts_email: 'parts@sakura-autoimports.example',
+    email: 'sales@lymondservices.example',
+    parts_email: 'parts@lymondservices.example',
     address: 'Plot 44, Nyerere Road, Dar es Salaam, Tanzania',
     hours: 'Mon–Fri 08:00–18:00 · Sat 09:00–15:00',
     currency: 'USD'

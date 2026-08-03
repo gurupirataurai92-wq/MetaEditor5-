@@ -1,4 +1,4 @@
-# Sakura Auto Imports — company website
+# Lymond Services — company website
 
 A static marketing and catalogue site for a business that imports Japanese vehicles (sourced
 through exporters and auction houses, BE FORWARD among them) and sells spare parts of every

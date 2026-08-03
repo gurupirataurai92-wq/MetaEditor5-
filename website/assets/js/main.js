@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Sakura Auto Imports — site behaviour
+   Lymond Services — site behaviour
    Vanilla JS, no dependencies. Every block guards on the elements it needs,
    so this one file can be loaded by every page.
    ========================================================================== */
