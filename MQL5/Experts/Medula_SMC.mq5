@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.12 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.13 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.12"
+#property version   "5.13"
 
 //============================== INPUTS ==============================
 
@@ -1742,8 +1742,26 @@ void TryEnter(const SBasket &b,const bool isScale)
                          realRisk,100.0*realRisk/MathMax(eq,0.01),InpMaxRiskPctHard));
       return;
      }
-   if(InpUseBasket && BasketRiskUsed()+realRisk>eq*InpMaxBasketRiskPct/100.0)
-     { Block("basket risk cap reached"); return; }
+   // THE CAP THAT WAS REALLY IN CHARGE.
+   //
+   // The basket cap was 4% while the per-trade ceiling was 20%, and it was
+   // tested against the FIRST trade with nothing else open. On a micro
+   // account minimum lot risks 12-20% of equity no matter how tight the stop
+   // is, so every setup the 20% ceiling had just approved was then refused by
+   // a 4% cap. The ceiling was dead code; 4% was the real limit, and it
+   // refused trades that were never oversized in the first place.
+   //
+   // A basket cap is a limit on STACKING. It cannot be tighter than the
+   // ceiling that already approved the trade sitting under it.
+   double basketUsed=BasketRiskUsed();
+   double basketCap =eq*MathMax(InpMaxBasketRiskPct,InpMaxRiskPctHard)/100.0;
+   if(InpUseBasket && basketUsed+realRisk>basketCap*1.005+1e-8)
+     {
+      Block(StringFormat("basket risk %.2f + %.2f over the %.0f%% basket cap",
+                         basketUsed,realRisk,
+                         MathMax(InpMaxBasketRiskPct,InpMaxRiskPctHard)));
+      return;
+     }
    if(!MarginOK(dir,lots)){ Block("insufficient free margin"); return; }
 
    MqlTradeRequest req; MqlTradeResult res; ZeroMemory(req); ZeroMemory(res);
@@ -1874,6 +1892,10 @@ void SelfTest(void)
                          (InpUseInversionFvg?"on":"off"),
                          (InpFvgTargetPull  ?"on":"off"),
                          (InpBestPoi        ?"on":"off")));
+   LogEvent(StringFormat("risk rails: %.0f%% ceiling on one trade, %.0f%% on the whole basket "
+                         "(a basket cap below the per-trade ceiling would refuse trades the "
+                         "ceiling had just approved, so the larger of the two governs)",
+                         InpMaxRiskPctHard,MathMax(InpMaxBasketRiskPct,InpMaxRiskPctHard)));
    LogEvent(StringFormat("smallest gap the EA will see: %.5f  (%.2f x avg range, or %.1f spreads "
                          "— whichever is larger). Below that a gap cannot pay its own crossing.",
                          MathMax(InpFvgMinPct*g_view.avgRange,
@@ -1933,7 +1955,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.12  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.13  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"

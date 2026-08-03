@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.12, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.13, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -377,3 +377,32 @@ against a measuring gap's 0.60. But a scalper is supposed to see them.
 
 Both books now fill **newest-first**, `InpMaxFVGs` doubles to 40, and `InpEntrySpacingSec`
 drops to 15.
+
+
+### v5.13 — the cap that was really in charge
+
+`InpMaxRiskPctHard` said one trade may risk **20%** of equity. `InpMaxBasketRiskPct` said the
+basket may risk **4%**. And the basket check ran against the *first* trade, with nothing else
+open:
+
+```c
+if(InpUseBasket && BasketRiskUsed() + realRisk > eq*InpMaxBasketRiskPct/100.0)
+   { Block("basket risk cap reached"); return; }
+```
+
+With `BasketRiskUsed()` at zero, that reduces to `realRisk > 4% of equity`. On a $10 account
+that is **40 cents** — about 40 points of gold at minimum lot. Minimum lot on a micro account
+risks 12–20% of equity no matter how tight the stop is, so *every setup the 20% ceiling had
+just approved was then refused by the 4% cap.* The per-trade ceiling was dead code. 4% was the
+real limit, and it was refusing trades that were never oversized.
+
+**A basket cap is a limit on stacking.** It cannot be tighter than the ceiling that already
+approved the position sitting under it. The effective cap is now
+`max(InpMaxBasketRiskPct, InpMaxRiskPctHard)`, so the first trade is governed by the per-trade
+ceiling alone and additional positions still stack against a real limit. On a normally-funded
+account nothing changes — 1% trades stack four deep exactly as before. The self-test prints
+both rails on attach.
+
+The block message now names the numbers (`basket risk 1.80 + 1.50 over the 20% basket cap`)
+instead of the bare `basket risk cap reached`, so the journal says *which* rail refused and by
+how much.

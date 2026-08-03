@@ -1755,6 +1755,34 @@ check("v5.12: a volume imbalance grades below a real three-candle gap",
 check("v5.12: it still grades above zero — it trades, small",
       grade_gap(0.3, 1.2, 3, 4, 0.0, False) > 0.0)
 
+# ---------------------------------------------------------------- v5.13
+# The cap that was really in charge. A 4% basket cap tested against the
+# FIRST trade, while the per-trade ceiling said 20% - so on a micro account
+# where min lot risks 12-20% no matter what, every approved trade was then
+# refused by a cap that was never meant to govern a single position.
+
+def basket_blocks(basket_used, real_risk, equity,
+                  basket_pct=4.0, trade_pct=20.0, unified=True):
+    cap = equity*(max(basket_pct, trade_pct) if unified else basket_pct)/100.0
+    return basket_used + real_risk > cap*1.005 + 1e-8
+
+EQ = 10.0
+check("v5.13: the old 4% basket cap refused a trade the 20% ceiling had approved",
+      basket_blocks(0.0, 1.50, EQ, unified=False))
+check("v5.13: the first trade is no longer refused by the stacking cap",
+      not basket_blocks(0.0, 1.50, EQ))
+check("v5.13: a trade inside the per-trade ceiling always fits an empty basket",
+      all(not basket_blocks(0.0, EQ*p/100.0, EQ) for p in (1, 5, 10, 19, 20)))
+check("v5.13: stacking is still capped",
+      basket_blocks(1.80, 1.50, EQ))
+check("v5.13: the basket cap is never tighter than the per-trade ceiling",
+      max(4.0, 20.0) == 20.0)
+check("v5.13: a larger explicit basket cap is still honoured",
+      not basket_blocks(0.0, 2.40, EQ, basket_pct=30.0))
+check("v5.13: on a normal account the 4% cap is unchanged in spirit — "
+      "one trade at 1% still stacks four times",
+      not basket_blocks(0.03*1000, 0.01*1000, 1000.0))
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
