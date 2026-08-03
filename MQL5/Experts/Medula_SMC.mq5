@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.10 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.11 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -38,7 +38,8 @@
 //|  v5.00 keeps exactly ONE hard condition:                         |
 //|                                                                  |
 //|      price is trading inside a live, unmitigated fair value gap  |
-//|      or order block pointing in the trade's direction.           |
+//|      or order block pointing in the trade's direction —          |
+//|      OR a gap in that direction has just printed (§3b).          |
 //|                                                                  |
 //|  That is the ICT entry itself — without it there is no trade to  |
 //|  take. Everything else (HTF bias, liquidity sweep, structure     |
@@ -90,9 +91,31 @@
 //|  breaker block), how much size the setup earns, and where the    |
 //|  target goes — the nearest unfilled gap ahead of price is a draw |
 //|  on liquidity and is used as a take-profit.                      |
+//|                                                                  |
+//|  v5.11 — §3b TRADE THE CANDLE AFTER THE GAP                      |
+//|                                                                  |
+//|  Everything above still waits for price to come BACK to the gap. |
+//|  That makes the EA a retracement trader only, and after genuine  |
+//|  displacement most gaps are never retraced — which is the whole  |
+//|  point of displacement. Every one of those legs was a chance the |
+//|  EA watched go past.                                             |
+//|                                                                  |
+//|  So a gap younger than InpFreshGapMaxAge is now tradeable from   |
+//|  the continuation side, on the candle that follows it, with no   |
+//|  retrace required. This applies to ORDINARY fair value gaps as   |
+//|  much as to breakaway gaps — the imbalance is the signal.        |
+//|                                                                  |
+//|  It stays a trade rather than a chase because the stop is still  |
+//|  placed beyond the far edge of the gap, and because the chase is |
+//|  bounded: once price has run InpFreshGapMaxRun past the gap the  |
+//|  stop is too wide to be worth taking and the EA goes back to     |
+//|  waiting for the retrace. Exhaustion gaps are never chased.      |
+//|                                                                  |
+//|  These fills are tagged FRESH in the journal and named           |
+//|  "fresh FVG continuation" / "fresh breakaway gap continuation".  |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.10"
+#property version   "5.11"
 
 //============================== INPUTS ==============================
 
@@ -134,6 +157,19 @@ input int    InpExhaustLookback = 12;      // Bars measured for the run into the
 input double InpFvgGradeFloor   = 0.00;    // Drop gaps graded below this (0 = keep all)
 input bool   InpFvgTargetPull   = true;    // Unfilled gaps ahead of price are targets
 input bool   InpBestPoi         = true;    // Enter the best-graded POI, not the first found
+
+//--- §3b FRESH GAP CONTINUATION.  Waiting for price to trade back INTO a gap
+//    misses every gap that is never retraced, and after real displacement most
+//    are not. The imbalance itself is the signal: a gap that has just printed
+//    is tradeable on the candle that follows it, from the continuation side,
+//    with the stop still beyond the gap. This applies to ordinary fair value
+//    gaps as much as to breakaway gaps.
+input group "Fresh Gap Continuation (§3b)"
+input bool   InpTradeFreshGaps  = true;    // Trade the candle after a gap prints (no retrace needed)
+input int    InpFreshGapMaxAge  = 3;       // A gap counts as fresh for this many bars
+input double InpFreshGapMaxRun  = 1.25;    // Stop chasing once price has run this far past it
+input bool   InpFreshGapSkipExh = true;    // Never chase an exhaustion gap
+input double InpFreshGapMinGrade= 0.00;    // Minimum gap grade to chase (0 = any gap)
 
 input group "Liquidity (§4)"
 input double InpEqualTolPct     = 0.12;    // Equal-level tolerance (share of avg range)
@@ -319,6 +355,7 @@ struct SView
    double            poiGrade;             // 0..1 grade of the POI actually entered
    int               obCount,fvgCount,liqCount;
    int               bagCount,invCount;    // breakaway gaps and inversions live
+   int               freshCount;           // gaps young enough to trade without a retrace
   };
 
 //--- one evaluated direction, before the two are compared
@@ -747,13 +784,15 @@ void BuildFVGs(void)
       if(g_fvgs[z].grade<InpFvgGradeFloor) g_fvgs[z].alive=false;
      }
 
-   g_view.fvgCount=0; g_view.bagCount=0; g_view.invCount=0;
+   g_view.fvgCount=0; g_view.bagCount=0; g_view.invCount=0; g_view.freshCount=0;
    for(int z=0;z<ArraySize(g_fvgs);z++)
      {
       if(!g_fvgs[z].alive) continue;
       g_view.fvgCount++;
-      if(g_fvgs[z].kind==GAP_BREAKAWAY) g_view.bagCount++;
-      if(g_fvgs[z].inverted)            g_view.invCount++;
+      if(g_fvgs[z].kind==GAP_BREAKAWAY)          g_view.bagCount++;
+      if(g_fvgs[z].inverted)                     g_view.invCount++;
+      if(g_fvgs[z].shift<=InpFreshGapMaxAge &&
+         g_fvgs[z].filledPct<1.0)                g_view.freshCount++;
      }
   }
 
@@ -981,7 +1020,8 @@ double PoiScore(const double grade,const double px,const double top,
 //--- Evaluate one direction.
 //
 //    There is exactly ONE hard condition: price must be trading inside a
-//    live, unmitigated fair value gap or order block pointing this way.
+//    live, unmitigated fair value gap or order block pointing this way, or
+//    a gap this way must have just printed (§3b, the continuation entry).
 //    That is the ICT entry itself — without it there is nothing to trade.
 //
 //    Every other classical filter (HTF bias, liquidity sweep, structure
@@ -1038,6 +1078,43 @@ bool EvaluateDirection(const int dir,SSetup &s)
          bestScore=sc; zt=g_obs[z].top; zb=g_obs[z].bottom; poiGrade=og;
          src=(g_obs[z].breaker ? "breaker block" : "order block");
          if(!InpBestPoi) break;
+        }
+
+   //---- §3b THE FRESH GAP: trade the candle after the imbalance prints.
+   //
+   //     Requiring price to be INSIDE a POI means the EA only ever trades
+   //     retracements, so every gap that runs without one is a chance it
+   //     watched go past. After genuine displacement most gaps are not
+   //     retraced — that IS the point of displacement.
+   //
+   //     So a gap younger than InpFreshGapMaxAge is tradeable from the
+   //     continuation side too: ordinary fair value gaps as much as
+   //     breakaway gaps. The stop still sits beyond the far edge of the gap,
+   //     which is what keeps this a trade rather than a chase — and the chase
+   //     is bounded anyway: once price has run InpFreshGapMaxRun past the
+   //     gap the stop is too wide to be worth it and the EA goes back to
+   //     waiting for the retrace.
+   bool freshEntry=false;
+   if(InpTradeFreshGaps && InpUseFVG && (InpBestPoi || zt<=0.0))
+      for(int z=0;z<ArraySize(g_fvgs);z++)
+        {
+         if(!g_fvgs[z].alive || g_fvgs[z].filledPct>=1.0) continue;
+         if(g_fvgs[z].dir!=dir) continue;
+         if(g_fvgs[z].shift>InpFreshGapMaxAge) continue;
+         if(g_fvgs[z].grade<InpFreshGapMinGrade) continue;
+         if(InpFreshGapSkipExh && g_fvgs[z].kind==GAP_EXHAUSTION) continue;
+
+         // how far past the gap price has already travelled; <=0 means price
+         // is still in the zone, which the loop above has already handled
+         double run=(dir>0 ? px-(g_fvgs[z].top+buf) : (g_fvgs[z].bottom-buf)-px);
+         if(run<=0.0) continue;
+         if(run>InpFreshGapMaxRun*g_view.avgRange) continue;
+
+         double sc=PoiScore(g_fvgs[z].grade,px,g_fvgs[z].top,g_fvgs[z].bottom,dir);
+         if(sc<=bestScore) continue;
+         bestScore=sc; zt=g_fvgs[z].top; zb=g_fvgs[z].bottom;
+         poiGrade=g_fvgs[z].grade; src="fresh "+FvgName(g_fvgs[z]);
+         freshEntry=true;
         }
 
    if(zt<=0.0) return false;                 // nothing to trade — the only veto
@@ -1147,7 +1224,8 @@ bool EvaluateDirection(const int dir,SSetup &s)
       tp=(dir>0 ? px+rr*risk : px-rr*risk);
      }
 
-   if(sweepFresh && mssFresh) s.model="sweep + MSS + "+src;   // full ICT reversal
+   if(freshEntry)             s.model=src+" continuation";    // §3b, no retrace waited for
+   else if(sweepFresh && mssFresh) s.model="sweep + MSS + "+src;  // full ICT reversal
    else if(mssFresh)          s.model="MSS + "+src;           // shift into the POI
    else if(aligned)           s.model=src+" continuation";    // with-structure scalp
    else                       s.model=src+" reversion";       // counter-trend POI
@@ -1160,6 +1238,7 @@ bool EvaluateDirection(const int dir,SSetup &s)
    if(g_view.inOte)     tags+="OTE ";
    if(g_view.inKillzone)tags+="KZ ";
    if(gradeScore >=0.55)tags+="A+POI ";
+   if(freshEntry)       tags+="FRESH ";
    if(tags=="") tags="bare POI";
 
    s.dir=dir; s.zoneTop=zt; s.zoneBottom=zb;
@@ -1238,9 +1317,9 @@ string MissingLeg(void)
       return "no live order block or fair value gap on the chart yet";
    if(g_view.poiDistance>=0.0)
       return StringFormat("price is not in a POI yet — nearest is %.2f x avg range away "
-                          "(%d blocks, %d gaps live: %d breakaway, %d inverted)",
+                          "(%d blocks, %d gaps live: %d breakaway, %d inverted, %d fresh)",
                           g_view.poiDistance,g_view.obCount,g_view.fvgCount,
-                          g_view.bagCount,g_view.invCount);
+                          g_view.bagCount,g_view.invCount,g_view.freshCount);
    return "waiting for price to trade into a POI";
   }
 
@@ -1725,6 +1804,13 @@ void SelfTest(void)
                          (InpUseInversionFvg?"on":"off"),
                          (InpFvgTargetPull  ?"on":"off"),
                          (InpBestPoi        ?"on":"off")));
+   if(InpTradeFreshGaps)
+      LogEvent(StringFormat("fresh gaps: ON — any gap (breakaway or plain FVG) under %d bars old "
+                            "trades on the following candle, no retrace required, "
+                            "while price is within %.2f x avg range of it",
+                            InpFreshGapMaxAge,InpFreshGapMaxRun));
+   else
+      LogEvent("fresh gaps: OFF — the EA only trades retracements back into a POI");
    LogEvent(StringFormat("HTF bias %.2f (scored, never required) | killzone %s | range position %.0f%%",
                          g_view.htfBias,g_view.killzoneName,g_view.pdPosition*100.0));
    LogEvent(StringFormat("gating: ONE hard condition — price inside a live FVG/order block. "
@@ -1772,14 +1858,14 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.10  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.11  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"
       "structure     dir %+d   %s\n"
       "liquidity     %s\n"
       "order blocks  %d      FVGs %d      pools %d\n"
-      "gaps          %d breakaway   %d inverted\n"
+      "gaps          %d breakaway   %d inverted   %d fresh\n"
       "dealing range %.5f - %.5f\n"
       "position      %.0f%% (%s%s)\n"
       "killzone      %s\n"
@@ -1799,7 +1885,7 @@ void Panel(const SBasket &b)
       g_view.structDir,mss,
       sweep,
       g_view.obCount,g_view.fvgCount,g_view.liqCount,
-      g_view.bagCount,g_view.invCount,
+      g_view.bagCount,g_view.invCount,g_view.freshCount,
       g_view.rangeLow,g_view.rangeHigh,
       g_view.pdPosition*100.0,
       (g_view.inDiscount?"discount":"premium"),(g_view.inOte?", OTE":""),

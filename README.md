@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.10, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.11, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -316,5 +316,37 @@ did fire:
 - `stop tightened to fit account` printed on every tick for hours. It is throttled to
   `InpDiagThrottleSec`, or to a real change in the distance.
 
-The panel adds a gap census (`gaps  N breakaway   N inverted`) and the POI grade of the live
-setup; gap boxes are coloured by kind, with inversions drawn in their new direction.
+The panel adds a gap census (`gaps  N breakaway   N inverted   N fresh`) and the POI grade of
+the live setup; gap boxes are coloured by kind, with inversions drawn in their new direction.
+
+
+### v5.11 — trade the candle after the gap
+
+Everything up to v5.10 still waited for price to come **back** into the gap. That makes the EA
+a retracement trader and nothing else — and after genuine displacement most gaps are never
+retraced, which is the entire point of displacement. Every one of those legs was a setup the
+EA correctly identified, graded, drew on the chart, and then watched go past.
+
+**§3b, the fresh gap.** A gap younger than `InpFreshGapMaxAge` (3 bars) is now tradeable from
+the **continuation side**, on the candle that follows it, with no retrace required. This is
+not limited to breakaway gaps — an ordinary fair value gap qualifies on the same terms. The
+imbalance itself is the signal.
+
+It stays a trade rather than a chase because of two limits:
+
+- **The stop is still anchored beyond the far edge of the gap**, exactly as a retrace entry
+  would be. It is not a fixed distance, and it is not the whole displacement candle.
+- **The chase is bounded.** Once price has run `InpFreshGapMaxRun` (1.25 × avg range) past the
+  gap, the stop is too wide to be worth taking, and the EA reverts to waiting for the retrace.
+  `PoiScore` already prefers the nearer of two equal gaps, so the EA takes these early or not
+  at all.
+
+Exhaustion gaps are never chased (`InpFreshGapSkipExh`) — they are the ones that get filled.
+
+Fresh entries are tagged **`FRESH`** in the journal and named `fresh FVG continuation` or
+`fresh breakaway gap continuation`, so the log separates them from retrace fills. The panel
+and the flat-reason line both carry a fresh-gap count.
+
+New inputs: `InpTradeFreshGaps`, `InpFreshGapMaxAge`, `InpFreshGapMaxRun`,
+`InpFreshGapSkipExh`, `InpFreshGapMinGrade`. Setting `InpTradeFreshGaps=false` restores pure
+v5.10 retracement behaviour.

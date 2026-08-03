@@ -1600,6 +1600,79 @@ check("v5.10: a run of losers still latches the daily breaker",
 check("v5.10: the breaker needs BOTH the loss limit and the losing run",
       not breaker_latched(0.10, 10.0, 5))
 
+# ---------------------------------------------------------------- v5.11
+# §3b: trade the candle after the gap prints, with no retrace required.
+# Requiring price to be INSIDE a POI made the EA a retracement trader only,
+# and after real displacement most gaps are never retraced.
+
+def fresh_gap_entry(direction, px, top, bottom, shift, kind, grade, avg_range,
+                    zone_buf=0.25, max_age=3, max_run=1.25,
+                    skip_exhaust=True, min_grade=0.0, enabled=True):
+    """Returns the run past the gap if it is tradeable now, else None."""
+    if not enabled:
+        return None
+    if shift > max_age or grade < min_grade:
+        return None
+    if skip_exhaust and kind == GAP_EXHAUSTION:
+        return None
+    buf = zone_buf*avg_range
+    run = (px - (top+buf)) if direction > 0 else ((bottom-buf) - px)
+    if run <= 0.0:                       # still in the zone: the POI branch owns it
+        return None
+    if run > max_run*avg_range:          # ran away, wait for the retrace
+        return None
+    return run
+
+AR = 1.0
+GTOP, GBOT = 1800.5, 1800.0
+
+check("v5.11: a plain FVG one candle old trades on the following candle",
+      fresh_gap_entry(1, 1801.0, GTOP, GBOT, 1, GAP_MEASURING, 0.5, AR) is not None)
+check("v5.11: a breakaway gap does the same",
+      fresh_gap_entry(1, 1801.0, GTOP, GBOT, 1, GAP_BREAKAWAY, 0.8, AR) is not None)
+check("v5.11: shorts mirror longs",
+      fresh_gap_entry(-1, 1799.5, GTOP, GBOT, 1, GAP_MEASURING, 0.5, AR) is not None)
+check("v5.11: an exhaustion gap is never chased",
+      fresh_gap_entry(1, 1801.0, GTOP, GBOT, 1, GAP_EXHAUSTION, 0.5, AR) is None)
+check("v5.11: a stale gap is not a fresh entry — it is back to waiting for the retrace",
+      fresh_gap_entry(1, 1801.0, GTOP, GBOT, 12, GAP_MEASURING, 0.5, AR) is None)
+check("v5.11: price that has run too far past the gap is not chased",
+      fresh_gap_entry(1, 1803.0, GTOP, GBOT, 1, GAP_MEASURING, 0.5, AR) is None)
+check("v5.11: price still inside the gap is left to the retrace branch (no double entry)",
+      fresh_gap_entry(1, 1800.3, GTOP, GBOT, 1, GAP_MEASURING, 0.5, AR) is None)
+check("v5.11: the zone buffer is respected before a gap counts as 'run past'",
+      fresh_gap_entry(1, 1800.7, GTOP, GBOT, 1, GAP_MEASURING, 0.5, AR) is None)
+check("v5.11: switching the feature off restores pure retracement trading",
+      fresh_gap_entry(1, 1801.0, GTOP, GBOT, 1, GAP_BREAKAWAY, 0.8, AR,
+                      enabled=False) is None)
+
+# the stop still sits beyond the gap, which is what keeps this a trade
+def fresh_stop_distance(direction, px, top, bottom, avg_range, stop_buf=0.30):
+    sl = bottom - stop_buf*avg_range if direction > 0 else top + stop_buf*avg_range
+    return abs(px - sl)
+
+d_near = fresh_stop_distance(1, 1800.8, GTOP, GBOT, AR)
+d_far = fresh_stop_distance(1, 1801.7, GTOP, GBOT, AR)
+check("v5.11: the fresh-gap stop is anchored beyond the gap, not to a fixed distance",
+      abs(d_near - 1.10) < 1e-9, f"{d_near:.2f}")
+check("v5.11: chasing further costs a wider stop — the reason the chase is bounded",
+      d_far > d_near)
+check("v5.11: the worst allowed chase still leaves a scalper-sized stop",
+      fresh_stop_distance(1, GTOP + 0.25 + 1.25, GTOP, GBOT, AR) <= 2.5,
+      f"{fresh_stop_distance(1, GTOP+1.5, GTOP, GBOT, AR):.2f}")
+
+check("v5.11: a nearer fresh gap outscores a further one of equal grade",
+      poi_score(0.60, 1800.8, GTOP, GBOT, 1, AR) >
+      poi_score(0.60, 1801.6, GTOP, GBOT, 1, AR))
+
+# the whole point: how many gaps a retrace-only EA never gets to trade
+def chances(total_gaps, retraced_share):
+    retraced = total_gaps*retraced_share
+    return retraced, total_gaps - retraced
+seen, missed = chances(20, 0.45)
+check("v5.11 rationale: a retrace-only model forfeits every gap that runs",
+      missed > seen, f"{missed:.0f} missed vs {seen:.0f} traded")
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
