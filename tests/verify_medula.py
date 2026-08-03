@@ -1460,7 +1460,9 @@ def grade_gap(size, strength, kind, shift, filled_pct, inverted,
               bag_mult=1.80, max_age=200):
     size_s = mclamp(size, 0.0, 1.0)
     str_s = mclamp((strength-1.0)/max(bag_mult, 0.1), 0.0, 1.0)
-    kind_s = 1.00 if kind == GAP_BREAKAWAY else (0.15 if kind == GAP_EXHAUSTION else 0.60)
+    kind_s = (1.00 if kind == GAP_BREAKAWAY else
+              0.15 if kind == GAP_EXHAUSTION else
+              0.40 if kind == 3 else 0.60)
     fresh = mclamp(1.0 - shift/max(float(max_age), 1.0), 0.0, 1.0)
     g = 0.28*size_s + 0.27*str_s + 0.27*kind_s + 0.18*fresh
     g *= (1.0 - 0.60*mclamp(filled_pct, 0.0, 1.0))
@@ -1672,6 +1674,86 @@ def chances(total_gaps, retraced_share):
 seen, missed = chances(20, 0.45)
 check("v5.11 rationale: a retrace-only model forfeits every gap that runs",
       missed > seen, f"{missed:.0f} missed vs {seen:.0f} traded")
+
+# ---------------------------------------------------------------- v5.12
+# Four admission gates that refused trades for reasons that were not risk.
+
+def min_gap(avg_range, spread, min_pct=0.06, min_spreads=1.0):
+    return max(min_pct*avg_range, min_spreads*spread)
+
+AR, SPREAD = 1.50, 0.25
+check("v5.12: the gap floor is the spread, not a quarter of the average range",
+      min_gap(AR, SPREAD) < 0.25*AR, f"{min_gap(AR, SPREAD):.3f} vs {0.25*AR:.3f}")
+check("v5.12: a small imbalance that used to be deleted is now recorded",
+      0.30 >= min_gap(AR, SPREAD) and 0.30 < 0.25*AR)
+check("v5.12: a gap narrower than the spread is still refused — it cannot pay its crossing",
+      0.10 < min_gap(AR, SPREAD))
+check("v5.12: a wide spread raises the floor on its own",
+      min_gap(AR, 0.60) > min_gap(AR, 0.25))
+check("v5.12: the floor never goes to zero",
+      min_gap(AR, 0.0) > 0.0)
+
+# the book must keep the NEWEST poi, not the oldest
+def fill_book(shifts, slots, newest_first):
+    order = sorted(shifts) if newest_first else sorted(shifts, reverse=True)
+    return sorted(order[:slots])
+
+BOOK = list(range(1, 120))
+check("v5.12: a full book keeps the freshest POIs",
+      fill_book(BOOK, 40, True)[0] == 1 and max(fill_book(BOOK, 40, True)) == 40)
+check("v5.12: the old oldest-first fill threw every fresh POI away",
+      min(fill_book(BOOK, 40, False)) == 80)
+check("v5.12: with newest-first, §3b always has fresh gaps to work with",
+      any(s <= 3 for s in fill_book(BOOK, 40, True)) and
+      not any(s <= 3 for s in fill_book(BOOK, 40, False)))
+
+def poi_score_v512(grade, px, top, bottom, direction, avg_range,
+                   stop_buf=0.30, floor=0.25):
+    far = bottom - stop_buf*avg_range if direction > 0 else top + stop_buf*avg_range
+    risk = max(abs(px-far), floor*avg_range)/avg_range
+    return grade/(0.60+risk)
+
+micro = poi_score_v512(0.20, 1800.00, 1800.02, 1799.98, 1, 1.0)
+real = poi_score_v512(0.70, 1800.00, 1800.40, 1799.70, 1, 1.0)
+check("v5.12: a micro-gap no longer outranks a real one on a stop it never gets",
+      real > micro, f"real {real:.3f} vs micro {micro:.3f}")
+check("v5.12: scoring uses the floored stop, so it matches the trade actually placed",
+      abs(poi_score_v512(1.0, 1800.0, 1800.01, 1799.99, 1, 1.0, stop_buf=0.0)
+          - 1.0/0.85) < 1e-9)
+check("v5.12: a small gap still scores — it is discounted, not deleted",
+      micro > 0.0)
+
+def ceiling_blocks(real_risk, equity, pct=20.0, tol=1.005):
+    return real_risk > equity*pct/100.0*tol + 1e-8
+EQ = 8.25
+check("v5.12: a stop auto-fitted to land exactly on the ceiling is no longer refused",
+      not ceiling_blocks(1.65, EQ), "1.65 vs 20% of 8.25 = 1.65")
+check("v5.12: floating-point overshoot on the ceiling is tolerated",
+      not ceiling_blocks(1.65000000001, EQ))
+check("v5.12: a genuinely oversized risk is still refused",
+      ceiling_blocks(2.50, EQ))
+check("v5.12: the tolerance is a rounding allowance, not a raised ceiling",
+      ceiling_blocks(EQ*0.20*1.02, EQ))
+
+# volume imbalance: bodies gap, wicks touch
+def volume_imbalance(open_i, close_next, floor):
+    up = open_i - close_next
+    dn = close_next - open_i
+    if up >= floor:
+        return 1, close_next, open_i
+    if dn >= floor:
+        return -1, open_i, close_next
+    return 0, 0.0, 0.0
+check("v5.12: a bullish volume imbalance is recorded",
+      volume_imbalance(1800.60, 1800.20, 0.25)[0] == 1)
+check("v5.12: a bearish volume imbalance mirrors it",
+      volume_imbalance(1800.20, 1800.60, 0.25)[0] == -1)
+check("v5.12: overlapping bodies are not an imbalance",
+      volume_imbalance(1800.25, 1800.20, 0.25)[0] == 0)
+check("v5.12: a volume imbalance grades below a real three-candle gap",
+      grade_gap(0.3, 1.2, 3, 4, 0.0, False) < grade_gap(0.3, 1.2, GAP_MEASURING, 4, 0.0, False))
+check("v5.12: it still grades above zero — it trades, small",
+      grade_gap(0.3, 1.2, 3, 4, 0.0, False) > 0.0)
 
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")

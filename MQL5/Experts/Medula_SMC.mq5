@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.11 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.12 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -113,9 +113,41 @@
 //|                                                                  |
 //|  These fills are tagged FRESH in the journal and named           |
 //|  "fresh FVG continuation" / "fresh breakaway gap continuation".  |
+//|                                                                  |
+//|  v5.12 — THE SMALL ONES COUNT                                    |
+//|                                                                  |
+//|  The EA was still standing aside on obvious setups, and none of  |
+//|  the reasons were the ones it printed. Four defects, all of them |
+//|  admission gates that had no business existing:                  |
+//|                                                                  |
+//|  1. InpFvgMinPct required a gap to be a quarter of the average   |
+//|     range before it was even RECORDED. Every small imbalance on  |
+//|     the chart was deleted at birth, so nothing downstream could  |
+//|     grade it, size it or trade it. The only honest floor is the  |
+//|     spread: a gap narrower than the cost of crossing it cannot   |
+//|     be scalped. Above that line, size is a matter of grade.      |
+//|                                                                  |
+//|  2. Both POI books were filled OLDEST FIRST and then capped, so  |
+//|     a busy session spent every slot on 200-bar-old zones and     |
+//|     dropped the fresh gaps — the only ones §3b can trade. They   |
+//|     now fill newest first.                                       |
+//|                                                                  |
+//|  3. PoiScore ranked a 6-point gap on a 6-point stop, while entry |
+//|     floors every stop at 0.25 x avg range. Micro-gaps outranked  |
+//|     everything on a distance they never actually got.            |
+//|                                                                  |
+//|  4. The 20% risk ceiling rejected its own arithmetic. AutoFitStop|
+//|     sizes the stop so min lot lands EXACTLY on the ceiling, and  |
+//|     a strict > then failed on floating point: "risk 1.65 = 20%   |
+//|     of equity over the 20% ceiling". Trades the EA had just made |
+//|     affordable were refused for rounding.                        |
+//|                                                                  |
+//|  Volume imbalances — bodies gapped, wicks touching — are now      |
+//|  tracked too. They are small and they are weak, and they grade   |
+//|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.11"
+#property version   "5.12"
 
 //============================== INPUTS ==============================
 
@@ -145,9 +177,11 @@ input bool   InpUseBreakers     = true;    // Trade breaker blocks (failed OB th
 
 input group "Fair Value Gaps (§3)"
 input bool   InpUseFVG          = true;    // Trade FVG returns
-input int    InpMaxFVGs         = 20;      // FVGs tracked
+input int    InpMaxFVGs         = 40;      // FVGs tracked
 input int    InpFvgMaxAgeBars   = 200;     // Forget FVGs older than this
-input double InpFvgMinPct       = 0.25;    // Gap must be >= this share of avg range
+input double InpFvgMinPct       = 0.06;    // Gap must be >= this share of avg range
+input double InpFvgMinSpreads   = 1.00;    // ...and >= this many spreads (the real floor)
+input bool   InpUseVolumeImb    = true;    // Also track 2-candle body gaps (volume imbalance)
 input double InpFvgFillPct      = 50.0;    // Reported as consumed past this % (CE)
 input bool   InpUseInversionFvg = true;    // A violated gap inverts and keeps trading (IFVG)
 input double InpBagDisplaceMult = 1.80;    // Breakaway gap: its candle >= this x avg range
@@ -229,7 +263,7 @@ input group "Entries"
 input bool   InpEntryOnFVG      = true;    // Enter on FVG return
 input bool   InpEntryOnOB       = true;    // Enter on order-block return
 input double InpEntryZoneBuffer = 0.25;    // Zone widened by this share of avg range
-input int    InpEntrySpacingSec = 60;      // Min seconds between entries
+input int    InpEntrySpacingSec = 15;      // Min seconds between entries
 input int    InpMaxSetupAgeBars = 40;      // Structure shift counts for this many bars
 
 input group "Risk"
@@ -285,7 +319,8 @@ enum ENUM_GAPKIND
   {
    GAP_MEASURING  =0,   // mid-leg imbalance — ordinary, tradeable
    GAP_BREAKAWAY  =1,   // BAG: the candle that broke structure, start of expansion
-   GAP_EXHAUSTION =2    // printed into a pool on an extended run — a target, not an entry
+   GAP_EXHAUSTION =2,   // printed into a pool on an extended run — a target, not an entry
+   GAP_VOLIMB     =3    // volume imbalance: bodies gap, wicks touch. Small but real.
   };
 
 //--- a fair value gap: three-candle imbalance (§3)
@@ -581,8 +616,10 @@ void BuildOrderBlocks(void)
    ArrayResize(g_obs,0);
    if(!InpUseOrderBlocks || g_view.avgRange<=0.0) return;
 
+   // newest first, for the same reason as the gap book: the fixed number of
+   // slots must go to the blocks price can still reach, not to the oldest
    int scan=MathMin(g_bars-4,InpObMaxAgeBars);
-   for(int i=scan;i>=1;i--)
+   for(int i=1;i<=scan;i++)
      {
       double rng=g_h[i]-g_l[i];
       if(rng<=0.0) continue;
@@ -698,7 +735,8 @@ double GradeGap(const int z)
    double sizeScore =MClamp(g_fvgs[z].size,0.0,1.0);
    double strScore  =MClamp((g_fvgs[z].strength-1.0)/MathMax(InpBagDisplaceMult,0.1),0.0,1.0);
    double kindScore =(g_fvgs[z].kind==GAP_BREAKAWAY  ? 1.00 :
-                      g_fvgs[z].kind==GAP_EXHAUSTION ? 0.15 : 0.60);
+                      g_fvgs[z].kind==GAP_EXHAUSTION ? 0.15 :
+                      g_fvgs[z].kind==GAP_VOLIMB     ? 0.40 : 0.60);
    double fresh     =MClamp(1.0-(double)g_fvgs[z].shift/MathMax((double)InpFvgMaxAgeBars,1.0),
                             0.0,1.0);
    double g=0.28*sizeScore+0.27*strScore+0.27*kindScore+0.18*fresh;
@@ -712,10 +750,12 @@ string FvgName(const SFVG &f)
    if(f.inverted)                 return "inversion FVG";
    if(f.kind==GAP_BREAKAWAY)      return "breakaway gap";
    if(f.kind==GAP_EXHAUSTION)     return "exhaustion gap";
+   if(f.kind==GAP_VOLIMB)         return "volume imbalance";
    return "FVG";
   }
 
-void PushFVG(const double top,const double bottom,const int dir,const int i)
+void PushFVG(const double top,const double bottom,const int dir,const int i,
+             const bool volImb=false)
   {
    int n=ArraySize(g_fvgs);
    if(n>=InpMaxFVGs*2) return;
@@ -727,7 +767,7 @@ void PushFVG(const double top,const double bottom,const int dir,const int i)
    g_fvgs[n].dir=dir; g_fvgs[n].shift=i;
    g_fvgs[n].size=(top-bottom)/MathMax(g_view.avgRange,1e-9);
    g_fvgs[n].strength=strength;
-   g_fvgs[n].kind=ClassifyGap(i,dir,strength);
+   g_fvgs[n].kind=(volImb ? GAP_VOLIMB : ClassifyGap(i,dir,strength));
    g_fvgs[n].filledPct=0.0; g_fvgs[n].grade=0.0;
    g_fvgs[n].filled=false; g_fvgs[n].inverted=false; g_fvgs[n].alive=true;
   }
@@ -739,14 +779,33 @@ void BuildFVGs(void)
   {
    ArrayResize(g_fvgs,0);
    if(!InpUseFVG || g_view.avgRange<=0.0) return;
-   double minGap=InpFvgMinPct*g_view.avgRange;
 
+   // The only honest floor on a gap is the cost of crossing it. A gap
+   // narrower than the spread cannot be scalped no matter how real it is;
+   // above that line, size is a matter of GRADE, not of admission. The old
+   // 0.25 x avg-range floor was a confidence gate wearing a filter's coat —
+   // it deleted every small imbalance before anything could price it.
+   double minGap=MathMax(InpFvgMinPct*g_view.avgRange,
+                         InpFvgMinSpreads*MathMax(g_view.ask-g_view.bid,0.0));
+
+   // NEWEST FIRST. The book has a fixed number of slots; filling it from the
+   // oldest end meant a busy session spent them on 200-bar-old gaps and threw
+   // away the fresh ones — the only gaps §3b can actually trade.
    int scan=MathMin(g_bars-3,InpFvgMaxAgeBars);
-   for(int i=scan;i>=1;i--)
+   for(int i=1;i<=scan;i++)
      {
       // bullish: low of the newer candle above the high of the older one
-      if(g_l[i-1]-g_h[i+1]>=minGap) PushFVG(g_l[i-1],g_h[i+1], 1,i);
-      if(g_l[i+1]-g_h[i-1]>=minGap) PushFVG(g_l[i+1],g_h[i-1],-1,i);
+      bool got=false;
+      if(g_l[i-1]-g_h[i+1]>=minGap){ PushFVG(g_l[i-1],g_h[i+1], 1,i); got=true; }
+      if(g_l[i+1]-g_h[i-1]>=minGap){ PushFVG(g_l[i+1],g_h[i-1],-1,i); got=true; }
+      if(got || !InpUseVolumeImb) continue;
+
+      // No three-candle gap here, but the bodies may still not overlap: price
+      // left a volume imbalance between one close and the next open. It is a
+      // smaller, weaker POI — and it is precisely the detail a scalper is
+      // supposed to see. It trades, at the size its grade earns.
+      if(g_o[i]-g_c[i+1]>=minGap) PushFVG(g_o[i],g_c[i+1], 1,i,true);
+      if(g_c[i+1]-g_o[i]>=minGap) PushFVG(g_c[i+1],g_o[i],-1,i,true);
      }
 
    // Consumption and inversion. The old engine deleted any gap price closed
@@ -1013,7 +1072,11 @@ double PoiScore(const double grade,const double px,const double top,
   {
    double far=(dir>0 ? bottom-InpPoiStopBuffer*g_view.avgRange
                      : top   +InpPoiStopBuffer*g_view.avgRange);
-   double risk=MathAbs(px-far)/MathMax(g_view.avgRange,1e-9);
+   // score the stop the EA will actually use. Entry floors the stop at 0.25 x
+   // avg range, so scoring a 6-point gap as if it risked 6 points would rank
+   // every micro-gap above everything else on a distance it never gets.
+   double risk=MathMax(MathAbs(px-far),0.25*g_view.avgRange)
+               /MathMax(g_view.avgRange,1e-9);
    return grade/(0.60+risk);
   }
 
@@ -1666,8 +1729,14 @@ void TryEnter(const SBasket &b,const bool isScale)
       lots=NormalizeLots(g_firstLot*MathPow(InpScaleDecay,b.count));
    if(lots<=0.0){ Block("size below broker minimum"); return; }
 
+   // The ceiling is a solvency rail, not a confidence gate — but it was
+   // rejecting its own arithmetic. InpAutoFitStop sizes the stop so that min
+   // lot lands EXACTLY on the ceiling, and a strict > then failed on the last
+   // bit of floating point: "risk 1.65 = 20% of equity over the 20% ceiling".
+   // A trade the EA had just made affordable was refused for rounding.
    double realRisk=RiskOfLots(lots,dist);
-   if(realRisk>eq*InpMaxRiskPctHard/100.0)
+   double riskCap =eq*InpMaxRiskPctHard/100.0;
+   if(realRisk>riskCap*1.005+1e-8)
      {
       Block(StringFormat("risk %.2f = %.0f%% of equity over the %.0f%% ceiling",
                          realRisk,100.0*realRisk/MathMax(eq,0.01),InpMaxRiskPctHard));
@@ -1753,6 +1822,7 @@ void DrawZones(void)
       color c=(g_fvgs[z].dir>0 ? clrSteelBlue : clrIndianRed);
       if(g_fvgs[z].kind==GAP_BREAKAWAY)  c=(g_fvgs[z].dir>0 ? clrDodgerBlue : clrCrimson);
       if(g_fvgs[z].kind==GAP_EXHAUSTION) c=clrDimGray;
+      if(g_fvgs[z].kind==GAP_VOLIMB)     c=(g_fvgs[z].dir>0 ? clrLightSeaGreen : clrPaleVioletRed);
       if(g_fvgs[z].inverted)             c=(g_fvgs[z].dir>0 ? clrMediumSpringGreen : clrOrange);
       DrawBox(StringFormat("SMC_FVG_%d",z),g_t[g_fvgs[z].shift],g_fvgs[z].top,fwd,g_fvgs[z].bottom,
               c,false);
@@ -1804,6 +1874,11 @@ void SelfTest(void)
                          (InpUseInversionFvg?"on":"off"),
                          (InpFvgTargetPull  ?"on":"off"),
                          (InpBestPoi        ?"on":"off")));
+   LogEvent(StringFormat("smallest gap the EA will see: %.5f  (%.2f x avg range, or %.1f spreads "
+                         "— whichever is larger). Below that a gap cannot pay its own crossing.",
+                         MathMax(InpFvgMinPct*g_view.avgRange,
+                                 InpFvgMinSpreads*MathMax(g_view.ask-g_view.bid,0.0)),
+                         InpFvgMinPct,InpFvgMinSpreads));
    if(InpTradeFreshGaps)
       LogEvent(StringFormat("fresh gaps: ON — any gap (breakaway or plain FVG) under %d bars old "
                             "trades on the following candle, no retrace required, "
@@ -1858,7 +1933,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.11  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.12  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"

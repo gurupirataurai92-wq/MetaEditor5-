@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.11, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.12, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -350,3 +350,30 @@ and the flat-reason line both carry a fresh-gap count.
 New inputs: `InpTradeFreshGaps`, `InpFreshGapMaxAge`, `InpFreshGapMaxRun`,
 `InpFreshGapSkipExh`, `InpFreshGapMinGrade`. Setting `InpTradeFreshGaps=false` restores pure
 v5.10 retracement behaviour.
+
+
+### v5.12 — the small ones count
+
+Screenshots of missed setups showed the EA standing aside on plainly tradeable imbalances, and
+**none of the reasons were the ones it printed**. Four defects, all of them admission gates
+that had no business existing:
+
+| # | Defect | Effect |
+|---|---|---|
+| 1 | `InpFvgMinPct` required a gap to be **¼ of the average range before it was recorded at all** | Every small imbalance was deleted at birth. Nothing downstream could grade it, size it or trade it — the grading engine never saw them |
+| 2 | Both POI books filled **oldest-first**, then hit a fixed cap | A busy session spent every slot on 200-bar-old zones and dropped the fresh gaps — the only ones §3b can trade |
+| 3 | `PoiScore` ranked a 6-point gap on a **6-point stop**, while entry floors every stop at 0.25 × avg range | Micro-gaps outranked everything on a distance they never actually got |
+| 4 | The 20% risk ceiling **rejected its own arithmetic** | `InpAutoFitStop` sizes the stop so min lot lands *exactly* on the ceiling; a strict `>` then failed on floating point — `risk 1.65 = 20% of equity over the 20% ceiling`. Trades the EA had just made affordable were refused for rounding |
+
+**The only honest floor on a gap is the spread.** A gap narrower than the cost of crossing it
+cannot be scalped, no matter how real it is. Above that line, size is a matter of *grade*, not
+of admission — which is the whole point of the v5.10 grading engine. `InpFvgMinPct` drops to
+0.06 and `InpFvgMinSpreads` (1.0) becomes the real limit; the self-test prints the resulting
+minimum in price terms so it is visible rather than invisible.
+
+**Volume imbalances** — bodies gapped, wicks touching — are now tracked as a fourth gap kind
+(`InpUseVolumeImb`). They are small and they are weak, and they grade accordingly at 0.40
+against a measuring gap's 0.60. But a scalper is supposed to see them.
+
+Both books now fill **newest-first**, `InpMaxFVGs` doubles to 40, and `InpEntrySpacingSec`
+drops to 15.
