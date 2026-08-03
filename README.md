@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.16, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.17, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -485,3 +485,53 @@ and named `displacement candle continuation`.
 That is now four independent ways into the same trade — retrace into a POI, fresh gap
 continuation (§3b), displacement candle (§3c), and order block — all scored against each other
 by quality per unit of risk, with the best one taken.
+
+
+### v5.17 — the exit side, and the arithmetic nobody checked
+
+Six versions went into getting *in*. None went into getting *out*, and that is where a scalper
+is actually paid. Two problems, one of which invalidates everything above it.
+
+**1. The spread was most of the risk.** On XAUUSD M5 the average range is ~1.0–1.5 and a micro
+account's gold spread is often 0.20–0.45. The stop was floored at `0.25 × avgRange` ≈ 0.30 —
+**the same size as the spread.** Every trade opened at roughly −0.6R to −1.0R before price
+moved at all. No entry model recovers that, and taking *more* small trades makes it worse.
+
+A stop must be a multiple of what the round trip costs. `InpMinStopSpreads` (4.0) floors it at
+four spreads, capping the spread at ~25% of risk instead of ~100%. `InpMinStopPct` (0.25)
+still applies on tight-spread symbols, whichever is larger. The POI scorer uses the same floor,
+so zones are ranked on the stop actually placed.
+
+**2. Every winner was capped, every loser ran.** The basket closed at a fixed `1.6R` against a
+`1.5R` stop — a symmetric R distribution, which needs a better-than-even win rate just to
+break even before costs. Trailing behind structure makes it right-skewed: losers stay one unit,
+winners are allowed to become three.
+
+| | Was | Now |
+|---|---|---|
+| Past target | closed at 1.6R | `InpRunWinners` hands it to the trail |
+| Trail | none — stop frozen at break-even | `InpTrailStructure`, behind the last swing, from `InpTrailStartR` |
+| Thesis fails | held to the full stop | `InpExitOnInvalid` — a **close** back through the POI exits now |
+
+The trail follows the last swing the market actually made, not a fixed distance, and can only
+ever move in the winning direction.
+
+**The run report.** Four entry models now compete for the same capital, and without per-model
+accounting tuning any of them is guesswork — a profitable model and a bleeding one net out to
+a flat curve and the log looks identical either way. Every fill now carries its model tag in
+the deal comment (`F-BAG`, `PA`, `VI`, `IFVG`, `EXH`, `BRK`, `OB`, `FVG`; `F-` = fresh
+continuation), and `OnDeinit` takes the run apart:
+
+```
+═════════════ RUN REPORT ═════════════
+trades 84 | won 31 (37%) | lost 53 | net -2.14 | profit factor 0.81 | expectancy -0.0255
+average win 0.0912 | average loss 0.0658 | win/loss size ratio 1.39
+COST: average spread 0.30000 against an average stop of 1.20000 —
+      the spread is 25% of your risk on every trade.
+───────── by entry model ─────────
+  F-BAG      trades 12 | won   7 ( 58%) | net     1.83 | PF  2.41 | expectancy 0.1525
+  EXH        trades 19 | won   4 ( 21%) | net    -2.60 | PF  0.31 | expectancy -0.1368
+```
+
+That is the first output from this EA that can answer "is it a money maker" instead of
+"did it trade".

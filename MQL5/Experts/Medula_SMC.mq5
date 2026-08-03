@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.16 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.17 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.16"
+#property version   "5.17"
 
 //============================== INPUTS ==============================
 
@@ -295,6 +295,15 @@ input double InpRiskPct         = 1.0;     // Risk per trade (% equity)
 input double InpSlBufferPct     = 0.25;    // Stop beyond the sweep by this x avg range
 input double InpTargetMinRR     = 1.20;    // Target is never set closer than this R
 input double InpMinTargetSpreads= 2.00;    // Target stretched to at least this many spreads
+
+//--- THE COST OF THE ROUND TRIP.
+//    On XAUUSD M5 the average range is ~1.0-1.5 and the spread is often
+//    0.20-0.45. A stop floored at 0.25 x avg range is therefore roughly the
+//    SAME SIZE as the spread — every such trade opens at -0.6R to -1.0R before
+//    price has moved at all, and no entry model on earth recovers that.
+//    A stop must be a multiple of what it costs to get in and out.
+input double InpMinStopSpreads  = 4.00;    // Stop is never closer than this many spreads
+input double InpMinStopPct      = 0.25;    // ...nor closer than this x avg range
 input double InpTpRMultiple     = 3.0;     // Target when no liquidity pool is in range
 input double InpDailyLossPct    = 5.0;     // Daily loss limit (%)
 input int    InpBreakerMinLosses= 3;       // Losing trades before the daily limit latches
@@ -320,6 +329,20 @@ input double InpScaleDecay      = 0.6;     // Lot decay per add
 input double InpScaleMinSpacing = 0.25;    // Min spacing between adds (x avg range)
 input bool   InpCloseOnFlip     = true;    // Close basket when HTF bias flips
 
+//--- WHERE THE MONEY IS.  A scalper that caps every winner at a fixed R and
+//    lets every loser run to a fixed stop has a symmetric R distribution and
+//    needs to be right more than half the time just to break even. Trailing
+//    behind structure turns that distribution right-skewed: losers stay one
+//    unit, winners are allowed to become three. That asymmetry — not the
+//    entry — is what pays for the spread.
+input group "Exit Management"
+input bool   InpTrailStructure  = true;    // Trail the stop behind swing structure
+input double InpTrailStartR     = 1.00;    // Start trailing at this R
+input double InpTrailBufferPct  = 0.35;    // Trail this far beyond the swing (x avg range)
+input bool   InpRunWinners      = true;    // Past target, hand the trade to the trail
+input bool   InpExitOnInvalid   = true;    // Exit when price closes back through the POI
+input double InpInvalidBufferPct= 0.10;    // Invalidation needs this much beyond the POI
+
 //========================= TYPES & HELPERS ==========================
 
 enum ENUM_DEC { DEC_WAIT=0, DEC_BUY, DEC_SELL, DEC_HOLD, DEC_EXIT };
@@ -331,6 +354,15 @@ int    MSign(const double x){ if(x>0.0) return 1; if(x<0.0) return -1; return 0;
 //    of confidence rather than solvency is forced to zero when InpTakeEveryPOI
 //    is on. They stay as inputs so the behaviour can be restored deliberately,
 //    but nothing in the model quietly re-introduces a confidence gate.
+//--- The narrowest stop worth placing: a multiple of the round-trip cost, and
+//    never a meaningless fraction of the range. Used identically by the entry
+//    and by the POI scorer, so the EA ranks zones on the stop it will really use.
+double MinStopDistance(void)
+  {
+   double sprd=MathMax(g_view.ask-g_view.bid,0.0);
+   return MathMax(InpMinStopPct*g_view.avgRange,InpMinStopSpreads*sprd);
+  }
+
 double QualityFloorEff(void)   { return (InpTakeEveryPOI ? 0.0   : InpQualityFloor);    }
 double FvgGradeFloorEff(void)  { return (InpTakeEveryPOI ? 0.0   : InpFvgGradeFloor);   }
 double FreshGradeFloorEff(void){ return (InpTakeEveryPOI ? 0.0   : InpFreshGapMinGrade);}
@@ -422,6 +454,7 @@ struct SView
    string            confluence;           // the tags that scored
    double            poiDistance;          // avg-range units to the nearest live POI
    double            poiGrade;             // 0..1 grade of the POI actually entered
+   string            modelCode;            // short tag carried into the deal comment
    int               obCount,fvgCount,liqCount;
    int               bagCount,invCount;    // breakaway gaps and inversions live
    int               freshCount;           // gaps young enough to trade without a retrace
@@ -434,7 +467,7 @@ struct SSetup
    double            zoneTop,zoneBottom;
    double            stop,target,rr;
    double            quality,sizeFactor,poiGrade;
-   string            model,confluence;
+   string            model,confluence,modelCode;
   };
 
 //--- basket state (§9)
@@ -462,6 +495,13 @@ SView    g_view;
 double   g_basketRisk=0.0;          // R unit for the whole basket
 double   g_firstLot=0.0;
 double   g_basketStop=0.0;
+double   g_basketZoneTop=0.0;       // the POI the basket was entered from
+double   g_basketZoneBottom=0.0;
+double   g_basketTrail=0.0;         // best trailed stop so far
+
+//--- cost-of-trading census, reported at the end of the run
+double   g_sumSpread=0.0,g_sumStop=0.0;
+int      g_nEntries=0;
 ulong    g_partialDone[],g_beDone[];
 
 double   g_dayStartEquity=0.0,g_peakEquity=0.0;
@@ -1111,7 +1151,7 @@ double PoiScore(const double grade,const double px,const double top,
    // score the stop the EA will actually use. Entry floors the stop at 0.25 x
    // avg range, so scoring a 6-point gap as if it risked 6 points would rank
    // every micro-gap above everything else on a distance it never gets.
-   double risk=MathMax(MathAbs(px-far),0.25*g_view.avgRange)
+   double risk=MathMax(MathAbs(px-far),MinStopDistance())
                /MathMax(g_view.avgRange,1e-9);
    return grade/(0.60+risk);
   }
@@ -1318,9 +1358,10 @@ bool EvaluateDirection(const int dir,SSetup &s)
      }
 
    double risk=MathAbs(px-sl);
-   if(risk<0.25*g_view.avgRange)             // never a meaningless stop
+   double minRisk=MinStopDistance();         // never inside the round-trip cost
+   if(risk<minRisk)
      {
-      risk=0.25*g_view.avgRange;
+      risk=minRisk;
       sl=(dir>0 ? px-risk : px+risk);
      }
    if(risk<=0.0) return false;
@@ -1392,6 +1433,20 @@ bool EvaluateDirection(const int dir,SSetup &s)
 
    s.dir=dir; s.zoneTop=zt; s.zoneBottom=zb;
    s.stop=sl; s.target=tp; s.rr=rr;
+   // a short tag so the deal itself records WHICH model opened it, and the
+   // end-of-run report can say which ones earn and which ones bleed
+   string code;
+   if(paEntry)                              code="PA";
+   else if(StringFind(src,"breakaway")>=0)  code="BAG";
+   else if(StringFind(src,"inversion")>=0)  code="IFVG";
+   else if(StringFind(src,"volume")>=0)     code="VI";
+   else if(StringFind(src,"exhaustion")>=0) code="EXH";
+   else if(StringFind(src,"breaker")>=0)    code="BRK";
+   else if(StringFind(src,"order block")>=0)code="OB";
+   else                                     code="FVG";
+   if(freshEntry) code="F"+code;
+   s.modelCode=code;
+
    s.quality=q; s.poiGrade=poiGrade;
    s.sizeFactor=MClamp(InpMinSizeFactor+(1.0-InpMinSizeFactor)*q,0.05,1.0);
    s.confluence=tags;
@@ -1453,6 +1508,7 @@ void FindSetup(void)
    g_view.setupRR=best.rr;
    g_view.quality=best.quality; g_view.sizeFactor=best.sizeFactor;
    g_view.poiGrade=best.poiGrade;
+   g_view.modelCode=best.modelCode;
    g_view.confluence=best.confluence;
   }
 
@@ -1674,12 +1730,47 @@ double BasketRiskUsed(void)
   }
 
 //--- basket-level management, run every tick while exposure exists
+//--- Move every leg's stop to a level, but only ever in the winning
+//    direction. A trail that can loosen is not a trail.
+void TrailBasketTo(const SBasket &b,const double want,const double R)
+  {
+   int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
+   double pt=SymbolInfoDouble(_Symbol,SYMBOL_POINT);
+   double stops=(double)SymbolInfoInteger(_Symbol,SYMBOL_TRADE_STOPS_LEVEL)*pt;
+   double lvl=NormalizeDouble(want,digits);
+
+   if(g_basketTrail>0.0 && (b.dir>0 ? lvl<=g_basketTrail : lvl>=g_basketTrail)) return;
+   if(b.dir>0 ? lvl>=g_view.bid-stops : lvl<=g_view.ask+stops) return;
+
+   bool moved=false;
+   for(int i=PositionsTotal()-1;i>=0;i--)
+     {
+      ulong tk=PositionGetTicket(i); if(tk==0) continue;
+      if(PositionGetString(POSITION_SYMBOL)!=_Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC)!=InpMagic) continue;
+      double sl=PositionGetDouble(POSITION_SL);
+      double tp=PositionGetDouble(POSITION_TP);
+      if(sl>0.0 && (b.dir>0 ? lvl<=sl+pt : lvl>=sl-pt)) continue;
+      if(ModifySL(tk,lvl,tp)) moved=true;
+     }
+   if(moved)
+     {
+      g_basketTrail=lvl;
+      LogEvent(StringFormat("trail: stop moved to %.5f behind structure at %.2fR",lvl,R));
+     }
+  }
+
 void ManageBasket(const SBasket &b)
   {
    if(b.count==0 || g_basketRisk<=0.0) return;
    double R=b.floatPL/g_basketRisk;
 
-   if(R>=InpBasketTargetR){ CloseBasket(StringFormat("basket target %.2fR",R)); return; }
+   // Past the target, a capped winner is a donated winner. If the trail is
+   // armed the trade is handed to it instead of being closed: the stop is
+   // already at or beyond break-even, so the downside is bounded and the
+   // upside is not. That asymmetry is the only thing that pays for the spread.
+   if(R>=InpBasketTargetR && !(InpRunWinners && InpTrailStructure))
+     { CloseBasket(StringFormat("basket target %.2fR",R)); return; }
 
    // a scalp that has not resolved is dead money — release the risk
    if(InpScalpMode && b.firstTime>0)
@@ -1696,6 +1787,33 @@ void ManageBasket(const SBasket &b)
 
    if((b.dir>0 && g_view.bearChoch) || (b.dir<0 && g_view.bullChoch))
      { CloseBasket("structure shifted against the basket"); return; }
+
+   // INVALIDATION. The trade was taken because price was at a zone that was
+   // supposed to hold. When a candle CLOSES back through that zone the reason
+   // is gone, and holding to the stop is paying full price for a thesis that
+   // has already failed. Cutting here trims the left tail of the distribution.
+   if(InpExitOnInvalid && g_basketZoneTop>g_basketZoneBottom && g_bars>2)
+     {
+      double pad=InpInvalidBufferPct*g_view.avgRange;
+      bool dead=(b.dir>0 ? g_c[1]<g_basketZoneBottom-pad
+                         : g_c[1]>g_basketZoneTop   +pad);
+      if(dead)
+        { CloseBasket(StringFormat("setup invalidated — closed back through the POI at %.2fR",R));
+          return; }
+     }
+
+   // TRAIL BEHIND STRUCTURE. Not a fixed distance — the last swing the market
+   // actually made, which is where the trade stops being right.
+   if(InpTrailStructure && R>=InpTrailStartR)
+     {
+      double swing=(b.dir>0 ? g_view.lastSwingLow : g_view.lastSwingHigh);
+      if(swing>0.0)
+        {
+         double want=(b.dir>0 ? swing-InpTrailBufferPct*g_view.avgRange
+                              : swing+InpTrailBufferPct*g_view.avgRange);
+         TrailBasketTo(b,want,R);
+        }
+     }
 
    int digits=(int)SymbolInfoInteger(_Symbol,SYMBOL_DIGITS);
    double pt=SymbolInfoDouble(_Symbol,SYMBOL_POINT);
@@ -1855,7 +1973,8 @@ void TryEnter(const SBasket &b,const bool isScale)
    req.type=(dir>0?ORDER_TYPE_BUY:ORDER_TYPE_SELL);
    req.price=entry; req.sl=sl; req.tp=tp;
    req.deviation=(ulong)InpDeviationPts; req.magic=(ulong)InpMagic;
-   req.comment="SMC"; req.type_filling=Filling();
+   req.comment=(g_view.modelCode=="" ? "SMC" : g_view.modelCode);
+   req.type_filling=Filling();
 
    if(!Send(req,res))
      {
@@ -1870,9 +1989,15 @@ void TryEnter(const SBasket &b,const bool isScale)
       g_basketRisk=realRisk;                    // R for the whole basket
       g_firstLot=lots;
       g_basketStop=sl;
+      g_basketZoneTop=g_view.zoneTop;           // the thesis, for invalidation
+      g_basketZoneBottom=g_view.zoneBottom;
+      g_basketTrail=0.0;
      }
    g_lastEntry=TimeCurrent();
    g_entries++;
+   g_sumSpread+=MathMax(t.ask-t.bid,0.0);       // what the round trip cost
+   g_sumStop  +=dist;
+   g_nEntries++;
    LogTrade(dir>0?"BUY":"SELL",res.price,sl,tp,g_view.setupRR,lots,realRisk,
             b.count+1,
             StringFormat("%s | quality %.2f (%s) | POI grade %.2f | size x%.2f | htf %.2f | "
@@ -2022,6 +2147,11 @@ void ParamAudit(void)
    d+=AuditD("InpMaxRiskPctHard" ,InpMaxRiskPctHard ,20.0);
    d+=AuditI("InpBreakerMinLosses",InpBreakerMinLosses,3);
    d+=AuditB("InpAutoFitStop"    ,InpAutoFitStop    ,true);
+   d+=AuditD("InpMinStopSpreads" ,InpMinStopSpreads ,4.00);
+   d+=AuditB("InpTrailStructure" ,InpTrailStructure ,true);
+   d+=AuditD("InpTrailStartR"    ,InpTrailStartR    ,1.00);
+   d+=AuditB("InpRunWinners"     ,InpRunWinners     ,true);
+   d+=AuditB("InpExitOnInvalid"  ,InpExitOnInvalid  ,true);
 
    if(d==0)
      {
@@ -2039,7 +2169,7 @@ void SelfTest(void)
   {
    if(!InpSelfTest) return;
    LogEvent("────────── SMC / ICT SELF-TEST ──────────");
-   LogEvent("build: Medula_SMC v5.16  —  if the panel does not read v5.16, MT5 is "
+   LogEvent("build: Medula_SMC v5.17  —  if the panel does not read v5.17, MT5 is "
             "running an older .ex5 and the source was never recompiled.");
    ParamAudit();
    LogEvent(StringFormat("symbol %s  execution timeframe M5  bars loaded %d  (NO INDICATORS)",
@@ -2138,7 +2268,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.16  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.17  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"
@@ -2205,11 +2335,110 @@ int OnInit(void)
    return INIT_SUCCEEDED;
   }
 
+//--- THE ONLY REPORT THAT MATTERS.
+//
+//    Four entry models now compete for the same capital: retrace into a POI,
+//    fresh gap continuation, displacement candle, and order block — each with
+//    sub-classes. Without per-model accounting, tuning any of them is
+//    guesswork: a profitable model and a bleeding one net out to a flat curve
+//    and the log looks the same either way.
+//
+//    Each fill carries its model tag in the deal comment, so the run can be
+//    taken apart afterwards and the question answered directly: which of
+//    these actually earns?
+void Report(void)
+  {
+   if(!HistorySelect(0,TimeCurrent()+1)) return;
+
+   string codes[]; int n=0;
+   double win[],loss[]; int nWin[],nLoss[];
+   ArrayResize(codes,0); ArrayResize(win,0); ArrayResize(loss,0);
+   ArrayResize(nWin,0); ArrayResize(nLoss,0);
+
+   int    tot=0,wins=0,losses=0;
+   double gross=0.0,grossWin=0.0,grossLoss=0.0;
+
+   int deals=HistoryDealsTotal();
+   for(int i=0;i<deals;i++)
+     {
+      ulong tk=HistoryDealGetTicket(i);
+      if(tk==0) continue;
+      if(HistoryDealGetInteger(tk,DEAL_MAGIC)!=InpMagic) continue;
+      if(HistoryDealGetInteger(tk,DEAL_ENTRY)!=DEAL_ENTRY_OUT) continue;
+
+      double net=HistoryDealGetDouble(tk,DEAL_PROFIT)
+                +HistoryDealGetDouble(tk,DEAL_SWAP)
+                +HistoryDealGetDouble(tk,DEAL_COMMISSION);
+      string code=HistoryDealGetString(tk,DEAL_COMMENT);
+      if(code=="") code="(untagged)";
+
+      tot++; gross+=net;
+      if(net>=0.0){ wins++;   grossWin +=net; }
+      else        { losses++; grossLoss+=-net; }
+
+      int at=-1;
+      for(int z=0;z<n;z++) if(codes[z]==code){ at=z; break; }
+      if(at<0)
+        {
+         at=n++;
+         ArrayResize(codes,n); ArrayResize(win,n); ArrayResize(loss,n);
+         ArrayResize(nWin,n);  ArrayResize(nLoss,n);
+         codes[at]=code; win[at]=0.0; loss[at]=0.0; nWin[at]=0; nLoss[at]=0;
+        }
+      if(net>=0.0){ win[at] +=net;  nWin[at]++;  }
+      else        { loss[at]+=-net; nLoss[at]++; }
+     }
+
+   LogEvent("═════════════ RUN REPORT ═════════════");
+   if(tot==0)
+     {
+      LogEvent("no closed trades this run.");
+      LogEvent("══════════════════════════════════════");
+      return;
+     }
+
+   double pf=(grossLoss>0.0 ? grossWin/grossLoss : 0.0);
+   LogEvent(StringFormat("trades %d | won %d (%.0f%%) | lost %d | net %.2f | "
+                         "profit factor %.2f | expectancy %.4f per trade",
+                         tot,wins,100.0*wins/tot,losses,gross,pf,gross/tot));
+   LogEvent(StringFormat("average win %.4f | average loss %.4f | win/loss size ratio %.2f",
+                         (wins  >0 ? grossWin /wins   : 0.0),
+                         (losses>0 ? grossLoss/losses : 0.0),
+                         (losses>0 && wins>0 ? (grossWin/wins)/(grossLoss/losses) : 0.0)));
+
+   // The number that decides whether any of this can work.
+   if(g_nEntries>0)
+     {
+      double avgSpread=g_sumSpread/g_nEntries,avgStop=g_sumStop/g_nEntries;
+      double bite=(avgStop>0.0 ? 100.0*avgSpread/avgStop : 0.0);
+      LogEvent(StringFormat("COST: average spread %.5f against an average stop of %.5f — "
+                            "the spread is %.0f%% of your risk on every trade.",
+                            avgSpread,avgStop,bite));
+      if(bite>=25.0)
+         LogEvent("*** Above ~25% the spread, not the model, decides the outcome. Widen "
+                  "InpMinStopSpreads, or trade a symbol/account with a tighter spread. ***");
+     }
+
+   LogEvent("───────── by entry model ─────────");
+   for(int z=0;z<n;z++)
+     {
+      int    cnt=nWin[z]+nLoss[z];
+      double net=win[z]-loss[z];
+      LogEvent(StringFormat("  %-10s trades %3d | won %3d (%3.0f%%) | net %8.2f | "
+                            "PF %5.2f | expectancy %.4f",
+                            codes[z],cnt,nWin[z],(cnt>0?100.0*nWin[z]/cnt:0.0),net,
+                            (loss[z]>0.0?win[z]/loss[z]:0.0),(cnt>0?net/cnt:0.0)));
+     }
+   LogEvent("(F- prefix = fresh continuation entry, no retrace waited for)");
+   LogEvent("══════════════════════════════════════");
+  }
+
 void OnDeinit(const int reason)
   {
    Comment("");
    ClearObjects();
    LogEvent(StringFormat("stopped (reason %d) — entries this run: %d",reason,g_entries));
+   Report();
    LogClose();
   }
 
@@ -2221,6 +2450,7 @@ void OnTick(void)
    if(b.count==0 && g_basketRisk>0.0)
      {
       g_basketRisk=0.0; g_firstLot=0.0;
+      g_basketZoneTop=0.0; g_basketZoneBottom=0.0; g_basketTrail=0.0;
       ArrayResize(g_partialDone,0); ArrayResize(g_beDone,0);
      }
 

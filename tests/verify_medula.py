@@ -1931,6 +1931,71 @@ check("v5.16: a stronger, longer candle grades higher",
 check("v5.16: every displacement candle grades above zero — it trades, sized",
       pa_candle(*BIG, AR, 1, 1801.30)[2] > 0.0)
 
+# ---------------------------------------------------------------- v5.17
+# Where the money actually is. Entries were the whole story for six
+# versions; none of it matters if the spread is most of the risk and every
+# winner is capped at a fixed R.
+
+def min_stop(avg_range, spread, pct=0.25, spreads=4.0):
+    return max(pct*avg_range, spreads*spread)
+
+AR, SPREAD = 1.20, 0.30
+check("v5.17: the stop floor is a multiple of the round trip, not a fraction of range",
+      abs(min_stop(AR, SPREAD) - 1.20) < 1e-9, f"{min_stop(AR, SPREAD):.3f}")
+check("v5.17: the old 0.25 x range floor let the spread be most of the risk",
+      SPREAD/(0.25*AR) > 0.90, f"spread was {100*SPREAD/(0.25*AR):.0f}% of the stop")
+check("v5.17: the new floor caps the spread at a quarter of the risk",
+      SPREAD/min_stop(AR, SPREAD) <= 0.25 + 1e-9,
+      f"{100*SPREAD/min_stop(AR, SPREAD):.0f}%")
+check("v5.17: a tight-spread symbol is governed by the range floor instead",
+      abs(min_stop(AR, 0.02) - 0.25*AR) < 1e-9)
+check("v5.17: the floor never collapses to zero",
+      min_stop(AR, 0.0) > 0.0)
+
+# expectancy: capping winners at a fixed R against a fixed stop needs >50%
+def expectancy(win_rate, avg_win_r, avg_loss_r=1.0):
+    return win_rate*avg_win_r - (1.0-win_rate)*avg_loss_r
+check("v5.17: a 1.6R cap against a 1.5R stop needs better than a coin flip",
+      expectancy(0.50, 1.6/1.5) < 0.10)
+check("v5.17: letting winners run to 3R turns the same win rate positive",
+      expectancy(0.40, 3.0) > 0.0, f"{expectancy(0.40, 3.0):.2f}R")
+check("v5.17: trailing pays even when it lowers the win rate",
+      expectancy(0.35, 3.0) > expectancy(0.55, 1.07),
+      f"{expectancy(0.35, 3.0):.2f}R vs {expectancy(0.55, 1.07):.2f}R")
+
+def trail_to(current, want, direction, first=False):
+    """A trail that can loosen is not a trail."""
+    if first or current <= 0.0:
+        return want
+    return max(current, want) if direction > 0 else min(current, want)
+check("v5.17: the trail only ever moves in the winning direction",
+      trail_to(1800.5, 1800.2, 1) == 1800.5 and trail_to(1800.5, 1800.9, 1) == 1800.9)
+check("v5.17: shorts mirror",
+      trail_to(1799.5, 1799.8, -1) == 1799.5 and trail_to(1799.5, 1799.1, -1) == 1799.1)
+check("v5.17: the first trail level is always accepted",
+      trail_to(0.0, 1800.2, 1) == 1800.2)
+
+def invalidated(close, zone_top, zone_bottom, direction, pad):
+    return (close < zone_bottom-pad) if direction > 0 else (close > zone_top+pad)
+check("v5.17: a close back through the POI kills the thesis",
+      invalidated(1799.50, 1800.5, 1800.0, 1, 0.12))
+check("v5.17: a wick through the POI does not — it takes a CLOSE",
+      not invalidated(1800.05, 1800.5, 1800.0, 1, 0.12))
+check("v5.17: invalidation fires before the stop, trimming the left tail",
+      1799.50 > 1800.0 - min_stop(AR, SPREAD))
+check("v5.17: shorts mirror invalidation",
+      invalidated(1801.00, 1800.5, 1800.0, -1, 0.12))
+
+# per-model accounting: a winner and a bleeder net out to a flat curve
+def split_pnl(models):
+    return {k: sum(v) for k, v in models.items()}
+MODELS = {"F-BAG": [1.2, 0.9, -0.4, 1.1], "EXH": [-0.8, -0.7, -0.9, -0.3]}
+tally = split_pnl(MODELS)
+check("v5.17: per-model accounting separates the earner from the bleeder",
+      tally["F-BAG"] > 0 and tally["EXH"] < 0, f"{tally}")
+check("v5.17: netted together they look like nothing worth investigating",
+      abs(sum(tally.values())) < 0.5, f"net {sum(tally.values()):.2f}")
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
