@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign in · Haulr</title>
+    <link rel="stylesheet" href="/css/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>"
+    />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap-wide">
+        <a class="brand" href="/"><span class="brand-mark">H</span>Haulr</a>
+        <nav class="nav" id="nav"></nav>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <div class="wrap" style="max-width: 540px">
+        <div class="card" style="padding: 1.75rem">
+          <h1 id="formTitle" style="font-size: 1.7rem">Welcome back</h1>
+          <p class="muted" id="formSubtitle" style="margin-bottom: 1.4rem">
+            Sign in to post a delivery or pick up a job.
+          </p>
+
+          <div id="alert" class="alert alert-error hidden"></div>
+
+          <!-- Account type, registration only -->
+          <div class="field hidden" id="roleField">
+            <span class="label">I want to</span>
+            <div class="choice-grid" style="grid-template-columns: 1fr 1fr">
+              <label class="choice">
+                <input type="radio" name="role" value="customer" checked />
+                <div class="choice-icon">📦</div>
+                <div class="choice-name">Send something</div>
+                <div class="choice-note">Post jobs and choose an operator</div>
+              </label>
+              <label class="choice">
+                <input type="radio" name="role" value="operator" />
+                <div class="choice-icon">🚚</div>
+                <div class="choice-name">Drive and earn</div>
+                <div class="choice-note">Bid on jobs near you</div>
+              </label>
+            </div>
+          </div>
+
+          <form id="authForm" novalidate>
+            <div class="field hidden" id="nameField">
+              <label for="fullName">Full name</label>
+              <input type="text" id="fullName" autocomplete="name" placeholder="Thandi Mokoena" />
+            </div>
+
+            <div class="field">
+              <label for="email">Email</label>
+              <input type="email" id="email" autocomplete="email" placeholder="you@example.com" required />
+            </div>
+
+            <div class="field hidden" id="phoneField">
+              <label for="phone">Mobile number</label>
+              <input type="tel" id="phone" autocomplete="tel" placeholder="+27 82 555 0111" />
+              <div class="hint">Shared with the other party only after a job is agreed.</div>
+            </div>
+
+            <div class="field">
+              <label for="password">Password</label>
+              <input
+                type="password"
+                id="password"
+                autocomplete="current-password"
+                placeholder="••••••••"
+                required
+              />
+              <div class="hint hidden" id="passwordHint">
+                At least 8 characters, with a letter and a number.
+              </div>
+            </div>
+
+            <!-- Operator-only vehicle details -->
+            <div id="vehicleFields" class="hidden">
+              <div class="divider"></div>
+              <div class="section-title">Your vehicle</div>
+
+              <div class="field">
+                <span class="label">Vehicle type</span>
+                <div class="choice-grid" id="vehicleChoices"></div>
+              </div>
+
+              <div class="grid-2">
+                <div class="field">
+                  <label for="vehicleMake">Make</label>
+                  <input type="text" id="vehicleMake" placeholder="Toyota" />
+                </div>
+                <div class="field">
+                  <label for="vehicleModel">Model</label>
+                  <input type="text" id="vehicleModel" placeholder="Hilux" />
+                </div>
+              </div>
+
+              <div class="grid-2">
+                <div class="field">
+                  <label for="vehiclePlate">Number plate</label>
+                  <input type="text" id="vehiclePlate" placeholder="CA 123 456" />
+                </div>
+                <div class="field">
+                  <label for="helpersAvailable">Helpers you can bring</label>
+                  <select id="helpersAvailable">
+                    <option value="0">None — driver only</option>
+                    <option value="1">1 helper</option>
+                    <option value="2">2 helpers</option>
+                    <option value="3">3 helpers</option>
+                    <option value="4">4 helpers</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="licenceNumber">Driver's licence number</label>
+                <input type="text" id="licenceNumber" placeholder="DL-482910" />
+                <div class="hint">
+                  Verified by our team before your first payout. You can start bidding right away.
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="bio">About you <span class="muted">(optional)</span></label>
+                <textarea
+                  id="bio"
+                  maxlength="400"
+                  placeholder="Ten years moving furniture. Blankets, straps and trolleys always on board."
+                ></textarea>
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-accent btn-block btn-lg" id="submitBtn">
+              Sign in
+            </button>
+          </form>
+
+          <div class="divider"></div>
+
+          <p class="center small muted" style="margin: 0">
+            <span id="switchPrompt">New to Haulr?</span>
+            <a href="#" id="switchMode">Create an account</a>
+          </p>
+        </div>
+
+        <div class="card" style="margin-top: 1rem; background: var(--surface-2)">
+          <div class="section-title">Demo accounts</div>
+          <p class="small muted" style="margin-bottom: 0.6rem">
+            The seeded database ships with these. Password for all of them is
+            <code class="mono bold">haulr1234</code>.
+          </p>
+          <div class="row">
+            <button class="btn btn-quiet btn-sm" data-demo="thandi@example.com">
+              📦 Customer — Thandi
+            </button>
+            <button class="btn btn-quiet btn-sm" data-demo="nomsa@example.com">
+              🛻 Operator — Nomsa (bakkie)
+            </button>
+            <button class="btn btn-quiet btn-sm" data-demo="ahmed@example.com">
+              🚚 Operator — Ahmed (4-ton)
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script src="/js/app.js"></script>
+    <script src="/js/auth-page.js"></script>
+  </body>
+</html>

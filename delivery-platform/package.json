@@ -1,0 +1,24 @@
+{
+  "name": "haulr",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Haulr - an on-demand delivery marketplace where customers name their price for anything from a small parcel to a full house move, and nearby operators bid for the job.",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "seed": "node server/seed.js",
+    "reset": "node -e \"require('fs').rmSync(process.env.DB_FILE || './data/haulr.db', {force:true})\" && npm run seed"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "leaflet": "^1.9.4",
+    "ws": "^8.18.3"
+  }
+}

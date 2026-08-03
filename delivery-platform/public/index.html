@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Haulr — name your price, move anything</title>
+    <meta
+      name="description"
+      content="Haulr connects you with nearby vehicles for anything from a documents run to a full house move. You name the price, operators bid, and you track the whole trip live."
+    />
+    <link rel="stylesheet" href="/css/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>"
+    />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap-wide">
+        <a class="brand" href="/"><span class="brand-mark">H</span>Haulr</a>
+        <nav class="nav" id="nav"></nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="wrap">
+          <div class="hero-grid">
+            <div>
+              <span class="eyebrow">📍 Live in your city</span>
+              <h1>Name your price.<br />Move anything.</h1>
+              <p class="lead">
+                One envelope or an entire house. Post what you need moved and what you want to
+                pay — nearby operators send you their offers, you pick one, and you watch the
+                vehicle on the map the whole way.
+              </p>
+              <div class="row" style="margin-top: 1.6rem">
+                <a href="/auth.html?mode=register&amp;role=customer" class="btn btn-accent btn-lg"
+                  >Send something</a
+                >
+                <a href="/auth.html?mode=register&amp;role=operator" class="btn btn-ghost btn-lg"
+                  >Drive and earn</a
+                >
+              </div>
+              <div class="row" style="margin-top: 1.6rem; gap: 1.75rem">
+                <div>
+                  <div class="bold" style="font-size: 1.35rem">No surge pricing</div>
+                  <div class="muted small">You set the fare, not an algorithm</div>
+                </div>
+                <div>
+                  <div class="bold" style="font-size: 1.35rem">Live GPS</div>
+                  <div class="muted small">Second-by-second, pickup to door</div>
+                </div>
+                <div>
+                  <div class="bold" style="font-size: 1.35rem">15 kg → 8 tons</div>
+                  <div class="muted small">Bikes, vans, bakkies and trucks</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="hero-card">
+              <div id="heroMap" class="map map-flush" style="height: 330px"></div>
+              <div style="padding: 1.1rem">
+                <div class="row-between" style="margin-bottom: 0.6rem">
+                  <span class="section-title" style="margin: 0">Vehicles near you</span>
+                  <span class="badge badge-green"
+                    ><span class="dot dot-pulse"></span><span id="heroCount">Loading…</span></span
+                  >
+                </div>
+                <p class="muted small" style="margin: 0">
+                  Operators go on duty and their position streams straight to this map — the same
+                  feed you get once your job is on the road.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="how">
+        <div class="wrap">
+          <h2>How it works</h2>
+          <p class="lead" style="margin-bottom: 2.2rem">
+            Four steps from "this couch has to move" to "it's in the lounge".
+          </p>
+          <div class="steps-grid">
+            <div class="step-item">
+              <h3>Post the job</h3>
+              <p class="muted">
+                Drop a pickup and drop-off pin, describe the load, pick a vehicle size and say how
+                many helpers you need.
+              </p>
+            </div>
+            <div class="step-item">
+              <h3>Name your price</h3>
+              <p class="muted">
+                We show a suggested range based on distance, vehicle and stairs. Offer what feels
+                fair — nothing is locked in.
+              </p>
+            </div>
+            <div class="step-item">
+              <h3>Pick your operator</h3>
+              <p class="muted">
+                Nearby operators accept your price or counter with their own. Compare ratings,
+                vehicles and arrival times, then choose.
+              </p>
+            </div>
+            <div class="step-item">
+              <h3>Track it live</h3>
+              <p class="muted">
+                Follow the vehicle on the map, chat with your operator, and get a live ETA that
+                updates as they drive.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-alt" id="vehicles">
+        <div class="wrap">
+          <div class="row-between" style="margin-bottom: 1.5rem">
+            <div>
+              <h2 style="margin-bottom: 0.25rem">Every load has a vehicle</h2>
+              <p class="muted" style="margin: 0">
+                From a single envelope to a three-bedroom house.
+              </p>
+            </div>
+            <a href="/auth.html?mode=register" class="btn btn-ghost">Get a price</a>
+          </div>
+          <div class="vclass-strip" id="vehicleStrip"></div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="wrap">
+          <div class="feature-grid">
+            <div class="feature">
+              <div class="feature-icon">🛰️</div>
+              <h3>Tracking that actually tracks</h3>
+              <p class="muted">
+                Your operator's phone streams its GPS fix to you continuously. You see the vehicle
+                move, the distance left, and an ETA recalculated from their real speed.
+              </p>
+            </div>
+            <div class="feature">
+              <div class="feature-icon">💬</div>
+              <h3>Talk to your driver</h3>
+              <p class="muted">
+                Every job has a chat thread. Gate codes, "I'm at the blue door", running five
+                minutes late — all in one place, kept with the job.
+              </p>
+            </div>
+            <div class="feature">
+              <div class="feature-icon">💪</div>
+              <h3>Helpers on request</h3>
+              <p class="muted">
+                Add loaders to any job. We price the stairs too — a third-floor walk-up costs more
+                than a ground-floor garage, and everyone knows that up front.
+              </p>
+            </div>
+            <div class="feature">
+              <div class="feature-icon">⭐</div>
+              <h3>Ratings both ways</h3>
+              <p class="muted">
+                Customers rate operators, operators rate customers. Ratings ride along on every
+                offer so you know who is turning up.
+              </p>
+            </div>
+            <div class="feature">
+              <div class="feature-icon">🧾</div>
+              <h3>Price before you commit</h3>
+              <p class="muted">
+                A transparent breakdown — base fare, distance, helpers, stairs — then you decide
+                what to offer. No surge, no surprise line items at the door.
+              </p>
+            </div>
+            <div class="feature">
+              <div class="feature-icon">🔐</div>
+              <h3>Details stay private</h3>
+              <p class="muted">
+                Phone numbers are only exchanged once you have picked an operator. Browsing the
+                jobs board never exposes a customer's contact details.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-alt" id="drive">
+        <div class="wrap">
+          <div class="hero-grid">
+            <div>
+              <span class="eyebrow">🚚 For operators</span>
+              <h2>Your vehicle, your prices, your hours</h2>
+              <p class="lead">
+                Go on duty when it suits you. See every open job near you with the customer's
+                offer already on it — take it as-is or counter with your number. No forced
+                dispatch, no penalty for passing on a job.
+              </p>
+              <ul class="stack muted" style="padding-left: 1.1rem">
+                <li>Jobs filtered to what your vehicle can actually carry</li>
+                <li>Distance to pickup and a suggested fare on every card</li>
+                <li>Earnings and rating tracked in your dashboard</li>
+                <li>One tap starts your GPS feed to the customer</li>
+              </ul>
+              <a
+                href="/auth.html?mode=register&amp;role=operator"
+                class="btn btn-accent btn-lg"
+                style="margin-top: 1rem"
+                >Register your vehicle</a
+              >
+            </div>
+            <div class="card">
+              <div class="section-title">Suggested fare, worked example</div>
+              <div id="exampleQuote" class="stack"></div>
+              <p class="muted tiny" style="margin: 0.9rem 0 0">
+                Guidance only. Operators bid what they like and customers pay what they agree to.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap">
+        <div class="row-between" style="align-items: flex-start; gap: 2rem">
+          <div style="max-width: 34ch">
+            <a class="brand" href="/"><span class="brand-mark">H</span>Haulr</a>
+            <p style="margin-top: 0.7rem">
+              An on-demand delivery and moving marketplace. Customers name a price, operators bid,
+              everyone watches the same map.
+            </p>
+          </div>
+          <div>
+            <div class="section-title" style="color: #7c88a0">Customers</div>
+            <div class="stack">
+              <a href="/auth.html?mode=register&amp;role=customer">Create an account</a>
+              <a href="/#how">How it works</a>
+              <a href="/#vehicles">Vehicle sizes</a>
+            </div>
+          </div>
+          <div>
+            <div class="section-title" style="color: #7c88a0">Operators</div>
+            <div class="stack">
+              <a href="/auth.html?mode=register&amp;role=operator">Register a vehicle</a>
+              <a href="/#drive">Driving with Haulr</a>
+              <a href="/auth.html">Operator sign in</a>
+            </div>
+          </div>
+        </div>
+        <div class="divider" style="background: #26324a; margin: 1.8rem 0 1rem"></div>
+        <div class="tiny">Demo application. Map data © OpenStreetMap contributors.</div>
+      </div>
+    </footer>
+
+    <script src="/vendor/leaflet/leaflet.js"></script>
+    <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+    <script src="/js/app.js"></script>
+    <script src="/js/map.js"></script>
+    <script src="/js/landing.js"></script>
+  </body>
+</html>
