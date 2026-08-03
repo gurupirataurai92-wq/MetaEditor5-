@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.15 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.16 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.15"
+#property version   "5.16"
 
 //============================== INPUTS ==============================
 
@@ -179,8 +179,7 @@ input group "Fair Value Gaps (§3)"
 input bool   InpUseFVG          = true;    // Trade FVG returns
 input int    InpMaxFVGs         = 40;      // FVGs tracked
 input int    InpFvgMaxAgeBars   = 200;     // Forget FVGs older than this
-input double InpFvgMinPct       = 0.06;    // Gap must be >= this share of avg range
-input double InpFvgMinSpreads   = 1.00;    // ...and >= this many spreads (the real floor)
+input double InpFvgMinPct       = 0.02;    // Gap must be >= this share of avg range
 input bool   InpUseVolumeImb    = true;    // Also track 2-candle body gaps (volume imbalance)
 input double InpFvgFillPct      = 50.0;    // Reported as consumed past this % (CE)
 input bool   InpUseInversionFvg = true;    // A violated gap inverts and keeps trading (IFVG)
@@ -198,6 +197,21 @@ input bool   InpBestPoi         = true;    // Enter the best-graded POI, not the
 //    is tradeable on the candle that follows it, from the continuation side,
 //    with the stop still beyond the gap. This applies to ordinary fair value
 //    gaps as much as to breakaway gaps.
+//--- §3c PRICE ACTION — THE CANDLE ITSELF.
+//    A fair value gap needs three candles to line up before it exists. Price
+//    action does not wait for that. A candle with a real body that travels a
+//    real distance IS the displacement, whether or not the two candles either
+//    side happen to leave a measurable gap between them — and every small gap
+//    that falls under the imbalance test still shows up here, as the candle
+//    that made it. This is the reading a person does off the chart: the
+//    movement of the candlesticks, not a zone drawn around them.
+input group "Price Action Candles (§3c)"
+input bool   InpTradePaCandles  = true;    // Trade displacement candles directly (no gap needed)
+input double InpPaBodyPct       = 0.55;    // Body must be this share of the candle range
+input double InpPaRangeMult     = 0.90;    // Candle range >= this x average range
+input int    InpPaMaxAge        = 6;       // A momentum candle stays tradeable this many bars
+input double InpPaMaxRun        = 2.50;    // Stop chasing once price has run this far past it
+
 input group "Fresh Gap Continuation (§3b)"
 input bool   InpTradeFreshGaps  = true;    // Trade the candle after a gap prints (no retrace needed)
 input int    InpFreshGapMaxAge  = 5;       // A gap counts as fresh for this many bars
@@ -280,6 +294,7 @@ input group "Risk"
 input double InpRiskPct         = 1.0;     // Risk per trade (% equity)
 input double InpSlBufferPct     = 0.25;    // Stop beyond the sweep by this x avg range
 input double InpTargetMinRR     = 1.20;    // Target is never set closer than this R
+input double InpMinTargetSpreads= 2.00;    // Target stretched to at least this many spreads
 input double InpTpRMultiple     = 3.0;     // Target when no liquidity pool is in range
 input double InpDailyLossPct    = 5.0;     // Daily loss limit (%)
 input int    InpBreakerMinLosses= 3;       // Losing trades before the daily limit latches
@@ -799,13 +814,15 @@ void BuildFVGs(void)
    ArrayResize(g_fvgs,0);
    if(!InpUseFVG || g_view.avgRange<=0.0) return;
 
-   // The only honest floor on a gap is the cost of crossing it. A gap
-   // narrower than the spread cannot be scalped no matter how real it is;
-   // above that line, size is a matter of GRADE, not of admission. The old
-   // 0.25 x avg-range floor was a confidence gate wearing a filter's coat —
-   // it deleted every small imbalance before anything could price it.
-   double minGap=MathMax(InpFvgMinPct*g_view.avgRange,
-                         InpFvgMinSpreads*MathMax(g_view.ask-g_view.bid,0.0));
+   // v5.12 put a spread floor here and that was wrong. The spread decides
+   // whether a TARGET pays, not whether a gap EXISTS. A ten-cent imbalance on
+   // gold is a real imbalance; it is entered at the gap and exited at a target
+   // one-and-a-bit R away, and that target clears the spread easily. Judging
+   // the gap by the spread deleted exactly the small gaps this EA is supposed
+   // to scalp. The viability test belongs on the target, and it is there now.
+   //
+   // What remains is a sanity floor: a gap must be big enough to be a gap.
+   double minGap=MathMax(InpFvgMinPct*g_view.avgRange,_Point);
 
    // NEWEST FIRST. The book has a fixed number of slots; filling it from the
    // oldest end meant a busy session spent them on 200-bar-old gaps and threw
@@ -1199,6 +1216,45 @@ bool EvaluateDirection(const int dir,SSetup &s)
          freshEntry=true;
         }
 
+   //---- §3c PRICE ACTION: the candle itself is the setup.
+   //
+   //     Everything above needs a *zone* — three candles that leave a gap, or
+   //     an order block. A displacement candle needs neither. If a candle has
+   //     a real body and covers real distance, that IS the move, and the trade
+   //     is either the pullback into it or the continuation off it. Small gaps
+   //     the imbalance test cannot see are caught here as the candle that made
+   //     them, which is the whole point.
+   //
+   //     Zone: the bullish candle runs from its LOW to its CLOSE, so the stop
+   //     lands under the wick that made it rather than inside the body.
+   bool paEntry=false;
+   if(InpTradePaCandles && g_view.avgRange>0.0)
+      for(int i=1;i<=InpPaMaxAge && i<g_bars;i++)
+        {
+         double rng=g_h[i]-g_l[i];
+         if(rng<=0.0) continue;
+         double body=MathAbs(g_c[i]-g_o[i]);
+         if(body<InpPaBodyPct*rng)              continue;   // no conviction in the candle
+         if(rng <InpPaRangeMult*g_view.avgRange)continue;   // no distance covered
+         if((g_c[i]>g_o[i] ? 1 : -1)!=dir)      continue;
+
+         double ztop=(dir>0 ? g_c[i] : g_h[i]);
+         double zbot=(dir>0 ? g_l[i] : g_c[i]);
+         if(ztop<=zbot) continue;
+
+         double run=(dir>0 ? px-(ztop+buf) : (zbot-buf)-px);
+         if(run>InpPaMaxRun*g_view.avgRange) continue;      // ran away, let it come back
+         if(run<=0.0 && (px>ztop+buf || px<zbot-buf)) continue;  // not at the candle at all
+
+         double pg=MClamp(0.25+0.35*(body/rng)
+                          +0.30*MClamp((rng/g_view.avgRange-1.0)/1.5,0.0,1.0),0.05,1.0);
+         double sc=PoiScore(pg,px,ztop,zbot,dir);
+         if(sc<=bestScore) continue;
+         bestScore=sc; zt=ztop; zb=zbot; poiGrade=pg;
+         src="displacement candle";
+         paEntry=true; freshEntry=(run>0.0);
+        }
+
    if(zt<=0.0) return false;                 // nothing to trade — the only veto
 
    //---- CONFLUENCE. Each term is graded 0..1; none of them can return false.
@@ -1306,6 +1362,16 @@ bool EvaluateDirection(const int dir,SSetup &s)
       tp=(dir>0 ? px+rr*risk : px-rr*risk);
      }
 
+   // THIS is where the spread belongs. A target inside the cost of the round
+   // trip is not a target — but the answer is to push it out, not to refuse
+   // the setup. Judging the ENTRY by the spread is what deleted the small gaps.
+   double sprd=MathMax(g_view.ask-g_view.bid,0.0);
+   if(sprd>0.0 && MathAbs(tp-px)<InpMinTargetSpreads*sprd)
+     {
+      tp=(dir>0 ? px+InpMinTargetSpreads*sprd : px-InpMinTargetSpreads*sprd);
+      rr=MathAbs(tp-px)/risk;
+     }
+
    if(freshEntry)             s.model=src+" continuation";    // §3b, no retrace waited for
    else if(sweepFresh && mssFresh) s.model="sweep + MSS + "+src;  // full ICT reversal
    else if(mssFresh)          s.model="MSS + "+src;           // shift into the POI
@@ -1321,6 +1387,7 @@ bool EvaluateDirection(const int dir,SSetup &s)
    if(g_view.inKillzone)tags+="KZ ";
    if(gradeScore >=0.55)tags+="A+POI ";
    if(freshEntry)       tags+="FRESH ";
+   if(paEntry)          tags+="PA ";
    if(tags=="") tags="bare POI";
 
    s.dir=dir; s.zoneTop=zt; s.zoneBottom=zb;
@@ -1930,8 +1997,12 @@ void ParamAudit(void)
   {
    int d=0;
    d+=AuditB("InpTakeEveryPOI"   ,InpTakeEveryPOI   ,true);
-   d+=AuditD("InpFvgMinPct"      ,InpFvgMinPct      ,0.06);
-   d+=AuditD("InpFvgMinSpreads"  ,InpFvgMinSpreads  ,1.00);
+   d+=AuditD("InpFvgMinPct"      ,InpFvgMinPct      ,0.02);
+   d+=AuditD("InpMinTargetSpreads",InpMinTargetSpreads,2.00);
+   d+=AuditB("InpTradePaCandles" ,InpTradePaCandles ,true);
+   d+=AuditD("InpPaBodyPct"      ,InpPaBodyPct      ,0.55);
+   d+=AuditD("InpPaRangeMult"    ,InpPaRangeMult    ,0.90);
+   d+=AuditI("InpPaMaxAge"       ,InpPaMaxAge       ,6);
    d+=AuditI("InpMaxFVGs"        ,InpMaxFVGs        ,40);
    d+=AuditB("InpUseVolumeImb"   ,InpUseVolumeImb   ,true);
    d+=AuditB("InpUseInversionFvg",InpUseInversionFvg,true);
@@ -1968,7 +2039,7 @@ void SelfTest(void)
   {
    if(!InpSelfTest) return;
    LogEvent("────────── SMC / ICT SELF-TEST ──────────");
-   LogEvent("build: Medula_SMC v5.15  —  if the panel does not read v5.15, MT5 is "
+   LogEvent("build: Medula_SMC v5.16  —  if the panel does not read v5.16, MT5 is "
             "running an older .ex5 and the source was never recompiled.");
    ParamAudit();
    LogEvent(StringFormat("symbol %s  execution timeframe M5  bars loaded %d  (NO INDICATORS)",
@@ -2004,11 +2075,15 @@ void SelfTest(void)
                          "(a basket cap below the per-trade ceiling would refuse trades the "
                          "ceiling had just approved, so the larger of the two governs)",
                          InpMaxRiskPctHard,MathMax(InpMaxBasketRiskPct,InpMaxRiskPctHard)));
-   LogEvent(StringFormat("smallest gap the EA will see: %.5f  (%.2f x avg range, or %.1f spreads "
-                         "— whichever is larger). Below that a gap cannot pay its own crossing.",
-                         MathMax(InpFvgMinPct*g_view.avgRange,
-                                 InpFvgMinSpreads*MathMax(g_view.ask-g_view.bid,0.0)),
-                         InpFvgMinPct,InpFvgMinSpreads));
+   LogEvent(StringFormat("smallest gap the EA will see: %.5f (%.2f x avg range). The spread "
+                         "no longer filters ENTRIES — it only stretches the target, so small "
+                         "gaps are detected and traded.",
+                         MathMax(InpFvgMinPct*g_view.avgRange,_Point),InpFvgMinPct));
+   if(InpTradePaCandles)
+      LogEvent(StringFormat("price action (§3c): ON — any candle with a body >= %.0f%% of its "
+                            "range covering >= %.2f x avg range is a setup on its own, gap or "
+                            "no gap, for %d bars.",
+                            InpPaBodyPct*100.0,InpPaRangeMult,InpPaMaxAge));
    if(InpTradeFreshGaps)
       LogEvent(StringFormat("fresh gaps: ON — any gap (breakaway or plain FVG) under %d bars old "
                             "trades on the following candle, no retrace required, "
@@ -2063,7 +2138,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.15  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.16  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"

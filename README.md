@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.14, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.16, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -449,3 +449,39 @@ Executing everything is **not** sizing everything alike. A bare, low-grade POI s
 `InpMinSizeFactor` (40%) of planned risk while a full breakaway-gap-plus-sweep-plus-MSS setup
 earns 100%. That is the whole design: the edge is in taking every properly-sized setup, not in
 waiting for certainty.
+
+
+### v5.16 — price action, and undoing a bad filter
+
+**The spread floor from v5.12 was wrong, and it was the thing still deleting small gaps.** The
+reasoning behind it — "a gap narrower than the spread cannot be scalped" — confuses two
+different things. The spread decides whether a **target** pays. It has nothing to do with
+whether a **gap exists**. A ten-cent imbalance on gold is a real imbalance: it is entered at
+the gap and exited at a target 1.2R away, and *that* clears the spread easily. Judging the
+entry by the spread deleted precisely the setups this EA is supposed to scalp.
+
+The test belongs on the target and it is there now — and it **stretches** rather than refuses,
+like every other target rule in this EA:
+
+| | v5.12 | v5.16 |
+|---|---|---|
+| Gap detection floor | `max(0.06 × avgRange, 1 spread)` | `max(0.02 × avgRange, 1 point)` |
+| Spread's role | filtered **entries** | stretches the **target** (`InpMinTargetSpreads`, 2.0) |
+
+On gold with a 0.30 spread that is the difference between a 0.30 floor and a **0.03** floor.
+
+**§3c — the candle itself.** A fair value gap needs three candles to line up before it exists.
+Price action does not wait for that. Any candle whose body is ≥ `InpPaBodyPct` (55%) of its
+range and which covers ≥ `InpPaRangeMult` (0.90) × the average range **is a setup on its own,
+gap or no gap**, for `InpPaMaxAge` (6) bars — tradeable both as a pullback into it and as a
+continuation off it. Every small gap that falls under the imbalance test still shows up here,
+as the candle that made it.
+
+The zone runs from the candle's **low to its close** (bullish), so the stop sits under the
+wick that made the move rather than inside the body. Grade comes from body share and distance
+covered, so a clean long candle outranks a scrappy one, and these fills are tagged **`PA`**
+and named `displacement candle continuation`.
+
+That is now four independent ways into the same trade — retrace into a POI, fresh gap
+continuation (§3b), displacement candle (§3c), and order block — all scored against each other
+by quality per unit of risk, with the best one taken.

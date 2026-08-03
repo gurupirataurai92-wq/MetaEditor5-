@@ -1848,6 +1848,89 @@ check("v5.14: a high-grade setup still earns the full allowance",
 check("v5.14: executing everything never means sizing everything the same",
       size_factor(0.85) > size_factor(0.15))
 
+# ---------------------------------------------------------------- v5.16
+# The spread judges the TARGET, not the entry. v5.12 put a spread floor on
+# gap detection and it deleted exactly the small gaps this EA scalps.
+
+def min_gap_v516(avg_range, point=0.01, min_pct=0.02):
+    return max(min_pct*avg_range, point)
+
+AR, SPREAD = 1.50, 0.30
+check("v5.16: a ten-cent imbalance on gold is now detected",
+      0.10 >= min_gap_v516(AR), f"floor {min_gap_v516(AR):.3f}")
+check("v5.16: the spread no longer filters detection",
+      min_gap_v516(AR) < SPREAD)
+check("v5.16: the floor is still a real floor — a zero-width 'gap' is not a gap",
+      min_gap_v516(AR) > 0.0)
+check("v5.16: v5.12's spread floor would have deleted that same imbalance",
+      0.10 < max(0.06*AR, 1.0*SPREAD))
+
+def target_after_spread(px, tp, risk, direction, spread,
+                        min_rr=1.20, min_spreads=2.0):
+    rr = abs(tp-px)/risk
+    if rr < min_rr:
+        rr = min_rr
+        tp = px + direction*rr*risk
+    if spread > 0.0 and abs(tp-px) < min_spreads*spread:
+        tp = px + direction*min_spreads*spread
+        rr = abs(tp-px)/risk
+    return tp, rr
+
+tp_s, rr_s = target_after_spread(1800.0, 1800.05, 0.05, 1, 0.30)
+check("v5.16: a target inside the spread is pushed out, not refused",
+      abs(tp_s-1800.0) >= 2.0*0.30 - 1e-9, f"tp {tp_s:.3f}")
+check("v5.16: pushing the target out raises R, it never cancels the trade",
+      rr_s >= 1.20 - 1e-9)
+check("v5.16: a target already clear of the spread is left alone",
+      abs(target_after_spread(1800.0, 1802.0, 1.0, 1, 0.30)[0] - 1802.0) < 1e-9)
+check("v5.16: shorts mirror",
+      target_after_spread(1800.0, 1799.95, 0.05, -1, 0.30)[0] <= 1800.0 - 2.0*0.30 + 1e-9)
+
+# §3c: the candle itself is the setup
+def pa_candle(o, h, l, c, avg_range, direction, px, buf=0.25,
+              body_pct=0.55, range_mult=0.90, max_run=2.50):
+    rng = h-l
+    if rng <= 0:
+        return None
+    body = abs(c-o)
+    if body < body_pct*rng or rng < range_mult*avg_range:
+        return None
+    if (1 if c > o else -1) != direction:
+        return None
+    ztop, zbot = (c, l) if direction > 0 else (h, c)
+    if ztop <= zbot:
+        return None
+    run = (px-(ztop+buf*avg_range)) if direction > 0 else ((zbot-buf*avg_range)-px)
+    if run > max_run*avg_range:
+        return None
+    if run <= 0.0 and (px > ztop+buf*avg_range or px < zbot-buf*avg_range):
+        return None
+    grade = mclamp(0.25 + 0.35*(body/rng)
+                   + 0.30*mclamp((rng/avg_range-1.0)/1.5, 0.0, 1.0), 0.05, 1.0)
+    return ztop, zbot, grade
+
+AR = 1.0
+BIG = (1800.0, 1801.30, 1799.90, 1801.20)   # o,h,l,c — strong bullish, no gap needed
+check("v5.16: a displacement candle is a setup with no gap at all",
+      pa_candle(*BIG, AR, 1, 1801.30) is not None)
+check("v5.16: the zone runs low-to-close, so the stop sits under the wick",
+      pa_candle(*BIG, AR, 1, 1801.30)[1] == 1799.90)
+check("v5.16: a doji is not a displacement candle",
+      pa_candle(1800.0, 1801.3, 1799.9, 1800.05, AR, 1, 1800.5) is None)
+check("v5.16: a tiny candle is not a displacement candle however clean its body",
+      pa_candle(1800.0, 1800.10, 1799.99, 1800.09, AR, 1, 1800.10) is None)
+check("v5.16: a bullish candle is not a short setup",
+      pa_candle(*BIG, AR, -1, 1801.30) is None)
+check("v5.16: price that has run far past the candle is not chased",
+      pa_candle(*BIG, AR, 1, 1805.00) is None)
+check("v5.16: the pullback into the candle is a setup too",
+      pa_candle(*BIG, AR, 1, 1800.60) is not None)
+check("v5.16: a stronger, longer candle grades higher",
+      pa_candle(1800.0, 1802.0, 1799.95, 1801.95, AR, 1, 1802.0)[2] >
+      pa_candle(*BIG, AR, 1, 1801.30)[2])
+check("v5.16: every displacement candle grades above zero — it trades, sized",
+      pa_candle(*BIG, AR, 1, 1801.30)[2] > 0.0)
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
