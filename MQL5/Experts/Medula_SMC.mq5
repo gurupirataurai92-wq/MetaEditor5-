@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.14 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.15 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.14"
+#property version   "5.15"
 
 //============================== INPUTS ==============================
 
@@ -1895,10 +1895,82 @@ bool Analyse(void)
 
 //======================== SELF-TEST & PANEL =========================
 
+//--- PARAMETER AUDIT.
+//
+//    A saved .set file silently overrides the build defaults for every input
+//    that already existed under the same name. It happened once before, between
+//    v4.10 and v5.00: the tester reloaded InpHtfMinAgreement=0.34 and friends
+//    over a build whose defaults had all been relaxed, and the EA idled for a
+//    whole session while the code on disk said otherwise.
+//
+//    Recompiling cannot fix that, because the .set is applied AFTER the build.
+//    So the EA now states what is actually in force and says plainly when it
+//    does not match the build it was compiled from.
+int AuditD(const string name,const double have,const double want)
+  {
+   if(MathAbs(have-want)<1e-9) return 0;
+   LogEvent(StringFormat("  *** %-20s = %-10.4f  build ships %.4f",name,have,want));
+   return 1;
+  }
+int AuditI(const string name,const int have,const int want)
+  {
+   if(have==want) return 0;
+   LogEvent(StringFormat("  *** %-20s = %-10d  build ships %d",name,have,want));
+   return 1;
+  }
+int AuditB(const string name,const bool have,const bool want)
+  {
+   if(have==want) return 0;
+   LogEvent(StringFormat("  *** %-20s = %-10s  build ships %s",name,
+                         (have?"true":"false"),(want?"true":"false")));
+   return 1;
+  }
+
+void ParamAudit(void)
+  {
+   int d=0;
+   d+=AuditB("InpTakeEveryPOI"   ,InpTakeEveryPOI   ,true);
+   d+=AuditD("InpFvgMinPct"      ,InpFvgMinPct      ,0.06);
+   d+=AuditD("InpFvgMinSpreads"  ,InpFvgMinSpreads  ,1.00);
+   d+=AuditI("InpMaxFVGs"        ,InpMaxFVGs        ,40);
+   d+=AuditB("InpUseVolumeImb"   ,InpUseVolumeImb   ,true);
+   d+=AuditB("InpUseInversionFvg",InpUseInversionFvg,true);
+   d+=AuditB("InpFvgTargetPull"  ,InpFvgTargetPull  ,true);
+   d+=AuditB("InpBestPoi"        ,InpBestPoi        ,true);
+   d+=AuditB("InpTradeFreshGaps" ,InpTradeFreshGaps ,true);
+   d+=AuditI("InpFreshGapMaxAge" ,InpFreshGapMaxAge ,5);
+   d+=AuditD("InpFreshGapMaxRun" ,InpFreshGapMaxRun ,2.50);
+   d+=AuditB("InpFreshGapSkipExh",InpFreshGapSkipExh,false);
+   d+=AuditI("InpEntrySpacingSec",InpEntrySpacingSec,0);
+   d+=AuditD("InpQualityFloor"   ,InpQualityFloor   ,0.00);
+   d+=AuditD("InpFvgGradeFloor"  ,InpFvgGradeFloor  ,0.00);
+   d+=AuditD("InpMinSizeFactor"  ,InpMinSizeFactor  ,0.40);
+   d+=AuditD("InpWeightPoiGrade" ,InpWeightPoiGrade ,0.20);
+   d+=AuditI("InpMaxBasketTrades",InpMaxBasketTrades,6);
+   d+=AuditD("InpScaleMinSpacing",InpScaleMinSpacing,0.25);
+   d+=AuditD("InpMaxRiskPctHard" ,InpMaxRiskPctHard ,20.0);
+   d+=AuditI("InpBreakerMinLosses",InpBreakerMinLosses,3);
+   d+=AuditB("InpAutoFitStop"    ,InpAutoFitStop    ,true);
+
+   if(d==0)
+     {
+      LogEvent("parameter audit: CLEAN — every input matches this build.");
+      return;
+     }
+   LogEvent(StringFormat("*** PARAMETER AUDIT: %d INPUT%s ABOVE DO NOT MATCH THIS BUILD ***",
+                         d,(d==1?"":"S")));
+   LogEvent("*** A saved .set is being applied over the compiled defaults. Recompiling ***");
+   LogEvent("*** cannot fix this — the .set loads afterwards. In the Strategy Tester    ***");
+   LogEvent("*** Inputs tab press Reset/Default (or delete the saved set), then re-run. ***");
+  }
+
 void SelfTest(void)
   {
    if(!InpSelfTest) return;
    LogEvent("────────── SMC / ICT SELF-TEST ──────────");
+   LogEvent("build: Medula_SMC v5.15  —  if the panel does not read v5.15, MT5 is "
+            "running an older .ex5 and the source was never recompiled.");
+   ParamAudit();
    LogEvent(StringFormat("symbol %s  execution timeframe M5  bars loaded %d  (NO INDICATORS)",
                          _Symbol,g_bars));
    LogEvent(StringFormat("average range %.5f  spread %.0f pts",g_view.avgRange,g_view.spreadPts));
@@ -1991,7 +2063,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.14  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.15  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"
