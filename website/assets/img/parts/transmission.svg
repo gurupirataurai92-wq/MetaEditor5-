@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" role="img" aria-label="Transmission parts illustration">
+  <defs>
+    <linearGradient id="pg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d8f8e"/><stop offset="1" stop-color="#065453"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="500" fill="url(#pg)"/>
+  <g opacity=".16" stroke="#fff" stroke-width="2" fill="none">
+    <circle cx="140" cy="96" r="70"/><circle cx="690" cy="420" r="110"/>
+    <circle cx="660" cy="90" r="42"/>
+  </g>
+  <g transform="translate(400 236)" fill="none" stroke="#ffffff" stroke-width="14"
+     stroke-linecap="round" stroke-linejoin="round" opacity=".95">
+    <circle cx="-46" cy="-30" r="52"/><circle cx="56" cy="46" r="40"/>
+    <path d="M-46 -30 l102 76"/>
+    <path d="M-46 -104 v-22 M-46 44 v22 M-120 -30 h-22 M28 -30 h22"/>
+  </g>
+  <text x="400" y="432" text-anchor="middle" font-family="Trebuchet MS, Segoe UI, sans-serif"
+        font-size="26" fill="#ffffff" opacity=".8" letter-spacing="5">TRANSMISSION</text>
+</svg>

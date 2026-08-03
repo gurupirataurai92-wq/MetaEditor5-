@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" role="img" aria-label="Body parts illustration">
+  <defs>
+    <linearGradient id="pg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#d2582a"/><stop offset="1" stop-color="#8a3213"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="500" fill="url(#pg)"/>
+  <g opacity=".16" stroke="#fff" stroke-width="2" fill="none">
+    <circle cx="140" cy="96" r="70"/><circle cx="690" cy="420" r="110"/>
+    <circle cx="660" cy="90" r="42"/>
+  </g>
+  <g transform="translate(400 236)" fill="none" stroke="#ffffff" stroke-width="14"
+     stroke-linecap="round" stroke-linejoin="round" opacity=".95">
+    <path d="M-134 40 c0 -22 10 -34 30 -38 l70 -14 c30 -32 62 -44 100 -44 h44 c30 4 54 18 74 42 l24 14 c14 6 20 14 20 26 v14 z"/>
+    <circle cx="-64" cy="56" r="26"/><circle cx="86" cy="56" r="26"/>
+  </g>
+  <text x="400" y="432" text-anchor="middle" font-family="Trebuchet MS, Segoe UI, sans-serif"
+        font-size="26" fill="#ffffff" opacity=".8" letter-spacing="5">BODY</text>
+</svg>

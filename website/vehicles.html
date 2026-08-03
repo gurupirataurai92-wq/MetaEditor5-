@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Imported vehicles in stock — Sakura Auto Imports</title>
+<meta name="description" content="Browse imported Japanese cars, SUVs, vans, pickups and trucks in stock and in transit. Filter by make, body type, fuel, gearbox and budget.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e63946'/%3E%3Ctext x='32' y='44' font-size='34' font-family='Trebuchet MS,sans-serif' font-weight='bold' fill='%23fff' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="topbar">
+    <div class="wrap">
+      <div class="topbar-contact">
+        <span>📞 <a data-co="phone" href="#">+255 754 000 111</a></span>
+        <span>✉ <a data-co="email" href="#">sales@example.com</a></span>
+      </div>
+      <span data-co="hours">Mon–Fri 08:00–18:00 · Sat 09:00–15:00</span>
+    </div>
+  </div>
+
+  <div class="wrap nav">
+    <a class="logo" href="index.html">
+      <span class="logo-mark" aria-hidden="true">SA</span>
+      <span class="logo-text">
+        <span class="logo-name">Sakura Auto</span>
+        <span class="logo-tag">Imports &amp; Parts</span>
+      </span>
+    </a>
+
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu" aria-label="Toggle navigation">☰</button>
+
+    <div class="nav-menu" id="nav-menu">
+      <ul class="nav-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="vehicles.html">Vehicles</a></li>
+        <li><a href="parts.html">Spare parts</a></li>
+        <li><a href="about.html">How it works</a></li>
+        <li><a href="contact.html">Contact</a></li>
+      </ul>
+      <div class="nav-cta">
+        <a class="btn btn--accent btn--sm" data-wa="Hello Sakura Auto Imports, I would like a quote." href="#">WhatsApp us</a>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="page-hero">
+    <div class="wrap">
+      <p class="crumbs"><a href="index.html">Home</a> / Vehicles</p>
+      <h1>Imported vehicles</h1>
+      <p>Units in our yard, on the water, or available to order from the next Japanese auction.
+         Prices shown are CIF to your nearest port and exclude import duty and local taxes.</p>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+
+      <form class="toolbar" id="vehicle-filters" novalidate>
+        <div class="field-row">
+          <div class="field">
+            <label for="f-q">Search</label>
+            <input type="search" id="f-q" name="q" placeholder="Model, colour, reference…">
+          </div>
+          <div class="field">
+            <label for="f-make">Make</label>
+            <select id="f-make" name="make"><option value="">Any make</option></select>
+          </div>
+          <div class="field">
+            <label for="f-body">Body type</label>
+            <select id="f-body" name="body">
+              <option value="">Any body</option>
+              <option value="sedan">Sedan</option>
+              <option value="hatchback">Hatchback</option>
+              <option value="suv">SUV / 4WD</option>
+              <option value="van">Van / MPV</option>
+              <option value="pickup">Pickup</option>
+              <option value="truck">Truck</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="f-fuel">Fuel</label>
+            <select id="f-fuel" name="fuel">
+              <option value="">Any fuel</option>
+              <option>Petrol</option>
+              <option>Diesel</option>
+              <option>Hybrid</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="f-gear">Gearbox</label>
+            <select id="f-gear" name="transmission">
+              <option value="">Any gearbox</option>
+              <option>Automatic</option>
+              <option>Manual</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="f-budget">Budget up to (USD)</label>
+            <select id="f-budget" name="budget">
+              <option value="">No limit</option>
+              <option value="8000">$8,000</option>
+              <option value="15000">$15,000</option>
+              <option value="25000">$25,000</option>
+              <option value="40000">$40,000</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="f-sort">Sort by</label>
+            <select id="f-sort" name="sort">
+              <option value="">Featured</option>
+              <option value="price-asc">Price: low to high</option>
+              <option value="price-desc">Price: high to low</option>
+              <option value="year-desc">Newest year</option>
+              <option value="mileage-asc">Lowest mileage</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="toolbar-foot">
+          <div class="chips">
+            <button class="chip" type="button" data-status="all" aria-pressed="true">All units</button>
+            <button class="chip" type="button" data-status="in-stock" aria-pressed="false">In stock</button>
+            <button class="chip" type="button" data-status="in-transit" aria-pressed="false">In transit</button>
+            <button class="chip" type="button" data-status="to-order" aria-pressed="false">To order</button>
+          </div>
+          <div class="btn-row">
+            <p class="result-count" id="vehicle-count"></p>
+            <button class="btn btn--ghost btn--sm" type="button" id="vehicle-reset">Reset filters</button>
+          </div>
+        </div>
+      </form>
+
+      <div class="grid grid--3" id="vehicle-grid"></div>
+
+      <div class="note" style="margin-top:28px">
+        <p><b>Not listed?</b> Roughly half of what we deliver never appears on this page — it is bid
+           for to order. Tell us the model, year range, maximum mileage and budget and we will send
+           you matching auction sheets as they come up.
+           <a href="contact.html">Send a sourcing brief →</a></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--dark section--tight">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="eyebrow">Reading a listing</span>
+        <h2>What the numbers mean</h2>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th>Term</th><th>What it means for you</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><b>Auction grade</b></td><td>The Japanese inspector's overall score. 5 is near-new, 4.5 and 4 are clean used units, 3.5 shows honest wear and normally the best value.</td></tr>
+            <tr><td><b>CIF price</b></td><td>Cost of the vehicle, insurance and freight to your port. Import duty, VAT and port charges are separate and quoted per country.</td></tr>
+            <tr><td><b>In transit</b></td><td>Already paid for and on the water. You can reserve it before it lands.</td></tr>
+            <tr><td><b>To order</b></td><td>Not yet purchased. We bid for it at auction on your behalf against an agreed maximum.</td></tr>
+            <tr><td><b>RHD / LHD</b></td><td>Right- or left-hand drive. Check your country's registration rules before ordering.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap footer-grid">
+    <div>
+      <a class="logo" href="index.html">
+        <span class="logo-mark" aria-hidden="true">SA</span>
+        <span class="logo-text">
+          <span class="logo-name">Sakura Auto</span>
+          <span class="logo-tag">Imports &amp; Parts</span>
+        </span>
+      </a>
+      <p style="margin-top:14px">Importers of inspected Japanese vehicles and suppliers of genuine,
+         OEM and aftermarket spare parts — from a single clip to a complete engine.</p>
+      <p><a class="btn btn--accent btn--sm" data-wa="Hello Sakura Auto Imports, I would like a quote." href="#">Chat on WhatsApp</a></p>
+    </div>
+
+    <div>
+      <h4>Vehicles</h4>
+      <ul>
+        <li><a href="vehicles.html">All stock</a></li>
+        <li><a href="vehicles.html?body=suv">SUVs &amp; 4WD</a></li>
+        <li><a href="vehicles.html?body=pickup">Pickups</a></li>
+        <li><a href="vehicles.html?body=van">Vans &amp; MPVs</a></li>
+        <li><a href="vehicles.html?body=truck">Trucks</a></li>
+      </ul>
+    </div>
+
+    <div>
+      <h4>Spare parts</h4>
+      <ul>
+        <li><a href="parts.html?category=engine">Engine &amp; cooling</a></li>
+        <li><a href="parts.html?category=brakes">Brakes &amp; clutch</a></li>
+        <li><a href="parts.html?category=suspension">Suspension</a></li>
+        <li><a href="parts.html?category=filters">Service kits</a></li>
+        <li><a href="parts.html">Full catalogue</a></li>
+      </ul>
+    </div>
+
+    <div>
+      <h4>Company</h4>
+      <ul>
+        <li><a href="about.html">How importing works</a></li>
+        <li><a href="about.html#faq">FAQ</a></li>
+        <li><a href="contact.html">Contact &amp; location</a></li>
+        <li><a data-co="phone" href="#">+255 754 000 111</a></li>
+        <li><a data-co="email" href="#">sales@example.com</a></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="wrap footer-bottom">
+    <span>© <span data-year>2026</span> Sakura Auto Imports. All rights reserved.</span>
+    <span data-co="address">Dar es Salaam, Tanzania</span>
+  </div>
+
+  <div class="disclaimer">
+    <div class="wrap">
+      <p>Sakura Auto Imports is an independent importer and parts supplier. We source vehicles from
+         Japanese exporters and auction houses, including BE&nbsp;FORWARD, but we are not owned by,
+         affiliated with or an official agent of any of them. All product names and trademarks belong
+         to their respective owners. Prices are indicative, exclude import duty and taxes, and are
+         subject to confirmation at the time of order.</p>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/js/data.js"></script>
+<script src="assets/js/main.js"></script>
+</body>
+</html>

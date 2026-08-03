@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500" role="img" aria-label="Van illustration">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2c43"/><stop offset="1" stop-color="#0d1521"/>
+    </linearGradient>
+    <linearGradient id="paint" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f2f5fa"/><stop offset="1" stop-color="#aebbcc"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#43597a"/><stop offset="1" stop-color="#22344a"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="500" fill="url(#bg)"/>
+  <g opacity=".28" stroke="#ffffff" stroke-width="1">
+    <line x1="0" y1="0" x2="0" y2="500" opacity=".10"/>
+    <line x1="50" y1="0" x2="50" y2="500" opacity=".10"/>
+    <line x1="100" y1="0" x2="100" y2="500" opacity=".10"/>
+    <line x1="150" y1="0" x2="150" y2="500" opacity=".10"/>
+    <line x1="200" y1="0" x2="200" y2="500" opacity=".10"/>
+    <line x1="250" y1="0" x2="250" y2="500" opacity=".10"/>
+    <line x1="300" y1="0" x2="300" y2="500" opacity=".10"/>
+    <line x1="350" y1="0" x2="350" y2="500" opacity=".10"/>
+    <line x1="400" y1="0" x2="400" y2="500" opacity=".10"/>
+    <line x1="450" y1="0" x2="450" y2="500" opacity=".10"/>
+    <line x1="500" y1="0" x2="500" y2="500" opacity=".10"/>
+    <line x1="550" y1="0" x2="550" y2="500" opacity=".10"/>
+    <line x1="600" y1="0" x2="600" y2="500" opacity=".10"/>
+    <line x1="650" y1="0" x2="650" y2="500" opacity=".10"/>
+    <line x1="700" y1="0" x2="700" y2="500" opacity=".10"/>
+    <line x1="750" y1="0" x2="750" y2="500" opacity=".10"/>
+    <line x1="800" y1="0" x2="800" y2="500" opacity=".10"/>
+    <line x1="0" y1="0" x2="800" y2="0" opacity=".10"/>
+    <line x1="0" y1="50" x2="800" y2="50" opacity=".10"/>
+    <line x1="0" y1="100" x2="800" y2="100" opacity=".10"/>
+    <line x1="0" y1="150" x2="800" y2="150" opacity=".10"/>
+    <line x1="0" y1="200" x2="800" y2="200" opacity=".10"/>
+    <line x1="0" y1="250" x2="800" y2="250" opacity=".10"/>
+    <line x1="0" y1="300" x2="800" y2="300" opacity=".10"/>
+    <line x1="0" y1="350" x2="800" y2="350" opacity=".10"/>
+    <line x1="0" y1="400" x2="800" y2="400" opacity=".10"/>
+    <line x1="0" y1="450" x2="800" y2="450" opacity=".10"/>
+    <line x1="0" y1="500" x2="800" y2="500" opacity=".10"/>
+  </g>
+  <ellipse cx="400" cy="404" rx="316" ry="26" fill="#000" opacity=".30"/>
+
+  <path d="M96 356 L96 214 C100 190 118 176 146 174 L520 174 C566 178 606 202 640 246 L692 300 C716 312 726 324 726 344 L726 356 Z" fill="url(#paint)"/>
+  <path d="M148 206 L300 206 L300 268 L148 268 Z" fill="url(#glass)"/>
+  <path d="M320 206 L470 206 L470 268 L320 268 Z" fill="url(#glass)"/>
+  <path d="M492 208 L516 208 C548 214 576 232 604 266 L492 268 Z" fill="url(#glass)"/>
+  <rect x="96" y="330" width="656" height="8" rx="4" fill="#000" opacity=".12"/>
+  <g><circle cx="220" cy="352" r="54" fill="#151d29"/><circle cx="220" cy="352" r="38" fill="#2c3949"/><circle cx="220" cy="352" r="24" fill="#93a2b5"/><circle cx="220" cy="352" r="6" fill="#5c6c80"/></g>
+  <g><circle cx="616" cy="352" r="54" fill="#151d29"/><circle cx="616" cy="352" r="38" fill="#2c3949"/><circle cx="616" cy="352" r="24" fill="#93a2b5"/><circle cx="616" cy="352" r="6" fill="#5c6c80"/></g>
+  <text x="40" y="468" font-family="Trebuchet MS, Segoe UI, sans-serif" font-size="21"
+        fill="#ffffff" opacity=".55" letter-spacing="3">VAN</text>
+</svg>
