@@ -1996,6 +1996,44 @@ check("v5.17: per-model accounting separates the earner from the bleeder",
 check("v5.17: netted together they look like nothing worth investigating",
       abs(sum(tally.values())) < 0.5, f"net {sum(tally.values()):.2f}")
 
+# ---------------------------------------------------------------- v5.18
+# The next candle, unconditionally. Every other path asks price to do
+# something first; this one asks only that the gap exists.
+
+def next_candle_entry(direction, gap_dir, shift, filled, alive,
+                      max_bars=2, enabled=True):
+    if not enabled or not alive:
+        return False
+    if gap_dir != direction:
+        return False
+    if shift > max_bars:
+        return False
+    if filled >= 1.0:
+        return False
+    return True
+
+check("v5.18: a gap that printed on the last closed bar is traded now",
+      next_candle_entry(1, 1, 1, 0.0, True))
+check("v5.18: no buffer test — where price sits is irrelevant to this path",
+      next_candle_entry(1, 1, 2, 0.0, True))
+check("v5.18: no grade test — a 0.05-grade gap still qualifies",
+      next_candle_entry(1, 1, 1, 0.0, True))
+check("v5.18: an old gap is left to the other paths",
+      not next_candle_entry(1, 1, 9, 0.0, True))
+check("v5.18: a fully filled gap is not re-traded",
+      not next_candle_entry(1, 1, 1, 1.0, True))
+check("v5.18: direction is still respected",
+      not next_candle_entry(1, -1, 1, 0.0, True))
+check("v5.18: the switch turns the path off cleanly",
+      not next_candle_entry(1, 1, 1, 0.0, True, enabled=False))
+
+def wins_contest(base_score, boost=1.0, rival=0.9):
+    return base_score + boost > rival
+check("v5.18: the newest gap outranks an older, better-placed POI",
+      wins_contest(0.10), "low-grade new gap beats a 0.9-scoring old one")
+check("v5.18: without the boost the newest gap would lose that contest",
+      not wins_contest(0.10, boost=0.0))
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

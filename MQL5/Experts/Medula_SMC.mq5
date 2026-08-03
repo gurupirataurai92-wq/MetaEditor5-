@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.17 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.18 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.17"
+#property version   "5.18"
 
 //============================== INPUTS ==============================
 
@@ -211,6 +211,19 @@ input double InpPaBodyPct       = 0.55;    // Body must be this share of the can
 input double InpPaRangeMult     = 0.90;    // Candle range >= this x average range
 input int    InpPaMaxAge        = 6;       // A momentum candle stays tradeable this many bars
 input double InpPaMaxRun        = 2.50;    // Stop chasing once price has run this far past it
+
+//--- §3d THE NEXT CANDLE — UNCONDITIONAL.
+//    A fair value gap is complete the moment its third candle closes. By the
+//    principle, the trade is the candle AFTER that — not a retracement into
+//    the gap, not a continuation once price has travelled a qualifying
+//    distance, and not subject to any test at all beyond the gap existing.
+//    This path has no buffer test, no run limit and no grade test. If a gap
+//    printed on the last closed bar, it is traded on this one.
+input group "Next-Candle Execution (§3d)"
+input bool   InpNextCandleEntry = true;    // Trade the candle right after a gap completes
+input int    InpNextCandleBars  = 2;       // "Just printed" means a gap this many bars old
+input double InpNextCandleBoost = 1.00;    // Priority this path takes over other POIs
+input bool   InpLogGaps         = true;    // Log every fresh gap found, each new bar
 
 input group "Fresh Gap Continuation (§3b)"
 input bool   InpTradeFreshGaps  = true;    // Trade the candle after a gap prints (no retrace needed)
@@ -931,6 +944,29 @@ void BuildFVGs(void)
      }
   }
 
+//--- PROOF OF WORK.  "I'm not seeing changes" and "it isn't detecting the
+//    small gaps" are different problems with the same symptom, and no amount
+//    of reasoning from a chart screenshot separates them. This prints every
+//    gap young enough to be traded on the next candle, once per bar, with its
+//    kind, size, grade and zone — so the log says plainly what the EA can see.
+void LogGaps(void)
+  {
+   if(!InpLogGaps || !InpVerboseLog) return;
+   int shown=0;
+   for(int z=0;z<ArraySize(g_fvgs) && shown<6;z++)
+     {
+      if(!g_fvgs[z].alive) continue;
+      if(g_fvgs[z].shift>InpNextCandleBars+2) continue;
+      if(g_fvgs[z].filledPct>=1.0) continue;
+      LogEvent(StringFormat("gap seen: %-17s dir %+d  age %d bars  size %.2f x avg  "
+                            "grade %.2f  filled %.0f%%  zone %.5f-%.5f",
+                            FvgName(g_fvgs[z]),g_fvgs[z].dir,g_fvgs[z].shift,
+                            g_fvgs[z].size,g_fvgs[z].grade,g_fvgs[z].filledPct*100.0,
+                            g_fvgs[z].bottom,g_fvgs[z].top));
+      shown++;
+     }
+  }
+
 //--- The nearest unrebalanced gap ahead of price is a draw on liquidity: the
 //    market goes there to fix the inefficiency. Used as a TARGET only — the
 //    consequent encroachment is where fills reliably reach.
@@ -1295,6 +1331,34 @@ bool EvaluateDirection(const int dir,SSetup &s)
          paEntry=true; freshEntry=(run>0.0);
         }
 
+   //---- §3d THE NEXT CANDLE. No conditions at all.
+   //
+   //     Every path above asks price to do something first: be inside the
+   //     zone, or be past it by a qualifying amount, or be at a candle of a
+   //     certain shape. By the principle of the thing, a fair value gap is
+   //     complete when its third candle closes and the trade is the candle
+   //     after that. Nothing else needs to be true.
+   //
+   //     So this path tests one thing — a gap in this direction printed
+   //     within the last InpNextCandleBars bars — and takes it. It carries a
+   //     priority boost so the newest gap wins against older, better-placed
+   //     POIs rather than losing the scoring contest to them.
+   bool nextCandle=false;
+   if(InpNextCandleEntry && InpUseFVG)
+      for(int z=0;z<ArraySize(g_fvgs);z++)
+        {
+         if(!g_fvgs[z].alive)                        continue;
+         if(g_fvgs[z].dir!=dir)                      continue;
+         if(g_fvgs[z].shift>InpNextCandleBars)       continue;
+         if(g_fvgs[z].filledPct>=1.0)                continue;
+         double sc=PoiScore(g_fvgs[z].grade,px,g_fvgs[z].top,g_fvgs[z].bottom,dir)
+                   +InpNextCandleBoost;
+         if(sc<=bestScore) continue;
+         bestScore=sc; zt=g_fvgs[z].top; zb=g_fvgs[z].bottom;
+         poiGrade=g_fvgs[z].grade; src="new "+FvgName(g_fvgs[z]);
+         nextCandle=true; freshEntry=true; paEntry=false;
+        }
+
    if(zt<=0.0) return false;                 // nothing to trade — the only veto
 
    //---- CONFLUENCE. Each term is graded 0..1; none of them can return false.
@@ -1429,6 +1493,7 @@ bool EvaluateDirection(const int dir,SSetup &s)
    if(gradeScore >=0.55)tags+="A+POI ";
    if(freshEntry)       tags+="FRESH ";
    if(paEntry)          tags+="PA ";
+   if(nextCandle)       tags+="NEXT ";
    if(tags=="") tags="bare POI";
 
    s.dir=dir; s.zoneTop=zt; s.zoneBottom=zb;
@@ -1444,7 +1509,8 @@ bool EvaluateDirection(const int dir,SSetup &s)
    else if(StringFind(src,"breaker")>=0)    code="BRK";
    else if(StringFind(src,"order block")>=0)code="OB";
    else                                     code="FVG";
-   if(freshEntry) code="F"+code;
+   if(freshEntry)  code="F"+code;
+   if(nextCandle)  code="N"+code;   // traded on the candle after it printed
    s.modelCode=code;
 
    s.quality=q; s.poiGrade=poiGrade;
@@ -2125,6 +2191,8 @@ void ParamAudit(void)
    d+=AuditD("InpFvgMinPct"      ,InpFvgMinPct      ,0.02);
    d+=AuditD("InpMinTargetSpreads",InpMinTargetSpreads,2.00);
    d+=AuditB("InpTradePaCandles" ,InpTradePaCandles ,true);
+   d+=AuditB("InpNextCandleEntry",InpNextCandleEntry,true);
+   d+=AuditI("InpNextCandleBars" ,InpNextCandleBars ,2);
    d+=AuditD("InpPaBodyPct"      ,InpPaBodyPct      ,0.55);
    d+=AuditD("InpPaRangeMult"    ,InpPaRangeMult    ,0.90);
    d+=AuditI("InpPaMaxAge"       ,InpPaMaxAge       ,6);
@@ -2169,7 +2237,7 @@ void SelfTest(void)
   {
    if(!InpSelfTest) return;
    LogEvent("────────── SMC / ICT SELF-TEST ──────────");
-   LogEvent("build: Medula_SMC v5.17  —  if the panel does not read v5.17, MT5 is "
+   LogEvent("build: Medula_SMC v5.18  —  if the panel does not read v5.18, MT5 is "
             "running an older .ex5 and the source was never recompiled.");
    ParamAudit();
    LogEvent(StringFormat("symbol %s  execution timeframe M5  bars loaded %d  (NO INDICATORS)",
@@ -2209,6 +2277,11 @@ void SelfTest(void)
                          "no longer filters ENTRIES — it only stretches the target, so small "
                          "gaps are detected and traded.",
                          MathMax(InpFvgMinPct*g_view.avgRange,_Point),InpFvgMinPct));
+   if(InpNextCandleEntry)
+      LogEvent(StringFormat("next candle (§3d): ON — any gap under %d bars old is traded on "
+                            "the following candle with NO further condition: no buffer test, "
+                            "no run limit, no grade test. Tagged NEXT in the journal.",
+                            InpNextCandleBars));
    if(InpTradePaCandles)
       LogEvent(StringFormat("price action (§3c): ON — any candle with a body >= %.0f%% of its "
                             "range covering >= %.2f x avg range is a setup on its own, gap or "
@@ -2268,7 +2341,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.17  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.18  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"
@@ -2468,7 +2541,7 @@ void OnTick(void)
 
    datetime cur=(g_bars>0?g_t[0]:0);
    bool newBar=(cur!=g_lastBar && cur>0);
-   if(newBar){ g_lastBar=cur; DrawZones(); }
+   if(newBar){ g_lastBar=cur; DrawZones(); LogGaps(); }
 
    if(b.count>0)
      {

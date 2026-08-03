@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.17, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.18, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -535,3 +535,31 @@ COST: average spread 0.30000 against an average stop of 1.20000 —
 
 That is the first output from this EA that can answer "is it a money maker" instead of
 "did it trade".
+
+### v5.18 — the next candle, unconditionally
+
+Every entry path built so far asks price to do something *first*: be inside the zone (retrace),
+be past it by a qualifying amount (§3b), or be at a candle of a certain shape (§3c). By the
+principle of the thing, none of that is required. **A fair value gap is complete when its third
+candle closes, and the trade is the candle after that.**
+
+§3d tests one thing — a gap in this direction printed within the last `InpNextCandleBars` (2)
+bars — and takes it. No buffer test, no run limit, no grade test, no condition on where price
+happens to be sitting. It carries `InpNextCandleBoost` (1.0) so the newest gap **wins** the
+scoring contest against older, better-placed POIs instead of losing to them.
+
+These fills are tagged **`NEXT`** and their model code is prefixed `N-`, so the run report
+separates them from every other path.
+
+**And a diagnostic, because "I'm not seeing changes" and "it isn't detecting small gaps" are
+different problems with the same symptom.** `InpLogGaps` prints every gap young enough to
+trade, once per bar:
+
+```
+[SMC] gap seen: breakaway gap     dir +1  age 1 bars  size 0.34 x avg  grade 0.61  filled 0%  zone 1842.31-1842.68
+[SMC] gap seen: volume imbalance  dir +1  age 2 bars  size 0.09 x avg  grade 0.28  filled 0%  zone 1841.90-1842.01
+```
+
+If those lines appear and no trade follows, the block reason on the next line names the rail.
+If they do not appear at all, detection is the problem, not execution — and the parameter audit
+above them says whether the build in memory is the one on disk.
