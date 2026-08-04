@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.20 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.21 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.20"
+#property version   "5.21"
 
 //============================== INPUTS ==============================
 
@@ -219,6 +219,33 @@ input double InpPaMaxRun        = 2.50;    // Stop chasing once price has run th
 //    distance, and not subject to any test at all beyond the gap existing.
 //    This path has no buffer test, no run limit and no grade test. If a gap
 //    printed on the last closed bar, it is traded on this one.
+//--- §3e THE SECOND CANDLESTICK.
+//    "A fair value gap simply tells you that you should have entered on the
+//    second candlestick, when it comes higher than the previous one."
+//    That is the trigger, and it fires a full candle BEFORE any gap can be
+//    confirmed — a three-candle gap needs its third candle to close, by which
+//    time the leg has already run. This path enters the moment the current
+//    candle takes the previous candle's high (or low), with the stop under
+//    the candle that was taken. A staircase of modest candles each making a
+//    higher high has no displacement candle and often no measurable gap, and
+//    every path before this one was blind to it.
+input group "Two-Candle Trigger (§3e)"
+input bool   InpTwoCandleEntry  = true;    // Enter when this candle takes the previous one's high/low
+input double InpTwoCandleMinAnat= 0.00;    // Minimum anatomy score to act (0 = any)
+input bool   InpTwoCandleNeedSeq= false;   // Require an existing higher-high sequence
+input double InpGapSupportBonus = 0.30;    // Grade bonus when a live gap/BAG backs the trigger
+
+//--- §3f CANDLE ANATOMY.
+//    What the candles themselves say, read the way a person reads them:
+//    body size, wick size, engulfing, pin bars, closes near the extreme,
+//    inside bars and outside bars. Used to grade every trigger above and
+//    scored into the size the trade earns.
+input group "Candle Anatomy (§3f)"
+input double InpAnatStrongClose = 0.70;    // Close this far into the range counts as strong
+input double InpAnatPinWick     = 2.00;    // Pin bar: wick this many times the body
+input double InpAnatPinShare    = 0.55;    // ...and this share of the whole range
+input double InpWeightAnatomy   = 0.16;    // Weight: candle anatomy agrees with the trade
+
 input group "Next-Candle Execution (§3d)"
 input bool   InpNextCandleEntry = true;    // Trade the candle right after a gap completes
 input int    InpNextCandleBars  = 2;       // "Just printed" means a gap this many bars old
@@ -429,6 +456,20 @@ struct SFVG
    bool              alive;
   };
 
+//--- what the last closed candle says about itself (§3f)
+struct SCandle
+  {
+   int               dir;
+   double            rangeX;       // range in average-range units
+   double            bodyPct;      // body as a share of range
+   double            upperWick,lowerWick;
+   double            closePos;     // 0 = closed on the low, 1 = on the high
+   bool              strongCloseUp,strongCloseDn;
+   bool              pinBull,pinBear;
+   bool              engulfBull,engulfBear;
+   bool              insideBar,outsideBar;
+  };
+
 //--- a resting liquidity pool (§4)
 struct SLIQ
   {
@@ -513,6 +554,7 @@ int      g_bars=0;
 SOB      g_obs[];
 SFVG     g_fvgs[];
 SLIQ     g_liqs[];
+SCandle  g_candle;
 SView    g_view;
 
 double   g_basketRisk=0.0;          // R unit for the whole basket
@@ -957,6 +999,96 @@ void BuildFVGs(void)
      }
   }
 
+//====================== §3f CANDLE ANATOMY ==========================
+
+//--- Everything the last closed candle says about itself, and about the one
+//    before it. No indicator, no zone — the shape of the bars, which is what
+//    a person actually reads off the chart.
+void BuildCandleAnatomy(void)
+  {
+   SCandle c; ZeroMemory(c);
+   g_candle=c;
+   if(g_bars<4 || g_view.avgRange<=0.0) return;
+
+   double o=g_o[1],h=g_h[1],l=g_l[1],cl=g_c[1];
+   double rng=h-l;
+   if(rng<=0.0) return;
+
+   double body=MathAbs(cl-o);
+   c.dir       =(cl>o ? 1 : (cl<o ? -1 : 0));
+   c.rangeX    =rng/g_view.avgRange;
+   c.bodyPct   =body/rng;
+   c.upperWick =(h-MathMax(o,cl))/rng;
+   c.lowerWick =(MathMin(o,cl)-l)/rng;
+   c.closePos  =(cl-l)/rng;                     // 1 = closed on the high
+
+   c.strongCloseUp=(c.closePos>=InpAnatStrongClose);
+   c.strongCloseDn=(c.closePos<=1.0-InpAnatStrongClose);
+
+   // a pin bar rejects one side: a long wick against a small body
+   c.pinBull=(c.lowerWick*rng>=InpAnatPinWick*body && c.lowerWick>=InpAnatPinShare);
+   c.pinBear=(c.upperWick*rng>=InpAnatPinWick*body && c.upperWick>=InpAnatPinShare);
+
+   // engulfing, inside and outside are all relative to the candle before
+   double o2=g_o[2],h2=g_h[2],l2=g_l[2],c2=g_c[2];
+   double topB =MathMax(o,cl),  botB =MathMin(o,cl);
+   double topB2=MathMax(o2,c2), botB2=MathMin(o2,c2);
+   bool prevBear=(c2<o2), prevBull=(c2>o2);
+
+   c.engulfBull=(c.dir> 0 && prevBear && botB<=botB2 && topB>=topB2);
+   c.engulfBear=(c.dir< 0 && prevBull && botB<=botB2 && topB>=topB2);
+   c.insideBar =(h< h2 && l> l2);
+   c.outsideBar=(h> h2 && l< l2);
+
+   g_candle=c;
+  }
+
+//--- How strongly the anatomy backs a trade in this direction, 0..1.
+double AnatomyScore(const int dir)
+  {
+   if(g_candle.dir==0 && g_candle.rangeX<=0.0) return 0.0;
+   double s=0.0;
+   s+=0.28*MClamp(g_candle.bodyPct,0.0,1.0);
+   s+=0.22*(dir>0 ? MClamp(g_candle.closePos,0.0,1.0)
+                  : MClamp(1.0-g_candle.closePos,0.0,1.0));
+   s+=0.20*((dir>0 && g_candle.engulfBull)||(dir<0 && g_candle.engulfBear) ? 1.0 : 0.0);
+   s+=0.14*((dir>0 && g_candle.pinBull)   ||(dir<0 && g_candle.pinBear)    ? 1.0 : 0.0);
+   s+=0.10*MClamp(g_candle.rangeX,0.0,1.0);
+   s+=0.06*(g_candle.outsideBar ? 1.0 : 0.0);
+   if(g_candle.dir!=0 && g_candle.dir!=dir) s*=0.70;   // the candle points the other way
+   return MClamp(s,0.0,1.0);
+  }
+
+//--- what to call it in the journal
+string AnatomyName(const int dir)
+  {
+   string t="";
+   if(dir>0 && g_candle.engulfBull) t+="bull engulfing ";
+   if(dir<0 && g_candle.engulfBear) t+="bear engulfing ";
+   if(dir>0 && g_candle.pinBull)    t+="bullish pin ";
+   if(dir<0 && g_candle.pinBear)    t+="bearish pin ";
+   if(dir>0 && g_candle.strongCloseUp) t+="strong close ";
+   if(dir<0 && g_candle.strongCloseDn) t+="strong close ";
+   if(g_candle.insideBar)  t+="inside-bar break ";
+   if(g_candle.outsideBar) t+="outside bar ";
+   if(t=="") t="plain candle ";
+   return t;
+  }
+
+//--- is a live gap in this direction backing the trigger? "not ignoring fair
+//    value gaps and break away gaps" — the anatomy trigger is worth more when
+//    the imbalance engine agrees with it.
+bool GapSupports(const int dir,const int withinBars)
+  {
+   for(int z=0;z<ArraySize(g_fvgs);z++)
+     {
+      if(!g_fvgs[z].alive || g_fvgs[z].dir!=dir) continue;
+      if(g_fvgs[z].kind==GAP_EXHAUSTION) continue;
+      if(g_fvgs[z].shift<=withinBars && g_fvgs[z].filledPct<1.0) return true;
+     }
+   return false;
+  }
+
 //--- PROOF OF WORK.  "I'm not seeing changes" and "it isn't detecting the
 //    small gaps" are different problems with the same symptom, and no amount
 //    of reasoning from a chart screenshot separates them. This prints every
@@ -1378,6 +1510,50 @@ bool EvaluateDirection(const int dir,SSetup &s)
          nextCandle=true; freshEntry=true; paEntry=false;
         }
 
+   //---- §3e THE SECOND CANDLESTICK.
+   //
+   //     The rule as stated: a fair value gap tells you that you should have
+   //     entered on the second candlestick, when it came higher than the one
+   //     before it. So that is the trigger — this candle taking the previous
+   //     candle's high — and it fires a full candle before any gap can be
+   //     confirmed, because a three-candle gap needs its third candle to close
+   //     and by then the leg has run.
+   //
+   //     A staircase of ordinary candles each making a higher high contains no
+   //     displacement candle and often no measurable imbalance at all. Every
+   //     path above this one was blind to exactly that, which is what the
+   //     02:40-03:30 rally was.
+   //
+   //     The stop goes under the candle that was taken. The grade comes from
+   //     the anatomy of that candle, plus a bonus when the gap engine agrees.
+   bool twoCandle=false;
+   if(InpTwoCandleEntry && g_bars>3 && g_view.avgRange>0.0)
+     {
+      bool takes=(dir>0 ? px>g_h[1] : px<g_l[1]);
+      bool seqOK=(!InpTwoCandleNeedSeq ||
+                  (dir>0 ? (g_h[1]>g_h[2] && g_l[1]>g_l[2])
+                         : (g_h[1]<g_h[2] && g_l[1]<g_l[2])));
+      double anat=AnatomyScore(dir);
+      if(takes && seqOK && anat>=InpTwoCandleMinAnat)
+        {
+         double ztop=g_h[1],zbot=g_l[1];
+         double run=(dir>0 ? px-ztop : zbot-px);
+         if(run>=0.0 && run<=InpPaMaxRun*g_view.avgRange && ztop>zbot)
+           {
+            double tg=MClamp(0.25+0.45*anat
+                             +(GapSupports(dir,4)?InpGapSupportBonus:0.0),0.05,1.0);
+            double sc=PoiScore(tg,px,ztop,zbot,dir);
+            if(sc>bestScore)
+              {
+               bestScore=sc; zt=ztop; zb=zbot; poiGrade=tg;
+               src=AnatomyName(dir)+"take of prior high";
+               if(dir<0) src=AnatomyName(dir)+"take of prior low";
+               twoCandle=true; freshEntry=true; paEntry=false; nextCandle=false;
+              }
+           }
+        }
+     }
+
    if(zt<=0.0) return false;                 // nothing to trade — the only veto
 
    //---- CONFLUENCE. Each term is graded 0..1; none of them can return false.
@@ -1414,14 +1590,19 @@ bool EvaluateDirection(const int dir,SSetup &s)
    // judgement belongs in the score rather than in a filter.
    double gradeScore=MClamp(poiGrade,0.0,1.0);
 
+   // the candles themselves are confluence: an engulfing close on the high
+   // backs the trade, a doji against it does not
+   double anatScore=AnatomyScore(dir);
+
    double wsum=InpWeightHtf+InpWeightStructure+InpWeightSweep+
-               InpWeightPD +InpWeightOte      +InpWeightKillzone+InpWeightPoiGrade;
+               InpWeightPD +InpWeightOte      +InpWeightKillzone+InpWeightPoiGrade+
+               InpWeightAnatomy;
    double q=1.0;
    if(wsum>0.0)
       q=(InpWeightHtf*htfScore + InpWeightStructure*structScore +
          InpWeightSweep*sweepScore + InpWeightPD*pdScore +
          InpWeightOte*oteScore + InpWeightKillzone*kzScore +
-         InpWeightPoiGrade*gradeScore)/wsum;
+         InpWeightPoiGrade*gradeScore + InpWeightAnatomy*anatScore)/wsum;
    q=MClamp(q,0.0,1.0);
 
    if(q<QualityFloorEff()) return false;     // off by default (floor = 0)
@@ -1513,6 +1694,8 @@ bool EvaluateDirection(const int dir,SSetup &s)
    if(freshEntry)       tags+="FRESH ";
    if(paEntry)          tags+="PA ";
    if(nextCandle)       tags+="NEXT ";
+   if(twoCandle)        tags+="2CDL ";
+   if(anatScore>=0.55)  tags+="ANAT ";
    if(tags=="") tags="bare POI";
 
    s.dir=dir; s.zoneTop=zt; s.zoneBottom=zb;
@@ -1530,6 +1713,7 @@ bool EvaluateDirection(const int dir,SSetup &s)
    else                                     code="FVG";
    if(freshEntry)  code="F"+code;
    if(nextCandle)  code="N"+code;   // traded on the candle after it printed
+   if(twoCandle)   code="2CDL";     // the second-candlestick trigger, its own model
    s.modelCode=code;
 
    s.quality=q; s.poiGrade=poiGrade;
@@ -2220,6 +2404,7 @@ bool Analyse(void)
    BuildStructure();        // §1
    BuildOrderBlocks();      // §2
    BuildFVGs();             // §3
+   BuildCandleAnatomy();    // §3f
    BuildLiquidity();        // §4
    BuildPremiumDiscount();  // §5
    BuildKillzone();         // §6
@@ -2269,6 +2454,8 @@ void ParamAudit(void)
    d+=AuditD("InpMinTargetSpreads",InpMinTargetSpreads,2.00);
    d+=AuditB("InpTradePaCandles" ,InpTradePaCandles ,true);
    d+=AuditB("InpNextCandleEntry",InpNextCandleEntry,true);
+   d+=AuditB("InpTwoCandleEntry" ,InpTwoCandleEntry ,true);
+   d+=AuditD("InpWeightAnatomy"  ,InpWeightAnatomy  ,0.16);
    d+=AuditI("InpNextCandleBars" ,InpNextCandleBars ,2);
    d+=AuditD("InpPaBodyPct"      ,InpPaBodyPct      ,0.55);
    d+=AuditD("InpPaRangeMult"    ,InpPaRangeMult    ,0.90);
@@ -2318,7 +2505,7 @@ void SelfTest(void)
   {
    if(!InpSelfTest) return;
    LogEvent("────────── SMC / ICT SELF-TEST ──────────");
-   LogEvent("build: Medula_SMC v5.20  —  if the panel does not read v5.20, MT5 is "
+   LogEvent("build: Medula_SMC v5.21  —  if the panel does not read v5.21, MT5 is "
             "running an older .ex5 and the source was never recompiled.");
    ParamAudit();
    LogEvent(StringFormat("symbol %s  execution timeframe M5  bars loaded %d  (NO INDICATORS)",
@@ -2424,7 +2611,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.20  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.21  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"

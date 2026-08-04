@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.20, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.21, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -641,3 +641,43 @@ under water turned one wrong read into six positions of the same wrong read.
 Everything still trades. Nothing new can refuse a setup — the four rails from v5.14 are still
 the only things that can. What changed is that the EA now *weights* what it takes according to
 the principles it was given, instead of treating every imbalance on the chart as equivalent.
+
+### v5.21 — the second candlestick, and candle anatomy
+
+> *"The fair value gaps and break away gaps simply tell you that you should have entered the
+> trade on the second candlestick, when it comes higher than the previous candlestick."*
+
+That is a different rule from anything built so far, and it explains the 02:40–03:30 rally the
+EA sat through. **A three-candle gap needs its third candle to close before it exists.** By
+then the leg has run. And a staircase of ordinary candles each making a higher high contains
+no displacement candle and often no measurable imbalance at all — so §3b, §3c and §3d were all
+structurally blind to it.
+
+**§3e — the two-candle trigger.** The moment the current candle takes the previous candle's
+high (long) or low (short), that is the entry. Stop under the candle that was taken. It fires
+a full candle earlier than any gap-based path.
+
+Gaps are **not** ignored — they upgrade it. `InpGapSupportBonus` (0.30) adds to the trigger's
+grade when a live, non-exhaustion gap in the same direction backs it, so a take-of-prior-high
+*with* a breakaway gap behind it sizes larger than the same trigger alone.
+
+**§3f — candle anatomy.** Every characteristic requested, read off the raw bars:
+
+| Read | Measure |
+|---|---|
+| Body size | body ÷ range |
+| Wick size | upper and lower wick ÷ range |
+| Bullish / bearish engulfing | body covers the prior body, opposite colour |
+| Pin bars | wick ≥ `InpAnatPinWick` × body **and** ≥ `InpAnatPinShare` of range |
+| Strong closes | close ≥ `InpAnatStrongClose` into the range |
+| Inside bars | high < prior high **and** low > prior low |
+| Outside bars | high > prior high **and** low < prior low |
+
+These feed three places: they **grade** the §3e trigger, they enter the confluence score as
+`InpWeightAnatomy` (0.16) so a clean engulfing close sizes bigger than a doji, and they **name
+the setup** in the journal — `bull engulfing strong close take of prior high`. A candle
+pointing against the trade discounts its own score by 30%.
+
+Fills from this path are tagged **`2CDL`** with model code `2CDL`, and `ANAT` marks any trade
+whose candle read scored ≥ 0.55 — so the run report shows whether reading the candles is what
+earns.

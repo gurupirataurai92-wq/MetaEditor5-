@@ -2132,6 +2132,106 @@ check("v5.20: six slots cannot turn one wrong read into six",
 check("v5.20: adding to a winner is still allowed",
       scale_allowed(0.6))
 
+# ---------------------------------------------------------------- v5.21
+# "A fair value gap simply tells you that you should have entered on the
+# second candlestick, when it comes higher than the previous one."
+# That trigger fires a full candle BEFORE any three-candle gap can confirm.
+
+def two_candle_trigger(px, prev_high, prev_low, direction,
+                       avg_range=1.0, max_run=2.50):
+    takes = px > prev_high if direction > 0 else px < prev_low
+    if not takes:
+        return None
+    run = (px-prev_high) if direction > 0 else (prev_low-px)
+    if run < 0 or run > max_run*avg_range:
+        return None
+    return prev_high, prev_low
+
+check("v5.21: taking the previous candle's high is the long trigger",
+      two_candle_trigger(1800.60, 1800.50, 1800.00, 1) is not None)
+check("v5.21: the stop goes under the candle that was taken",
+      two_candle_trigger(1800.60, 1800.50, 1800.00, 1)[1] == 1800.00)
+check("v5.21: not yet through the high is not yet a trigger",
+      two_candle_trigger(1800.40, 1800.50, 1800.00, 1) is None)
+check("v5.21: shorts mirror on the previous low",
+      two_candle_trigger(1799.90, 1800.50, 1800.00, -1) is not None)
+check("v5.21: it fires without any gap existing at all",
+      two_candle_trigger(1800.60, 1800.50, 1800.00, 1) is not None)
+check("v5.21: price far beyond the candle is not chased",
+      two_candle_trigger(1804.00, 1800.50, 1800.00, 1) is None)
+
+def anatomy(o, h, l, c, avg_range, o2, h2, l2, c2,
+            strong=0.70, pin_wick=2.0, pin_share=0.55):
+    rng = h-l
+    if rng <= 0:
+        return None
+    body = abs(c-o)
+    a = {
+        "dir": 1 if c > o else (-1 if c < o else 0),
+        "rangeX": rng/avg_range,
+        "bodyPct": body/rng,
+        "upperWick": (h-max(o, c))/rng,
+        "lowerWick": (min(o, c)-l)/rng,
+        "closePos": (c-l)/rng,
+    }
+    a["strongCloseUp"] = a["closePos"] >= strong
+    a["strongCloseDn"] = a["closePos"] <= 1.0-strong
+    a["pinBull"] = a["lowerWick"]*rng >= pin_wick*body and a["lowerWick"] >= pin_share
+    a["pinBear"] = a["upperWick"]*rng >= pin_wick*body and a["upperWick"] >= pin_share
+    topB, botB = max(o, c), min(o, c)
+    topB2, botB2 = max(o2, c2), min(o2, c2)
+    a["engulfBull"] = a["dir"] > 0 and c2 < o2 and botB <= botB2 and topB >= topB2
+    a["engulfBear"] = a["dir"] < 0 and c2 > o2 and botB <= botB2 and topB >= topB2
+    a["insideBar"] = h < h2 and l > l2
+    a["outsideBar"] = h > h2 and l < l2
+    return a
+
+# a clean bullish marubozu closing on its high, engulfing a prior down candle
+A = anatomy(1800.0, 1801.0, 1799.95, 1800.95, 1.0, 1800.6, 1800.7, 1800.1, 1800.2)
+check("v5.21: body size is measured", abs(A["bodyPct"] - 0.905) < 0.01)
+check("v5.21: a close near the high is a strong close", A["strongCloseUp"])
+check("v5.21: bullish engulfing is detected", A["engulfBull"])
+check("v5.21: it is not also flagged bearish engulfing", not A["engulfBear"])
+
+P = anatomy(1800.50, 1800.60, 1799.50, 1800.45, 1.0, 1800.6, 1800.7, 1800.1, 1800.2)
+check("v5.21: a long lower wick against a small body is a bullish pin", P["pinBull"])
+check("v5.21: wick sizes are measured", P["lowerWick"] > 0.8)
+
+I = anatomy(1800.3, 1800.5, 1800.2, 1800.4, 1.0, 1800.1, 1800.9, 1800.0, 1800.8)
+check("v5.21: an inside bar is detected", I["insideBar"] and not I["outsideBar"])
+O = anatomy(1800.1, 1801.2, 1799.5, 1801.0, 1.0, 1800.4, 1800.9, 1800.0, 1800.5)
+check("v5.21: an outside bar is detected", O["outsideBar"] and not O["insideBar"])
+
+def anat_score(a, direction):
+    s = (0.28*mclamp(a["bodyPct"], 0, 1)
+         + 0.22*(mclamp(a["closePos"], 0, 1) if direction > 0
+                 else mclamp(1-a["closePos"], 0, 1))
+         + 0.20*(1.0 if (direction > 0 and a["engulfBull"])
+                 or (direction < 0 and a["engulfBear"]) else 0.0)
+         + 0.14*(1.0 if (direction > 0 and a["pinBull"])
+                 or (direction < 0 and a["pinBear"]) else 0.0)
+         + 0.10*mclamp(a["rangeX"], 0, 1)
+         + 0.06*(1.0 if a["outsideBar"] else 0.0))
+    if a["dir"] != 0 and a["dir"] != direction:
+        s *= 0.70
+    return mclamp(s, 0.0, 1.0)
+
+check("v5.21: a clean engulfing marubozu scores high for longs",
+      anat_score(A, 1) > 0.65, f"{anat_score(A, 1):.2f}")
+check("v5.21: the same candle scores poorly for shorts",
+      anat_score(A, -1) < anat_score(A, 1)/2)
+check("v5.21: anatomy is bounded 0..1",
+      all(0.0 <= anat_score(x, d) <= 1.0 for x in (A, P, I, O) for d in (1, -1)))
+
+def trigger_grade(anat, gap_support, bonus=0.30):
+    return mclamp(0.25 + 0.45*anat + (bonus if gap_support else 0.0), 0.05, 1.0)
+check("v5.21: a live gap backing the trigger raises its grade",
+      trigger_grade(0.6, True) > trigger_grade(0.6, False))
+check("v5.21: the trigger still grades above zero with no gap at all",
+      trigger_grade(0.0, False) > 0.0)
+check("v5.21: gaps and BAGs are not ignored — they upgrade the candle read",
+      abs(trigger_grade(0.6, True) - trigger_grade(0.6, False) - 0.30) < 1e-9)
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
