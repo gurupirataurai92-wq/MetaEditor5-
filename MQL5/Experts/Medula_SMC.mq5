@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.21 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.22 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.21"
+#property version   "5.22"
 
 //============================== INPUTS ==============================
 
@@ -185,6 +185,7 @@ input double InpFvgFillPct      = 50.0;    // Reported as consumed past this % (
 input bool   InpUseInversionFvg = true;    // A violated gap inverts and keeps trading (IFVG)
 input double InpBagDisplaceMult = 1.80;    // Breakaway gap: its candle >= this x avg range
 input double InpBagMaxRunIn     = 1.50;    // Breakaway only if the run into it is under this
+input double InpBagRangeMax     = 2.00;    // ...and the bars before it were a range this tight
 input double InpExhaustRunMult  = 3.00;    // Exhaustion once the run already exceeds this
 input int    InpExhaustLookback = 12;      // Bars measured for the run into the gap
 input double InpFvgGradeFloor   = 0.00;    // Drop gaps graded below this (0 = keep all)
@@ -206,7 +207,7 @@ input bool   InpBestPoi         = true;    // Enter the best-graded POI, not the
 //    that made it. This is the reading a person does off the chart: the
 //    movement of the candlesticks, not a zone drawn around them.
 input group "Price Action Candles (§3c)"
-input bool   InpTradePaCandles  = true;    // Trade displacement candles directly (no gap needed)
+input bool   InpTradePaCandles  = false;   // Trade displacement candles directly (no gap needed)
 input double InpPaBodyPct       = 0.55;    // Body must be this share of the candle range
 input double InpPaRangeMult     = 0.90;    // Candle range >= this x average range
 input int    InpPaMaxAge        = 6;       // A momentum candle stays tradeable this many bars
@@ -229,8 +230,32 @@ input double InpPaMaxRun        = 2.50;    // Stop chasing once price has run th
 //    the candle that was taken. A staircase of modest candles each making a
 //    higher high has no displacement candle and often no measurable gap, and
 //    every path before this one was blind to it.
+//--- §3g THE CONFIRMED RETRACEMENT MODEL — the disciplined FVG method.
+//
+//    "Do not buy immediately when the gap forms. Wait for price to retrace
+//     into the FVG. Look for bullish confirmation. Enter AFTER confirmation."
+//
+//    That sequence contradicts §3b, §3d and §3e, all of which enter the
+//    moment an imbalance appears. When InpConfirmModel is on those paths are
+//    switched off: the EA runs the disciplined model instead of the
+//    take-everything mandate, and the avoid-list below becomes a real veto
+//    again — because "the broader market structure contradicts the setup" is
+//    a reason not to trade, not a reason to trade smaller.
+input group "Confirmed FVG Model (§3g)"
+input bool   InpConfirmModel    = true;    // Retrace + confirmation model (disables §3b/d/e)
+input bool   InpRequireRetrace  = true;    // Price must trade back INTO the gap
+input bool   InpRequireConfirm  = true;    // ...and print a confirmation candle
+input double InpImpulseMinPct   = 0.35;    // Impulse must leave a gap this big (x avg range)
+input double InpConfirmMinAnat  = 0.45;    // Anatomy score that counts as confirmation
+input bool   InpAvoidRanging    = true;    // Skip when structure has no direction
+input bool   InpAvoidStructAgainst = true; // Skip when broader structure contradicts
+input bool   InpAvoidMomentumAgainst = true; // Skip when the retrace has strong opposing momentum
+input double InpMomentumAgainstX= 1.20;    // "Strong" opposing candle (x avg range)
+input bool   InpStopAtSwing     = true;    // Stop beyond the swing, not just the gap edge
+input double InpMinRoomR        = 1.50;    // Require this much room to the next S/R
+
 input group "Two-Candle Trigger (§3e)"
-input bool   InpTwoCandleEntry  = true;    // Enter when this candle takes the previous one's high/low
+input bool   InpTwoCandleEntry  = false;   // Enter when this candle takes the previous one's high/low
 input double InpTwoCandleMinAnat= 0.00;    // Minimum anatomy score to act (0 = any)
 input bool   InpTwoCandleNeedSeq= false;   // Require an existing higher-high sequence
 input double InpGapSupportBonus = 0.30;    // Grade bonus when a live gap/BAG backs the trigger
@@ -247,13 +272,13 @@ input double InpAnatPinShare    = 0.55;    // ...and this share of the whole ran
 input double InpWeightAnatomy   = 0.16;    // Weight: candle anatomy agrees with the trade
 
 input group "Next-Candle Execution (§3d)"
-input bool   InpNextCandleEntry = true;    // Trade the candle right after a gap completes
+input bool   InpNextCandleEntry = false;   // Trade the candle right after a gap completes
 input int    InpNextCandleBars  = 2;       // "Just printed" means a gap this many bars old
 input double InpNextCandleBoost = 1.00;    // Recency multiplier on the newest gap's own worth
 input bool   InpLogGaps         = true;    // Log every fresh gap found, each new bar
 
 input group "Fresh Gap Continuation (§3b)"
-input bool   InpTradeFreshGaps  = true;    // Trade the candle after a gap prints (no retrace needed)
+input bool   InpTradeFreshGaps  = false;   // Trade the candle after a gap prints (no retrace needed)
 input int    InpFreshGapMaxAge  = 5;       // A gap counts as fresh for this many bars
 input double InpFreshGapMaxRun  = 2.50;    // Stop chasing once price has run this far past it
 input bool   InpFreshGapSkipExh = true;    // Exhaustion gaps are targets, never entries
@@ -322,7 +347,7 @@ input int    InpMaxHoldBars     = 24;      // Close a scalp after this many M5 b
 //    and the circuit breaker. No hour of the day, no session, no confidence
 //    level and no grade floor can stand the EA down.
 input group "Execution Mandate"
-input bool   InpTakeEveryPOI    = true;    // Trade every POI; only risk rails may refuse
+input bool   InpTakeEveryPOI    = false;   // Trade every POI; only risk rails may refuse
 
 input group "Entries"
 input bool   InpEntryOnFVG      = true;    // Enter on FVG return
@@ -581,7 +606,7 @@ bool     g_breaker=false,g_breakerLogged=false;
 
 datetime g_lastBar=0,g_lastEntry=0;
 int      g_logHandle=INVALID_HANDLE;
-string   g_block="starting",g_lastBlock="";
+string   g_block="starting",g_lastBlock="",g_avoidReason="";
 datetime g_lastBlockLog=0;
 int      g_entries=0;
 int      g_objCount=0;
@@ -861,7 +886,14 @@ ENUM_GAPKIND ClassifyGap(const int i,const int dir,const double strength)
    bool   bos=(swing>0.0 && (dir>0 ? g_c[i]>swing+buf : g_c[i]<swing-buf));
 
    // the gap candle contributes its own range to the run, so it is allowed for
-   if(bos && strength>=InpBagDisplaceMult && runIn<=InpBagMaxRunIn+strength)
+   // A breakaway gap breaks decisively OUT OF A RANGE. Without the
+   // consolidation test any strong BOS candle was being called a breakaway,
+   // which over-counted them badly — and on M5 forex and metals true
+   // breakaway gaps are genuinely rare, mostly weekly opens and news.
+   double window=(hi-lo)/MathMax(g_view.avgRange,1e-9);
+   bool consolidated=(window-strength<=InpBagRangeMax);
+   if(bos && consolidated && strength>=InpBagDisplaceMult &&
+      runIn<=InpBagMaxRunIn+strength)
       return GAP_BREAKAWAY;
    if(runIn>=InpExhaustRunMult && (dir>0 ? g_h[i]>=hi : g_l[i]<=lo))
       return GAP_EXHAUSTION;
@@ -1073,6 +1105,66 @@ string AnatomyName(const int dir)
    if(g_candle.outsideBar) t+="outside bar ";
    if(t=="") t="plain candle ";
    return t;
+  }
+
+//============== §3g THE CONFIRMED RETRACEMENT MODEL =================
+
+//--- STEP 4. Price has come back into the gap; has it shown a reason to go?
+//    Rejection candle, engulfing candle, a break of the minor structure
+//    against the move, or a strong close in our direction.
+bool HasConfirmation(const int dir,string &why)
+  {
+   why="";
+   if(dir>0)
+     {
+      if(g_candle.engulfBull)                      { why="bullish engulfing";      return true; }
+      if(g_candle.pinBull)                         { why="bullish rejection";      return true; }
+      if(g_candle.strongCloseUp && g_candle.dir>0) { why="strong bullish close";   return true; }
+      if(g_bars>3 && g_c[1]>g_h[2])                { why="minor structure break";  return true; }
+     }
+   else
+     {
+      if(g_candle.engulfBear)                      { why="bearish engulfing";      return true; }
+      if(g_candle.pinBear)                         { why="bearish rejection";      return true; }
+      if(g_candle.strongCloseDn && g_candle.dir<0) { why="strong bearish close";   return true; }
+      if(g_bars>3 && g_c[1]<g_l[2])                { why="minor structure break";  return true; }
+     }
+   if(AnatomyScore(dir)>=InpConfirmMinAnat){ why="candle anatomy"; return true; }
+   return false;
+  }
+
+//--- WHEN TO AVOID AN FVG TRADE.
+//    These are the model's own exclusions, and unlike the confluence weights
+//    they DO refuse. "The broader market structure contradicts the setup" is a
+//    reason not to take the trade, not a reason to take it smaller.
+bool AvoidSetup(const int dir,string &why)
+  {
+   why="";
+   if(!InpConfirmModel) return false;
+
+   if(InpAvoidRanging && g_view.structDir==0)
+     { why="market is ranging with no clear directional bias"; return true; }
+
+   if(InpAvoidStructAgainst && g_view.structDir==-dir && dir*g_view.htfBias<0.0)
+     { why="broader market structure contradicts the setup"; return true; }
+
+   // a violent candle against us during the pullback says the retracement is
+   // not a retracement — it is the next leg
+   if(InpAvoidMomentumAgainst && g_candle.dir!=0 && g_candle.dir!=dir &&
+      g_candle.rangeX>=InpMomentumAgainstX && g_candle.bodyPct>=0.55)
+     { why="strong momentum against the move during the retracement"; return true; }
+
+   return false;
+  }
+
+//--- STEP: is there enough room to the next major level to be worth taking?
+bool EnoughRoom(const int dir,const double px,const double risk)
+  {
+   if(!InpConfirmModel || risk<=0.0) return true;
+   double pool=(dir>0 ? g_view.nearestBuyside : g_view.nearestSellside);
+   bool valid=(dir>0 ? pool>px : (pool>0.0 && pool<px));
+   if(!valid) return true;                       // no wall in the way at all
+   return (MathAbs(pool-px)/risk>=InpMinRoomR);
   }
 
 //--- is a live gap in this direction backing the trigger? "not ignoring fair
@@ -1369,12 +1461,26 @@ bool EvaluateDirection(const int dir,SSetup &s)
    double zt=0.0,zb=0.0,poiGrade=0.0,bestScore=-1.0;
    string src="";
 
+   // §3g STEP 0: the avoid-list. Checked before anything is scored, because
+   // these are conditions under which the model says do not trade at all.
+   string avoidWhy="";
+   if(AvoidSetup(dir,avoidWhy)){ g_avoidReason=avoidWhy; return false; }
+
    if(InpEntryOnFVG && InpUseFVG)
       for(int z=0;z<ArraySize(g_fvgs);z++)
         {
          if(!g_fvgs[z].alive || g_fvgs[z].filledPct>=1.0) continue;
          if(g_fvgs[z].dir!=dir) continue;
          if(g_fvgs[z].shift>InpFvgMaxAgeBars) continue;
+         if(InpConfirmModel)
+           {
+            // STEP 2: the impulse has to have left a MEANINGFUL imbalance
+            if(g_fvgs[z].size<InpImpulseMinPct)      continue;
+            if(g_fvgs[z].kind==GAP_EXHAUSTION)       continue;
+            // STEP 3: price must have RETRACED INTO the gap — not near it
+            if(InpRequireRetrace &&
+               (px>g_fvgs[z].top || px<g_fvgs[z].bottom)) continue;
+           }
          if(px>g_fvgs[z].top+buf || px<g_fvgs[z].bottom-buf) continue;
          double sc=PoiScore(g_fvgs[z].grade,px,g_fvgs[z].top,g_fvgs[z].bottom,dir);
          if(sc<=bestScore) continue;
@@ -1415,7 +1521,7 @@ bool EvaluateDirection(const int dir,SSetup &s)
    //     gap the stop is too wide to be worth it and the EA goes back to
    //     waiting for the retrace.
    bool freshEntry=false;
-   if(InpTradeFreshGaps && InpUseFVG && (InpBestPoi || zt<=0.0))
+   if(InpTradeFreshGaps && !InpConfirmModel && InpUseFVG && (InpBestPoi || zt<=0.0))
       for(int z=0;z<ArraySize(g_fvgs);z++)
         {
          if(!g_fvgs[z].alive || g_fvgs[z].filledPct>=1.0) continue;
@@ -1449,7 +1555,7 @@ bool EvaluateDirection(const int dir,SSetup &s)
    //     Zone: the bullish candle runs from its LOW to its CLOSE, so the stop
    //     lands under the wick that made it rather than inside the body.
    bool paEntry=false;
-   if(InpTradePaCandles && g_view.avgRange>0.0)
+   if(InpTradePaCandles && !InpConfirmModel && g_view.avgRange>0.0)
       for(int i=1;i<=InpPaMaxAge && i<g_bars;i++)
         {
          double rng=g_h[i]-g_l[i];
@@ -1489,7 +1595,7 @@ bool EvaluateDirection(const int dir,SSetup &s)
    //     priority boost so the newest gap wins against older, better-placed
    //     POIs rather than losing the scoring contest to them.
    bool nextCandle=false;
-   if(InpNextCandleEntry && InpUseFVG)
+   if(InpNextCandleEntry && !InpConfirmModel && InpUseFVG)
       for(int z=0;z<ArraySize(g_fvgs);z++)
         {
          if(!g_fvgs[z].alive)                        continue;
@@ -1527,7 +1633,7 @@ bool EvaluateDirection(const int dir,SSetup &s)
    //     The stop goes under the candle that was taken. The grade comes from
    //     the anatomy of that candle, plus a bonus when the gap engine agrees.
    bool twoCandle=false;
-   if(InpTwoCandleEntry && g_bars>3 && g_view.avgRange>0.0)
+   if(InpTwoCandleEntry && !InpConfirmModel && g_bars>3 && g_view.avgRange>0.0)
      {
       bool takes=(dir>0 ? px>g_h[1] : px<g_l[1]);
       bool seqOK=(!InpTwoCandleNeedSeq ||
@@ -1555,6 +1661,14 @@ bool EvaluateDirection(const int dir,SSetup &s)
      }
 
    if(zt<=0.0) return false;                 // nothing to trade — the only veto
+
+   // §3g STEP 4-5: enter AFTER confirmation, never on the gap forming.
+   string confirmWhy="";
+   if(InpConfirmModel && InpRequireConfirm)
+     {
+      if(!HasConfirmation(dir,confirmWhy))
+        { g_avoidReason="waiting for price-action confirmation in the gap"; return false; }
+     }
 
    //---- CONFLUENCE. Each term is graded 0..1; none of them can return false.
    bool swept=(dir>0 ? g_view.sweptSellside : g_view.sweptBuyside);
@@ -1621,6 +1735,19 @@ bool EvaluateDirection(const int dir,SSetup &s)
       else      sl=(g_view.sweepExtreme>0.0 ? MathMax(g_view.sweepExtreme,zt) : zt)+slBuf;
      }
 
+   // §3g: stop below the recent swing low (or above the swing high), which is
+   // beyond the gap edge rather than sitting on it
+   if(InpConfirmModel && InpStopAtSwing)
+     {
+      double sw=(dir>0 ? g_view.lastSwingLow : g_view.lastSwingHigh);
+      if(sw>0.0)
+        {
+         double swStop=(dir>0 ? sw-InpPoiStopBuffer*g_view.avgRange
+                              : sw+InpPoiStopBuffer*g_view.avgRange);
+         if(dir>0 ? swStop<sl : swStop>sl) sl=swStop;
+        }
+     }
+
    double risk=MathAbs(px-sl);
    double minRisk=MinStopDistance();         // never inside the round-trip cost
    if(risk<minRisk)
@@ -1677,7 +1804,11 @@ bool EvaluateDirection(const int dir,SSetup &s)
       rr=MathAbs(tp-px)/risk;
      }
 
-   if(freshEntry)             s.model=src+" continuation";    // §3b, no retrace waited for
+   if(!EnoughRoom(dir,px,risk))
+     { g_avoidReason="not enough room to the next major level"; return false; }
+
+   if(confirmWhy!="")         s.model=src+" + "+confirmWhy;   // §3g confirmed retracement
+   else if(freshEntry)        s.model=src+" continuation";    // §3b, no retrace waited for
    else if(sweepFresh && mssFresh) s.model="sweep + MSS + "+src;  // full ICT reversal
    else if(mssFresh)          s.model="MSS + "+src;           // shift into the POI
    else if(aligned)           s.model=src+" continuation";    // with-structure scalp
@@ -1695,6 +1826,7 @@ bool EvaluateDirection(const int dir,SSetup &s)
    if(paEntry)          tags+="PA ";
    if(nextCandle)       tags+="NEXT ";
    if(twoCandle)        tags+="2CDL ";
+   if(confirmWhy!="")   tags+="CONF ";
    if(anatScore>=0.55)  tags+="ANAT ";
    if(tags=="") tags="bare POI";
 
@@ -1760,6 +1892,7 @@ void FindSetup(void)
    g_view.zoneTop=0.0; g_view.zoneBottom=0.0;
    g_view.stopLevel=0.0; g_view.targetLevel=0.0; g_view.setupRR=0.0;
    g_view.quality=0.0; g_view.sizeFactor=0.0; g_view.confluence="";
+   g_avoidReason="";
    g_view.poiDistance=NearestPoiDistance();
 
    SSetup up,dn,best;
@@ -1795,6 +1928,7 @@ string MissingLeg(void)
   {
    if(g_view.obCount==0 && g_view.fvgCount==0)
       return "no live order block or fair value gap on the chart yet";
+   if(InpConfirmModel && g_avoidReason!="") return g_avoidReason;
    if(g_view.poiDistance>=0.0)
       return StringFormat("price is not in a POI yet — nearest is %.2f x avg range away "
                           "(%d blocks, %d gaps live: %d breakaway, %d inverted, %d fresh)",
@@ -2449,12 +2583,17 @@ int AuditB(const string name,const bool have,const bool want)
 void ParamAudit(void)
   {
    int d=0;
-   d+=AuditB("InpTakeEveryPOI"   ,InpTakeEveryPOI   ,true);
+   d+=AuditB("InpConfirmModel"   ,InpConfirmModel   ,true);
+   d+=AuditB("InpRequireRetrace" ,InpRequireRetrace ,true);
+   d+=AuditB("InpRequireConfirm" ,InpRequireConfirm ,true);
+   d+=AuditD("InpImpulseMinPct"  ,InpImpulseMinPct  ,0.35);
+   d+=AuditD("InpMinRoomR"       ,InpMinRoomR       ,1.50);
+   d+=AuditB("InpTakeEveryPOI"   ,InpTakeEveryPOI   ,false);
    d+=AuditD("InpFvgMinPct"      ,InpFvgMinPct      ,0.02);
    d+=AuditD("InpMinTargetSpreads",InpMinTargetSpreads,2.00);
-   d+=AuditB("InpTradePaCandles" ,InpTradePaCandles ,true);
-   d+=AuditB("InpNextCandleEntry",InpNextCandleEntry,true);
-   d+=AuditB("InpTwoCandleEntry" ,InpTwoCandleEntry ,true);
+   d+=AuditB("InpTradePaCandles" ,InpTradePaCandles ,false);
+   d+=AuditB("InpNextCandleEntry",InpNextCandleEntry,false);
+   d+=AuditB("InpTwoCandleEntry" ,InpTwoCandleEntry ,false);
    d+=AuditD("InpWeightAnatomy"  ,InpWeightAnatomy  ,0.16);
    d+=AuditI("InpNextCandleBars" ,InpNextCandleBars ,2);
    d+=AuditD("InpPaBodyPct"      ,InpPaBodyPct      ,0.55);
@@ -2465,7 +2604,7 @@ void ParamAudit(void)
    d+=AuditB("InpUseInversionFvg",InpUseInversionFvg,true);
    d+=AuditB("InpFvgTargetPull"  ,InpFvgTargetPull  ,true);
    d+=AuditB("InpBestPoi"        ,InpBestPoi        ,true);
-   d+=AuditB("InpTradeFreshGaps" ,InpTradeFreshGaps ,true);
+   d+=AuditB("InpTradeFreshGaps" ,InpTradeFreshGaps ,false);
    d+=AuditI("InpFreshGapMaxAge" ,InpFreshGapMaxAge ,5);
    d+=AuditD("InpFreshGapMaxRun" ,InpFreshGapMaxRun ,2.50);
    d+=AuditB("InpFreshGapSkipExh",InpFreshGapSkipExh,true);
@@ -2505,7 +2644,7 @@ void SelfTest(void)
   {
    if(!InpSelfTest) return;
    LogEvent("────────── SMC / ICT SELF-TEST ──────────");
-   LogEvent("build: Medula_SMC v5.21  —  if the panel does not read v5.21, MT5 is "
+   LogEvent("build: Medula_SMC v5.22  —  if the panel does not read v5.22, MT5 is "
             "running an older .ex5 and the source was never recompiled.");
    ParamAudit();
    LogEvent(StringFormat("symbol %s  execution timeframe M5  bars loaded %d  (NO INDICATORS)",
@@ -2520,6 +2659,23 @@ void SelfTest(void)
                          (InpUseInversionFvg?"on":"off"),
                          (InpFvgTargetPull  ?"on":"off"),
                          (InpBestPoi        ?"on":"off")));
+   if(InpConfirmModel)
+     {
+      LogEvent("MODEL: CONFIRMED RETRACEMENT. 1) trend  2) impulse leaves a meaningful "
+               "imbalance  3) price RETRACES INTO the gap  4) price-action confirmation "
+               "prints  5) enter. The gap forming is not an entry.");
+      LogEvent(StringFormat("avoid: ranging market %s | structure contradicts %s | strong "
+                            "momentum against the retrace %s | less than %.1fR of room %s",
+                            (InpAvoidRanging?"YES":"no"),
+                            (InpAvoidStructAgainst?"YES":"no"),
+                            (InpAvoidMomentumAgainst?"YES":"no"),
+                            InpMinRoomR,(InpConfirmModel?"YES":"no")));
+      LogEvent("§3b fresh gaps, §3c displacement candles, §3d next candle and §3e the "
+               "two-candle trigger are all OFF while this model is on — they enter the "
+               "moment the imbalance appears, which this model forbids.");
+      LogEvent("note: on M5 forex and metals, TRUE breakaway gaps are rare (weekly opens, "
+               "news). Fair value gaps are the applicable pattern and carry the model.");
+     }
    if(InpTakeEveryPOI)
      {
       LogEvent("MANDATE: TAKE EVERY POI. Every live FVG, breakaway gap and order block is "
@@ -2611,7 +2767,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.21  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.22  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"

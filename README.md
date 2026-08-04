@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.21, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.22, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -681,3 +681,48 @@ pointing against the trade discounts its own score by 30%.
 Fills from this path are tagged **`2CDL`** with model code `2CDL`, and `ANAT` marks any trade
 whose candle read scored ≥ 0.55 — so the run report shows whether reading the candles is what
 earns.
+
+### v5.22 — the confirmed retracement model
+
+The specification given for this EA is a disciplined, five-step method, and it **contradicts**
+three engines built earlier in this project at the same author's direction:
+
+> *"Do not buy immediately when the gap forms. Wait for price to retrace into the FVG. Look for
+> bullish confirmation. Enter the BUY after confirmation."*
+
+§3b (fresh gap continuation), §3d (next-candle execution) and §3e (two-candle trigger) all
+enter the moment an imbalance appears. That is the opposite instruction. So `InpConfirmModel`
+(default **on**) runs the disciplined model and **switches those paths off** — along with §3c
+and the take-everything mandate. All remain available; none run while the model does.
+
+**The sequence, implemented in order:**
+
+| Step | Enforced as |
+|---|---|
+| 1. Trend | `InpAvoidRanging` — no directional structure, no trade |
+| 2. Impulse leaves a *meaningful* imbalance | `InpImpulseMinPct` 0.35 × avg range |
+| 3. Price **retraces into** the gap | `InpRequireRetrace` — strictly inside the zone, no buffer |
+| 4. Confirmation prints | `InpRequireConfirm` — engulfing, rejection candle, strong close, or a break of the minor structure against the pullback |
+| 5. Enter | only after step 4 |
+
+**Stop** goes below the recent swing low (`InpStopAtSwing`), taking whichever is further —
+swing or gap edge. **Target** is the next liquidity pool or the R target, whichever is nearer
+and still pays.
+
+**The avoid-list is a real veto**, not a size reduction — because "the broader market structure
+contradicts the setup" is a reason not to trade at all:
+
+- ranging market with no clear bias
+- broader structure contradicts the setup
+- strong momentum against the move during the retracement
+- less than `InpMinRoomR` (1.5R) of room to the next major level
+
+Each refusal is named in the journal: `no entry — strong momentum against the move during the
+retracement`.
+
+**Breakaway gaps, correctly scoped.** A breakaway gap breaks decisively *out of a
+consolidation* — without that test any strong BOS candle was being classified as one, badly
+over-counting them. `InpBagRangeMax` now requires the bars before the break to have been a
+range. The self-test also states the reality plainly: **on M5 forex and metals true breakaway
+gaps are rare** (weekly opens, news), and fair value gaps are the applicable pattern that
+carries the model.

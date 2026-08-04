@@ -2232,6 +2232,101 @@ check("v5.21: the trigger still grades above zero with no gap at all",
 check("v5.21: gaps and BAGs are not ignored — they upgrade the candle read",
       abs(trigger_grade(0.6, True) - trigger_grade(0.6, False) - 0.30) < 1e-9)
 
+# ---------------------------------------------------------------- v5.22
+# The disciplined model, as specified: trend -> impulse leaves a meaningful
+# imbalance -> price RETRACES INTO the gap -> confirmation prints -> enter.
+# "Do not buy immediately when the gap forms" contradicts the fresh-gap,
+# next-candle and two-candle paths, so the model switches them off.
+
+def fvg_eligible(gap_size, kind, px, top, bottom,
+                 min_impulse=0.35, require_retrace=True, confirm_model=True):
+    if not confirm_model:
+        return True
+    if gap_size < min_impulse:
+        return False
+    if kind == GAP_EXHAUSTION:
+        return False
+    if require_retrace and (px > top or px < bottom):
+        return False
+    return True
+
+check("v5.22: a gap too small to be a meaningful imbalance is not the model's trade",
+      not fvg_eligible(0.10, GAP_MEASURING, 1800.2, 1800.5, 1800.0))
+check("v5.22: a meaningful imbalance with price inside it qualifies",
+      fvg_eligible(0.50, GAP_MEASURING, 1800.2, 1800.5, 1800.0))
+check("v5.22: price ABOVE the gap has not retraced into it — no trade yet",
+      not fvg_eligible(0.50, GAP_MEASURING, 1800.9, 1800.5, 1800.0))
+check("v5.22: 'do not buy immediately when the gap forms' is enforced",
+      not fvg_eligible(0.50, GAP_MEASURING, 1801.5, 1800.5, 1800.0))
+check("v5.22: exhaustion gaps stay out of the model",
+      not fvg_eligible(0.50, GAP_EXHAUSTION, 1800.2, 1800.5, 1800.0))
+
+def has_confirmation(engulf, pin, strong_close, minor_bos, anat, min_anat=0.45):
+    return engulf or pin or strong_close or minor_bos or anat >= min_anat
+check("v5.22: a bullish engulfing confirms",
+      has_confirmation(True, False, False, False, 0.0))
+check("v5.22: a rejection candle confirms",
+      has_confirmation(False, True, False, False, 0.0))
+check("v5.22: a strong close confirms",
+      has_confirmation(False, False, True, False, 0.0))
+check("v5.22: a break of the minor structure confirms",
+      has_confirmation(False, False, False, True, 0.0))
+check("v5.22: price sitting in the gap with no confirmation does NOT trade",
+      not has_confirmation(False, False, False, False, 0.20))
+
+def avoid(struct_dir, direction, htf, retrace_dir, retrace_range, retrace_body,
+          ranging=True, contra=True, momentum=True, mom_x=1.20):
+    if ranging and struct_dir == 0:
+        return "ranging"
+    if contra and struct_dir == -direction and direction*htf < 0:
+        return "structure contradicts"
+    if momentum and retrace_dir != 0 and retrace_dir != direction \
+            and retrace_range >= mom_x and retrace_body >= 0.55:
+        return "momentum against"
+    return None
+check("v5.22: a ranging market with no bias is avoided",
+      avoid(0, 1, 0.0, 0, 0.5, 0.5) == "ranging")
+check("v5.22: broader structure contradicting the setup is avoided",
+      avoid(-1, 1, -0.5, 0, 0.5, 0.5) == "structure contradicts")
+check("v5.22: a violent candle against us during the pullback is avoided",
+      avoid(1, 1, 0.5, -1, 1.5, 0.7) == "momentum against")
+check("v5.22: a clean with-trend pullback is not avoided",
+      avoid(1, 1, 0.5, -1, 0.4, 0.3) is None)
+check("v5.22: these are real vetoes, not size reductions",
+      avoid(0, 1, 0.0, 0, 0.5, 0.5) is not None)
+
+def enough_room(pool, px, risk, direction, min_r=1.50):
+    valid = pool > px if direction > 0 else (0 < pool < px)
+    if not valid:
+        return True
+    return abs(pool-px)/risk >= min_r
+check("v5.22: a wall one R away is not enough room",
+      not enough_room(1801.0, 1800.0, 1.0, 1))
+check("v5.22: two R of clear air is enough room",
+      enough_room(1802.0, 1800.0, 1.0, 1))
+check("v5.22: no pool in the way is always enough room",
+      enough_room(0.0, 1800.0, 1.0, 1))
+
+def bag_classify(bos, consolidated, strength, run_in,
+                 mult=1.80, max_run=1.50):
+    return bos and consolidated and strength >= mult and run_in <= max_run+strength
+check("v5.22: a breakaway gap must break out of a consolidation",
+      not bag_classify(True, False, 2.5, 1.0))
+check("v5.22: a BOS out of a tight range with real displacement is a breakaway",
+      bag_classify(True, True, 2.5, 1.0))
+check("v5.22: without the range test any strong BOS candle was called a breakaway",
+      bag_classify(True, True, 2.5, 1.0) and not bag_classify(True, False, 2.5, 1.0))
+
+# the model turns off the paths that contradict it
+def path_active(path_input, confirm_model):
+    return path_input and not confirm_model
+check("v5.22: the fresh-gap path is off while the confirmed model runs",
+      not path_active(True, True))
+check("v5.22: the next-candle path is off while the confirmed model runs",
+      not path_active(True, True))
+check("v5.22: switching the model off restores them",
+      path_active(True, False))
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
