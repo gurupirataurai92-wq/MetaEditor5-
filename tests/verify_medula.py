@@ -2083,6 +2083,55 @@ check("v5.19: a healthy run reports near-full availability",
 check("v5.19: 8 trades over years is what a permanently latched rail looks like",
       dd_breaker_old(8.0, 10.0) and not dd_breaker_new(8.0, 8.0, 10.0)[0])
 
+# ---------------------------------------------------------------- v5.20
+# Trading everything is not the same as trading without direction. The
+# mandate governs how much CERTAINTY is required, never which way a setup
+# points - and v5.14 broke that distinction.
+
+def skip_exhaust(take_every, skip_setting):
+    """A directional principle, not a confidence threshold."""
+    return skip_setting
+check("v5.20: the mandate no longer switches off the exhaustion principle",
+      skip_exhaust(True, True) is True)
+check("v5.20: exhaustion gaps are targets whatever the mandate says",
+      skip_exhaust(True, True) and skip_exhaust(False, True))
+
+def next_score(grade, base_risk, boost=1.0, multiplicative=True):
+    base = grade/(0.60+base_risk)
+    return base*(1.0+boost) if multiplicative else base+boost
+
+bag_old, junk_old = next_score(0.80, 1.0, multiplicative=False), next_score(0.10, 1.0, multiplicative=False)
+bag_new, junk_new = next_score(0.80, 1.0), next_score(0.10, 1.0)
+check("v5.20: a flat boost let a junk gap rival a textbook breakaway",
+      junk_old/bag_old > 0.65, f"junk was {100*junk_old/bag_old:.0f}% of BAG")
+check("v5.20: a multiplied boost preserves the value ranking",
+      junk_new/bag_new < 0.20, f"junk is now {100*junk_new/bag_new:.0f}% of BAG")
+check("v5.20: recency still breaks ties between comparable setups",
+      next_score(0.50, 1.0) > next_score(0.50, 1.0, boost=0.0))
+
+def size_factor_v520(quality, opposed, htf_against, min_f=0.40, ct=0.50):
+    sf = mclamp(min_f + (1.0-min_f)*quality, 0.05, 1.0)
+    if opposed and htf_against:
+        sf *= ct
+    return mclamp(sf, 0.05, 1.0)
+check("v5.20: a setup fighting structure AND the higher timeframes trades at half size",
+      abs(size_factor_v520(0.5, True, True) - size_factor_v520(0.5, False, False)*0.5) < 1e-9)
+check("v5.20: it still trades — the mandate holds",
+      size_factor_v520(0.0, True, True) > 0.0)
+check("v5.20: a with-trend setup is untouched",
+      abs(size_factor_v520(0.8, False, False) - (0.40+0.60*0.8)) < 1e-9)
+check("v5.20: fighting structure alone, with HTF neutral, is not penalised twice",
+      abs(size_factor_v520(0.5, True, False) - size_factor_v520(0.5, False, False)) < 1e-9)
+
+def scale_allowed(basket_r, min_r=0.30, only_profit=True):
+    return not (only_profit and basket_r < min_r)
+check("v5.20: the EA no longer adds to a losing basket",
+      not scale_allowed(-0.8))
+check("v5.20: six slots cannot turn one wrong read into six",
+      not scale_allowed(-0.1) and not scale_allowed(0.0))
+check("v5.20: adding to a winner is still allowed",
+      scale_allowed(0.6))
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

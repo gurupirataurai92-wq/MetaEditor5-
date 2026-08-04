@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.19 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.20 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.19"
+#property version   "5.20"
 
 //============================== INPUTS ==============================
 
@@ -222,14 +222,14 @@ input double InpPaMaxRun        = 2.50;    // Stop chasing once price has run th
 input group "Next-Candle Execution (§3d)"
 input bool   InpNextCandleEntry = true;    // Trade the candle right after a gap completes
 input int    InpNextCandleBars  = 2;       // "Just printed" means a gap this many bars old
-input double InpNextCandleBoost = 1.00;    // Priority this path takes over other POIs
+input double InpNextCandleBoost = 1.00;    // Recency multiplier on the newest gap's own worth
 input bool   InpLogGaps         = true;    // Log every fresh gap found, each new bar
 
 input group "Fresh Gap Continuation (§3b)"
 input bool   InpTradeFreshGaps  = true;    // Trade the candle after a gap prints (no retrace needed)
 input int    InpFreshGapMaxAge  = 5;       // A gap counts as fresh for this many bars
 input double InpFreshGapMaxRun  = 2.50;    // Stop chasing once price has run this far past it
-input bool   InpFreshGapSkipExh = false;   // Skip exhaustion gaps (off: trade them too, small)
+input bool   InpFreshGapSkipExh = true;    // Exhaustion gaps are targets, never entries
 input double InpFreshGapMinGrade= 0.00;    // Minimum gap grade to chase (0 = any gap)
 
 input group "Liquidity (§4)"
@@ -276,6 +276,7 @@ input double InpWeightKillzone  = 0.10;    // Weight: inside an ICT killzone
 input double InpWeightPoiGrade  = 0.20;    // Weight: grade of the POI itself (BAG > FVG > OB)
 input double InpHtfFullAt       = 0.35;    // HTF agreement that scores full marks
 input double InpMinSizeFactor   = 0.40;    // Size at zero confluence (x planned risk)
+input double InpCounterTrendFac = 0.50;    // Size multiplier when the trade fights structure
 input double InpQualityFloor    = 0.00;    // Refuse below this quality (0 = never refuse)
 input double InpFlipMinBias     = 0.35;    // HTF bias that counts as a flip against a basket
 
@@ -341,6 +342,8 @@ input double InpBasketPartialPct= 50.0;    // Percent of volume closed
 input bool   InpAllowScaleIn    = true;    // Add on a fresh confirmation
 input double InpScaleDecay      = 0.6;     // Lot decay per add
 input double InpScaleMinSpacing = 0.25;    // Min spacing between adds (x avg range)
+input bool   InpScaleOnlyInProfit= true;   // Only add to a basket that is winning
+input double InpScaleMinR       = 0.30;    // Basket must be at least this R before adding
 input bool   InpCloseOnFlip     = true;    // Close basket when HTF bias flips
 
 //--- WHERE THE MONEY IS.  A scalper that caps every winner at a fixed R and
@@ -380,7 +383,13 @@ double MinStopDistance(void)
 double QualityFloorEff(void)   { return (InpTakeEveryPOI ? 0.0   : InpQualityFloor);    }
 double FvgGradeFloorEff(void)  { return (InpTakeEveryPOI ? 0.0   : InpFvgGradeFloor);   }
 double FreshGradeFloorEff(void){ return (InpTakeEveryPOI ? 0.0   : InpFreshGapMinGrade);}
-bool   SkipExhaustEff(void)    { return (InpTakeEveryPOI ? false : InpFreshGapSkipExh); }
+//    NOT overridden by the mandate. "Exhaustion gaps get filled, so they are a
+//    target and not an entry" is a directional PRINCIPLE, not a confidence
+//    threshold. v5.14 folded it in with the grade floors and switched it off,
+//    which had the EA buying into the end of every run it should have been
+//    selling into. The mandate governs how much certainty is required, never
+//    which way a setup points.
+bool   SkipExhaustEff(void)    { return InpFreshGapSkipExh; }
 
 //--- an order block: the last opposing candle before displacement (§2)
 struct SOB
@@ -1355,8 +1364,14 @@ bool EvaluateDirection(const int dir,SSetup &s)
          if(g_fvgs[z].dir!=dir)                      continue;
          if(g_fvgs[z].shift>InpNextCandleBars)       continue;
          if(g_fvgs[z].filledPct>=1.0)                continue;
+         if(SkipExhaustEff() && g_fvgs[z].kind==GAP_EXHAUSTION) continue;
+         // The boost SCALES the gap's own worth rather than being added to it.
+         // A flat bonus made the newest gap win outright, so a junk volume
+         // imbalance outranked a textbook breakaway gap — the exact opposite of
+         // valuing FVG and BAG. Multiplied, recency breaks ties between decent
+         // setups and never promotes a bad one over a good one.
          double sc=PoiScore(g_fvgs[z].grade,px,g_fvgs[z].top,g_fvgs[z].bottom,dir)
-                   +InpNextCandleBoost;
+                   *(1.0+InpNextCandleBoost);
          if(sc<=bestScore) continue;
          bestScore=sc; zt=g_fvgs[z].top; zb=g_fvgs[z].bottom;
          poiGrade=g_fvgs[z].grade; src="new "+FvgName(g_fvgs[z]);
@@ -1518,7 +1533,13 @@ bool EvaluateDirection(const int dir,SSetup &s)
    s.modelCode=code;
 
    s.quality=q; s.poiGrade=poiGrade;
-   s.sizeFactor=MClamp(InpMinSizeFactor+(1.0-InpMinSizeFactor)*q,0.05,1.0);
+   // STRATEGY WITHOUT A VETO. A setup pointing against both local structure
+   // and the higher timeframes is still taken — the mandate holds — but it is
+   // taken at half size. Fighting the trend and backing it with identical
+   // money is what makes a run of trades look directionless.
+   double sf=MClamp(InpMinSizeFactor+(1.0-InpMinSizeFactor)*q,0.05,1.0);
+   if(opposed && dir*g_view.htfBias<0.0) sf*=MClamp(InpCounterTrendFac,0.05,1.0);
+   s.sizeFactor=MClamp(sf,0.05,1.0);
    s.confluence=tags;
    return true;
   }
@@ -1978,6 +1999,13 @@ bool ScaleInAllowed(const SBasket &b)
    if(b.count>=InpMaxBasketTrades) return false;
    if(g_view.setupDir!=b.dir) return false;
    if(MathAbs(g_view.bid-b.lastPrice)<InpScaleMinSpacing*g_view.avgRange) return false;
+
+   // ADD TO WINNERS ONLY. With six slots and no spacing to speak of, a basket
+   // that kept adding while under water turned one wrong read into six. An add
+   // is a second bet on an idea the market has already agreed with — so the
+   // basket has to be in profit before the EA is allowed to press it.
+   if(InpScaleOnlyInProfit && g_basketRisk>0.0 && b.floatPL/g_basketRisk<InpScaleMinR)
+      return false;
    return true;
   }
 
@@ -2253,7 +2281,9 @@ void ParamAudit(void)
    d+=AuditB("InpTradeFreshGaps" ,InpTradeFreshGaps ,true);
    d+=AuditI("InpFreshGapMaxAge" ,InpFreshGapMaxAge ,5);
    d+=AuditD("InpFreshGapMaxRun" ,InpFreshGapMaxRun ,2.50);
-   d+=AuditB("InpFreshGapSkipExh",InpFreshGapSkipExh,false);
+   d+=AuditB("InpFreshGapSkipExh",InpFreshGapSkipExh,true);
+   d+=AuditD("InpCounterTrendFac",InpCounterTrendFac,0.50);
+   d+=AuditB("InpScaleOnlyInProfit",InpScaleOnlyInProfit,true);
    d+=AuditI("InpEntrySpacingSec",InpEntrySpacingSec,0);
    d+=AuditD("InpQualityFloor"   ,InpQualityFloor   ,0.00);
    d+=AuditD("InpFvgGradeFloor"  ,InpFvgGradeFloor  ,0.00);
@@ -2288,7 +2318,7 @@ void SelfTest(void)
   {
    if(!InpSelfTest) return;
    LogEvent("────────── SMC / ICT SELF-TEST ──────────");
-   LogEvent("build: Medula_SMC v5.19  —  if the panel does not read v5.19, MT5 is "
+   LogEvent("build: Medula_SMC v5.20  —  if the panel does not read v5.20, MT5 is "
             "running an older .ex5 and the source was never recompiled.");
    ParamAudit();
    LogEvent(StringFormat("symbol %s  execution timeframe M5  bars loaded %d  (NO INDICATORS)",
@@ -2312,10 +2342,12 @@ void SelfTest(void)
                "basket cap, free margin, and the circuit breaker. No hour of the day, no "
                "session, no killzone, no HTF bias, no confidence level and no grade floor "
                "can stand this EA down.");
-      if(InpQualityFloor>0.0 || InpFvgGradeFloor>0.0 || InpFreshGapMinGrade>0.0 ||
-         InpFreshGapSkipExh)
-         LogEvent("(quality floor, grade floors and the exhaustion skip are all overridden "
-                  "to zero/off by the mandate — set InpTakeEveryPOI=false to honour them)");
+      if(InpQualityFloor>0.0 || InpFvgGradeFloor>0.0 || InpFreshGapMinGrade>0.0)
+         LogEvent("(quality and grade floors are overridden to zero by the mandate — "
+                  "set InpTakeEveryPOI=false to honour them)");
+      LogEvent("The mandate governs how much CERTAINTY is required, never which way a "
+               "setup points. Exhaustion gaps stay targets, counter-trend setups still "
+               "trade but at half size, and adds still require a winning basket.");
      }
    LogEvent(StringFormat("killzones: SCORING ONLY — London/NY/London-close raise the size a "
                          "setup earns (weight %.2f) and can never refuse one. Outside every "
@@ -2392,7 +2424,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.19  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.20  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"

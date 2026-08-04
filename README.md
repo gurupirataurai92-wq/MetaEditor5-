@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.19, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.20, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -608,3 +608,36 @@ time allowed to trade: 3.2%  (stood down by the circuit breaker for 96.8% of the
 ```
 
 Every breaker latch also now logs its numbers instead of a bare `CIRCUIT BREAKER ACTIVE`.
+
+### v5.20 — trading everything is not trading without direction
+
+With the drawdown rail fixed the EA finally trades. It also trades *directionlessly*, and
+three of the reasons are things this project removed on purpose while chasing trade count.
+
+**The mandate governs how much CERTAINTY is required. It must never govern which way a setup
+points.** v5.14 conflated the two: `InpFreshGapSkipExh` was folded in with the grade floors
+and switched off by `InpTakeEveryPOI`. But "an exhaustion gap gets filled, so it is a target
+and not an entry" is a *directional principle* — one established back in v5.10 — not a
+confidence threshold. Switching it off had the EA buying into the end of every run it should
+have been selling into. It is restored and is no longer overridable by the mandate.
+
+**§3d's priority boost inverted the value ranking.** A flat `+1.0` added to the score made the
+newest gap win outright, so a 0.10-grade volume imbalance scored 71% of a 0.80-grade breakaway
+gap — the exact opposite of *valuing* FVG and BAG. The boost now **multiplies** the gap's own
+worth, so recency breaks ties between comparable setups and never promotes a bad one over a
+good one. Junk now scores 13% of a BAG instead of 71%.
+
+**Two structural disciplines, neither of which is a veto:**
+
+| | Before | Now |
+|---|---|---|
+| Setup fighting structure *and* HTF | full size | **half** size (`InpCounterTrendFac`) — still taken |
+| Adding to a basket | any spacing, any P&L | only when the basket is **winning** (`InpScaleOnlyInProfit`, `InpScaleMinR` 0.30) |
+
+Backing a with-trend and a counter-trend read with identical money is what makes a run of
+trades look random. And with six slots and almost no spacing, a basket that kept adding while
+under water turned one wrong read into six positions of the same wrong read.
+
+Everything still trades. Nothing new can refuse a setup — the four rails from v5.14 are still
+the only things that can. What changed is that the EA now *weights* what it takes according to
+the principles it was given, instead of treating every imbalance on the chart as equivalent.
