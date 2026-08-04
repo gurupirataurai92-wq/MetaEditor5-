@@ -50,7 +50,8 @@ the dashboard gets a 403).
 | **Kitchen Display** (`kitchen.php`) | cook, manager, owner | Live ticket board, oldest first, colour-coded by age. **Bump** each item ready; when all are ready, hand the order out. Auto-refreshes every 15 s. Online customer orders appear here automatically. |
 | **Dashboard** (`dashboard.php`) | manager, owner | Today's revenue, orders, net sales, **food-cost %**, top sellers, payment mix and low-stock alerts — all computed live from the database. |
 | **Inventory** (`inventory.php`) | manager, owner | Stock on hand, reorder points, stock value; restock an ingredient (writes a stock movement). |
-| **Menu** (`menu.php`) | manager, owner | Edit prices inline and **86** an item (pull it from every channel instantly). |
+| **Menu** (`menu.php`) | manager, owner | Full menu management: **add** new items, edit price &amp; photo, **86** an item, and **delete** items (items with past orders are hidden instead, to protect sales history). |
+| **Operators** (`operators.php`) | owner | Manage staff accounts: **add operators**, set their role, reset passwords, deactivate or **remove** them. New operators sign in at `staff.php`. |
 | **Orders** (`orders.php`) | cashier, manager, owner | History of the last 100 orders — including online orders with the **customer's name, phone and pickup/delivery** and payment status. |
 
 ## Database
@@ -62,6 +63,13 @@ Everything lives in one MySQL database, **`laka_laka_chicken`** — 10 tables:
 and stock movements are append-only ledgers. Online orders also store the
 customer's name, phone, pickup/delivery choice, address and payment status.
 Full schema + seed data: [`sql/laka_laka_chicken.sql`](sql/laka_laka_chicken.sql).
+
+## Get the whole system
+
+A ready-to-run ZIP of the entire system lives at the repo root:
+[`laka-laka-chicken-system.zip`](../laka-laka-chicken-system.zip). Download it,
+unzip it, and drop the `laka-pos` folder into XAMPP's `htdocs` — then follow
+the setup below.
 
 ## Setup with XAMPP (5 steps)
 

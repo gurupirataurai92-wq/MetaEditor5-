@@ -382,3 +382,15 @@ table.mini td{padding:7px 0;border-bottom:1px solid var(--cream)}
 .image-form button{border:0;background:var(--ink);color:#fff;border-radius:999px;padding:7px 12px;font-size:12px;
   cursor:pointer;font-weight:700}
 .image-form button:hover{background:var(--red)}
+
+/* operator management forms */
+.add-item{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.add-item label{display:flex;flex-direction:column;gap:5px;font-size:11px;font-weight:700;color:var(--ink-soft);
+  text-transform:uppercase;letter-spacing:.05em}
+.add-item label.wide{flex:1;min-width:220px}
+.add-item input,.add-item select{padding:9px 11px;border:2px solid var(--line);border-radius:10px;font-size:14px;
+  background:var(--ground);min-width:120px}
+.add-item input:focus,.add-item select:focus{border-color:var(--red);outline:none}
+.del-btn{border:0;background:none;color:var(--red-deep);font-weight:700;font-size:12px;cursor:pointer;
+  text-transform:uppercase;letter-spacing:.03em;padding:4px 6px;border-radius:8px}
+.del-btn:hover{background:#FCE7E5}

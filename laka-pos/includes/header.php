@@ -12,6 +12,7 @@ $nav = [
     'orders.php'    => ['Orders', ['owner', 'manager', 'cashier']],
     'inventory.php' => ['Inventory', ['owner', 'manager']],
     'menu.php'      => ['Menu', ['owner', 'manager']],
+    'operators.php' => ['Operators', ['owner']],
 ];
 ?>
 <!doctype html>
