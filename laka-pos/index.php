@@ -237,6 +237,10 @@ $payNextStep = [
     </div>
     <form method="post" id="orderForm">
       <input type="hidden" name="action" value="place_order">
+      <div class="cd-sub" id="cdSubBar" hidden>
+        <span id="cdItemCount"></span>
+        <button type="button" id="clearCart" class="cd-clear">Clear cart</button>
+      </div>
       <div id="cdLines" class="cd-lines"><p class="cd-empty">Your cart is empty.</p></div>
 
       <div class="cd-tot">
@@ -324,6 +328,7 @@ $payNextStep = [
               '<span>' + c.qty + '</span>' +
               '<button type="button" data-inc="' + id + '">+</button>' +
             '</div>' +
+            '<button type="button" class="cdl-rm" data-rm="' + id + '" aria-label="Remove ' + c.name + '">🗑</button>' +
             '<input type="hidden" name="item_id[]" value="' + id + '">' +
             '<input type="hidden" name="qty[]" value="' + c.qty + '"></div>';
         });
@@ -335,6 +340,8 @@ $payNextStep = [
       $('cdGrand').textContent = fmt(t.sub + t.tax);
       $('cartCount').textContent = t.count;
       $('cdCheckout').disabled = t.count === 0;
+      $('cdSubBar').hidden = t.count === 0;
+      $('cdItemCount').textContent = t.count + (t.count === 1 ? ' item' : ' items');
     }
 
     function openCart() {
@@ -359,10 +366,13 @@ $payNextStep = [
     });
 
     $('cdLines').addEventListener('click', function (ev) {
-      var inc = ev.target.getAttribute('data-inc'), dec = ev.target.getAttribute('data-dec');
+      var inc = ev.target.getAttribute('data-inc'), dec = ev.target.getAttribute('data-dec'),
+          rm = ev.target.getAttribute('data-rm');
       if (inc) { cart[inc].qty++; render(); }
       if (dec) { cart[dec].qty--; if (cart[dec].qty <= 0) delete cart[dec]; render(); }
+      if (rm) { delete cart[rm]; render(); }
     });
+    $('clearCart').addEventListener('click', function () { cart = {}; render(); });
 
     $('cartBtn').addEventListener('click', openCart);
     $('cartClose').addEventListener('click', closeCart);

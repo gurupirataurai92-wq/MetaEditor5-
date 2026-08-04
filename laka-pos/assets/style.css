@@ -102,7 +102,9 @@ img{display:block}
 
 .cart-col{position:sticky;top:88px;background:var(--surface);border:1px solid var(--line);
   border-radius:18px;padding:18px;box-shadow:var(--shadow)}
-.cart-h{font-family:var(--display);font-size:17px;margin-bottom:12px;text-transform:uppercase}
+.cart-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.cart-h{font-family:var(--display);font-size:17px;text-transform:uppercase}
+.cart-head .cd-clear{margin:0}
 .cart-lines{min-height:60px;border-bottom:2px dashed var(--line);padding-bottom:10px}
 .cart-empty{color:var(--muted);font-size:13.5px;text-align:center;padding:18px 0}
 .cl{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0}
@@ -293,8 +295,15 @@ table.mini td{padding:7px 0;border-bottom:1px solid var(--cream)}
 .cd-close{background:rgba(255,255,255,.2);border:0;color:#fff;width:32px;height:32px;border-radius:999px;
   cursor:pointer;font-size:15px}
 #orderForm{display:flex;flex-direction:column;overflow-y:auto;padding:16px 20px 22px}
+.cd-sub{display:flex;justify-content:space-between;align-items:center;padding:2px 0 8px}
+.cd-sub span{color:var(--muted);font-family:var(--mono);font-size:12px}
+.cd-clear{background:none;border:0;color:var(--red-deep);font-weight:800;font-size:12px;cursor:pointer;
+  text-transform:uppercase;letter-spacing:.04em}
+.cd-clear:hover{text-decoration:underline}
 .cd-lines{border-bottom:2px dashed var(--line);padding-bottom:8px;margin-bottom:8px}
 .cd-empty{color:var(--muted);text-align:center;padding:24px 0}
+.cdl-rm{background:none;border:0;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:0 2px;margin-left:2px}
+.cdl-rm:hover{color:var(--red)}
 .cdl{display:flex;align-items:center;gap:10px;padding:9px 0}
 .cdl-main{flex:1}.cdl-main b{display:block;font-size:14px}.cdl-main span{font-family:var(--mono);font-size:12px;color:var(--muted)}
 .cdl-qty{display:flex;align-items:center;gap:8px}

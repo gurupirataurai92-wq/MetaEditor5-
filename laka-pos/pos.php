@@ -135,7 +135,10 @@ require __DIR__ . '/includes/header.php';
   </section>
 
   <aside class="cart-col">
-    <h2 class="cart-h">Current order</h2>
+    <div class="cart-head">
+      <h2 class="cart-h">Current order</h2>
+      <button type="button" id="clearCart" class="cd-clear" hidden>Clear</button>
+    </div>
     <div id="cart" class="cart-lines"><p class="cart-empty">Tap items to add them.</p></div>
 
     <div class="cart-tot">
@@ -191,7 +194,8 @@ require __DIR__ . '/includes/header.php';
             '<button type="button" data-dec="' + id + '">−</button>' +
             '<span>' + c.qty + '</span>' +
             '<button type="button" data-inc="' + id + '">+</button>' +
-          '</div></div>';
+          '</div>' +
+          '<button type="button" class="cdl-rm" data-rm="' + id + '" aria-label="Remove ' + c.name + '">🗑</button></div>';
         html += '<input type="hidden" name="item_id[]" value="' + id + '">';
         html += '<input type="hidden" name="qty[]" value="' + c.qty + '">';
       });
@@ -204,6 +208,7 @@ require __DIR__ . '/includes/header.php';
     document.getElementById('tax').textContent = fmt(tax);
     document.getElementById('grand').textContent = fmt(grand);
     chargeBtn.disabled = ids.length === 0;
+    document.getElementById('clearCart').hidden = ids.length === 0;
   }
 
   document.querySelectorAll('.tile').forEach(function (t) {
@@ -220,8 +225,14 @@ require __DIR__ . '/includes/header.php';
   cartEl.addEventListener('click', function (ev) {
     var inc = ev.target.getAttribute('data-inc');
     var dec = ev.target.getAttribute('data-dec');
+    var rm = ev.target.getAttribute('data-rm');
     if (inc) { cart[inc].qty++; render(); }
     if (dec) { cart[dec].qty--; if (cart[dec].qty <= 0) delete cart[dec]; render(); }
+    if (rm) { delete cart[rm]; render(); }
+  });
+
+  document.getElementById('clearCart').addEventListener('click', function () {
+    cart = {}; render();
   });
 
   render();
