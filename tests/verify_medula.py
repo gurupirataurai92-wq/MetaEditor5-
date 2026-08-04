@@ -2034,6 +2034,55 @@ check("v5.18: the newest gap outranks an older, better-placed POI",
 check("v5.18: without the boost the newest gap would lose that contest",
       not wins_contest(0.10, boost=0.0))
 
+# ---------------------------------------------------------------- v5.19
+# The bug that made every other fix invisible. Peak equity only ratcheted
+# up, so once equity sat below it by the drawdown limit the rail was true
+# forever - and recovering a drawdown requires trading, which it forbade.
+
+def dd_breaker_old(equity, peak_alltime, pct=20.0):
+    return (peak_alltime-equity) >= peak_alltime*pct/100.0
+
+def dd_breaker_new(equity, peak_today, peak_alltime,
+                   day_pct=35.0, fatal_pct=60.0):
+    day = peak_today > 0 and (peak_today-equity) >= peak_today*day_pct/100.0
+    fatal = peak_alltime > 0 and (peak_alltime-equity) >= peak_alltime*fatal_pct/100.0
+    return day, fatal
+
+check("v5.19: one full-size loss on a $10 account tripped the OLD rail exactly",
+      dd_breaker_old(8.0, 10.0), "20% risk ceiling vs a 20% drawdown limit")
+check("v5.19: the OLD rail stayed true on every later day — permanently dead",
+      all(dd_breaker_old(e, 10.0) for e in (8.0, 7.5, 6.0, 2.0)))
+def old_rail_absorbing(equity, peak=10.0):
+    """Latched -> no trades -> equity cannot move -> still latched. A trap state."""
+    if not dd_breaker_old(equity, peak):
+        return False
+    return dd_breaker_old(equity, peak)      # a day later, nothing has changed
+check("v5.19: the OLD rail was an absorbing state — escaping it required trading",
+      old_rail_absorbing(8.0) and old_rail_absorbing(7.0))
+
+# a new day re-bases the peak, so the rail brakes and then releases
+check("v5.19: after one loss the new day starts clean and trading resumes",
+      dd_breaker_new(8.0, 8.0, 10.0)[0] is False)
+check("v5.19: a genuinely bad session still stands the EA down for the day",
+      dd_breaker_new(6.4, 10.0, 10.0)[0] is True)
+check("v5.19: the day rail releases the next day at the new base",
+      dd_breaker_new(6.4, 6.4, 10.0)[0] is False)
+check("v5.19: the fatal rail is the one that stops for good, and it is far out",
+      dd_breaker_new(3.9, 3.9, 10.0)[1] is True)
+check("v5.19: the fatal rail does not fire on an ordinary losing day",
+      dd_breaker_new(6.4, 10.0, 10.0)[1] is False)
+check("v5.19: the two rails cannot be tripped by the same single loss",
+      dd_breaker_new(8.0, 10.0, 10.0) == (False, False))
+
+def allowed_fraction(sec_blocked, sec_total):
+    return 0.0 if sec_total <= 0 else 100.0*(1.0-sec_blocked/sec_total)
+check("v5.19: a run that was disabled throughout reports it plainly",
+      allowed_fraction(99.0, 100.0) < 5.0)
+check("v5.19: a healthy run reports near-full availability",
+      allowed_fraction(2.0, 100.0) > 95.0)
+check("v5.19: 8 trades over years is what a permanently latched rail looks like",
+      dd_breaker_old(8.0, 10.0) and not dd_breaker_new(8.0, 8.0, 10.0)[0])
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

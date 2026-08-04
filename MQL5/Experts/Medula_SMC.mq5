@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.18 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.19 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.18"
+#property version   "5.19"
 
 //============================== INPUTS ==============================
 
@@ -320,7 +320,8 @@ input double InpMinStopPct      = 0.25;    // ...nor closer than this x avg rang
 input double InpTpRMultiple     = 3.0;     // Target when no liquidity pool is in range
 input double InpDailyLossPct    = 5.0;     // Daily loss limit (%)
 input int    InpBreakerMinLosses= 3;       // Losing trades before the daily limit latches
-input double InpMaxDDPct        = 20.0;    // Max drawdown from peak (%)
+input double InpMaxDDPct        = 35.0;    // Stand down for the day past this drawdown (%)
+input double InpMaxAccountDDPct = 60.0;    // Stop for the whole run past this drawdown (%)
 input double InpMaxRiskPctHard  = 20.0;    // ABSOLUTE ceiling on one trade (% equity)
 input double InpMarginSafety    = 1.2;     // Free-margin safety factor
 input bool   InpAllowMinLot     = true;    // Round up to broker minimum lot
@@ -517,7 +518,10 @@ double   g_sumSpread=0.0,g_sumStop=0.0;
 int      g_nEntries=0;
 ulong    g_partialDone[],g_beDone[];
 
-double   g_dayStartEquity=0.0,g_peakEquity=0.0;
+double   g_dayStartEquity=0.0,g_peakEquity=0.0,g_lifetimePeak=0.0;
+bool     g_fatal=false;
+datetime g_lastTickTime=0;
+double   g_secBlocked=0.0,g_secTotal=0.0;
 int      g_dayKey=-1;
 datetime g_dayStart=0;
 datetime g_lastFitLog=0;
@@ -1606,8 +1610,13 @@ void RiskUpdate(void)
       g_dayKey=key; g_dayStartEquity=eq; g_breaker=false;
       dt.hour=0; dt.min=0; dt.sec=0;
       g_dayStart=StructToTime(dt);
+      // The peak resets with the day. Left ratcheting from the all-time high
+      // it made the drawdown rail permanent — see CircuitBreaker below.
+      g_peakEquity=eq;
      }
-   if(eq>g_peakEquity) g_peakEquity=eq;
+   if(eq>g_peakEquity)     g_peakEquity=eq;
+   if(eq>g_lifetimePeak)   g_lifetimePeak=eq;
+   if(g_lifetimePeak<=0.0) g_lifetimePeak=eq;
   }
 
 //--- closed losing trades of ours since midnight
@@ -1630,18 +1639,58 @@ int DayLosingTrades(void)
    return losses;
   }
 
-//--- The daily loss limit is a percentage, which on a small account can be
-//    less than one minimum-lot stop. Latching the breaker on a single trade
-//    ends the session before the model has been given a chance to work, so
-//    the day limit also requires a run of losers. Max drawdown from peak is
-//    the hard rail and still latches on its own.
+//--- THE BUG THAT MADE EVERY OTHER FIX INVISIBLE.
+//
+//    g_peakEquity only ever ratcheted upward, and the rail read
+//
+//        (peak - equity) >= peak * InpMaxDDPct
+//
+//    Once equity sat 20% below the ALL-TIME high the test was true forever.
+//    The daily reset cleared g_breaker, and the very next tick re-latched it,
+//    because equity was still below a peak that could never come down. And
+//    recovering the drawdown requires trading, which the rail forbids.
+//
+//    With a 20% per-trade ceiling on a $10 account, ONE full-size loss is
+//    exactly 20% — so the EA disabled itself permanently after a single
+//    losing trade and spent the rest of the backtest printing nothing. Eight
+//    trades across the whole history, and no change to the entry model could
+//    ever have shown up, because none of it was reachable.
+//
+//    Drawdown is now measured from the DAY'S high-water mark, which resets
+//    with the day, so the rail brakes a bad session and then lets the EA back
+//    out. A second, much larger rail measured from the all-time peak is the
+//    one that genuinely stops for good.
 bool CircuitBreaker(void)
   {
    if(g_breaker) return true;
    double eq=AccountInfoDouble(ACCOUNT_EQUITY);
+
    if((g_dayStartEquity-eq)>=g_dayStartEquity*InpDailyLossPct/100.0 &&
-      DayLosingTrades()>=InpBreakerMinLosses)                        g_breaker=true;
-   if((g_peakEquity-eq)>=g_peakEquity*InpMaxDDPct/100.0)             g_breaker=true;
+      DayLosingTrades()>=InpBreakerMinLosses)
+     {
+      LogEvent(StringFormat("circuit breaker: daily loss %.2f of %.2f start equity "
+                            "(%d losing trades today)",
+                            g_dayStartEquity-eq,g_dayStartEquity,DayLosingTrades()));
+      g_breaker=true;
+     }
+
+   if(g_peakEquity>0.0 && (g_peakEquity-eq)>=g_peakEquity*InpMaxDDPct/100.0)
+     {
+      LogEvent(StringFormat("circuit breaker: %.1f%% below today's peak (%.2f from %.2f) "
+                            "— stood down until tomorrow",
+                            100.0*(g_peakEquity-eq)/g_peakEquity,eq,g_peakEquity));
+      g_breaker=true;
+     }
+
+   if(g_lifetimePeak>0.0 && (g_lifetimePeak-eq)>=g_lifetimePeak*InpMaxAccountDDPct/100.0)
+     {
+      if(!g_fatal)
+         LogEvent(StringFormat("*** ACCOUNT DRAWDOWN %.0f%% FROM PEAK %.2f — TRADING STOPPED "
+                               "FOR THE REST OF THE RUN ***",
+                               100.0*(g_lifetimePeak-eq)/g_lifetimePeak,g_lifetimePeak));
+      g_fatal=true;
+     }
+   if(g_fatal) return true;
    return g_breaker;
   }
 
@@ -2214,6 +2263,8 @@ void ParamAudit(void)
    d+=AuditD("InpScaleMinSpacing",InpScaleMinSpacing,0.25);
    d+=AuditD("InpMaxRiskPctHard" ,InpMaxRiskPctHard ,20.0);
    d+=AuditI("InpBreakerMinLosses",InpBreakerMinLosses,3);
+   d+=AuditD("InpMaxDDPct"       ,InpMaxDDPct       ,35.0);
+   d+=AuditD("InpMaxAccountDDPct",InpMaxAccountDDPct,60.0);
    d+=AuditB("InpAutoFitStop"    ,InpAutoFitStop    ,true);
    d+=AuditD("InpMinStopSpreads" ,InpMinStopSpreads ,4.00);
    d+=AuditB("InpTrailStructure" ,InpTrailStructure ,true);
@@ -2237,7 +2288,7 @@ void SelfTest(void)
   {
    if(!InpSelfTest) return;
    LogEvent("────────── SMC / ICT SELF-TEST ──────────");
-   LogEvent("build: Medula_SMC v5.18  —  if the panel does not read v5.18, MT5 is "
+   LogEvent("build: Medula_SMC v5.19  —  if the panel does not read v5.19, MT5 is "
             "running an older .ex5 and the source was never recompiled.");
    ParamAudit();
    LogEvent(StringFormat("symbol %s  execution timeframe M5  bars loaded %d  (NO INDICATORS)",
@@ -2341,7 +2392,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.18  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.19  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"
@@ -2393,7 +2444,8 @@ int OnInit(void)
    ArrayResize(g_partialDone,0); ArrayResize(g_beDone,0);
    double eq=AccountInfoDouble(ACCOUNT_EQUITY);
    g_dayStartEquity=eq; g_peakEquity=eq; g_dayKey=-1;
-   g_breaker=false; g_lastBar=0; g_lastEntry=0; g_entries=0;
+   g_breaker=false; g_fatal=false; g_lastBar=0; g_lastEntry=0; g_entries=0;
+   g_lifetimePeak=0.0; g_lastTickTime=0; g_secBlocked=0.0; g_secTotal=0.0;
    g_basketRisk=0.0; g_firstLot=0.0;
    g_block="warming up";
    RiskUpdate();
@@ -2463,6 +2515,24 @@ void Report(void)
      }
 
    LogEvent("═════════════ RUN REPORT ═════════════");
+
+   // FIRST, because it invalidates everything below it. An EA that was stood
+   // down for most of the run did not produce a verdict on its model — it
+   // produced a verdict on its risk rails, and no entry tuning is visible in
+   // a period it was never allowed to trade.
+   if(g_secTotal>0.0)
+     {
+      double pct=100.0*g_secBlocked/g_secTotal;
+      LogEvent(StringFormat("time allowed to trade: %.1f%%  (stood down by the circuit "
+                            "breaker for %.1f%% of the run)",100.0-pct,pct));
+      if(pct>=25.0)
+         LogEvent("*** The EA spent most of the run disabled. Whatever this report says "
+                  "about the entry model, it was measured on the fraction of the history "
+                  "it was permitted to trade. Fix the rails before reading anything else. ***");
+     }
+   if(g_fatal)
+      LogEvent("*** the account drawdown rail stopped trading permanently during this run ***");
+
    if(tot==0)
      {
       LogEvent("no closed trades this run.");
@@ -2517,6 +2587,15 @@ void OnDeinit(const int reason)
 
 void OnTick(void)
   {
+   // how much of the run the EA actually spent allowed to trade
+   datetime nowT=TimeCurrent();
+   if(g_lastTickTime>0)
+     {
+      double dts=(double)(nowT-g_lastTickTime);
+      if(dts>0.0 && dts<3600.0){ g_secTotal+=dts; if(g_breaker||g_fatal) g_secBlocked+=dts; }
+     }
+   g_lastTickTime=nowT;
+
    RiskUpdate();
 
    SBasket b; GetBasket(b);

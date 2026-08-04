@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.18, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.19, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -563,3 +563,48 @@ trade, once per bar:
 If those lines appear and no trade follows, the block reason on the next line names the rail.
 If they do not appear at all, detection is the problem, not execution — and the parameter audit
 above them says whether the build in memory is the one on disk.
+
+### v5.19 — the bug that made every other fix invisible
+
+**8 trades across the entire history.** Not a detection problem, not a confidence gate — the
+EA disabled itself permanently after its first full-size loss and spent the rest of the
+backtest doing nothing.
+
+```c
+if(eq > g_peakEquity) g_peakEquity = eq;                              // only ever ratchets UP
+...
+if((g_peakEquity-eq) >= g_peakEquity*InpMaxDDPct/100.0) g_breaker = true;
+```
+
+`g_peakEquity` never came down. Once equity sat 20% below the **all-time** high the test was
+true forever. The daily reset cleared `g_breaker`, and the very next tick re-latched it,
+because equity was still below a peak that could never fall. **And recovering a drawdown
+requires trading, which the rail forbids** — an absorbing state with no exit.
+
+With `InpMaxRiskPctHard` at 20% on a $10 account, **one full-size loss is exactly 20%.** The
+per-trade ceiling and the drawdown limit were the same number, so a single loser was fatal.
+
+Every entry improvement from v5.10 through v5.18 — grading, inversions, fresh gaps, price
+action candles, next-candle execution — was landing in a period the EA was never allowed to
+trade. That is why nothing changed no matter what was shipped.
+
+**The fix is two rails instead of one conflated one:**
+
+| Rail | Measured from | Threshold | Effect |
+|---|---|---|---|
+| Session drawdown | **the day's** high-water mark, reset each day | `InpMaxDDPct` 35% | stands down until tomorrow |
+| Account drawdown | the all-time peak | `InpMaxAccountDDPct` 60% | stops for the whole run |
+
+The session rail brakes a bad day and then lets the EA back out. The account rail is the one
+that genuinely stops, and it sits far enough out that ordinary variance cannot reach it.
+
+**And the report now leads with the number that would have caught this in one run:**
+
+```
+time allowed to trade: 3.2%  (stood down by the circuit breaker for 96.8% of the run)
+*** The EA spent most of the run disabled. Whatever this report says about the entry
+    model, it was measured on the fraction of the history it was permitted to trade.
+    Fix the rails before reading anything else. ***
+```
+
+Every breaker latch also now logs its numbers instead of a bare `CIRCUIT BREAKER ACTIVE`.
