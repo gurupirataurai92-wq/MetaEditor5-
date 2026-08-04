@@ -8,6 +8,11 @@
 
   var SITE = window.SITE || {};
   var CO = SITE.company || {};
+
+  /* Photos the manager has added but not published yet, as
+     { "uploads/v-001-1.jpg": "data:image/jpeg;base64,…" }. Empty for
+     ordinary visitors — they see the published files instead. */
+  var PHOTOS = {};
   var $ = function (sel, root) { return (root || document).querySelector(sel); };
   var $$ = function (sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); };
 
@@ -32,6 +37,14 @@
     return new URLSearchParams(window.location.search).get(name);
   }
 
+  /* A real photo if the item has one, otherwise the placeholder illustration.
+     Staged photos win over published files so the manager sees edits at once. */
+  function photoSrc(rec, fallback) {
+    var file = rec.photos && rec.photos.length ? rec.photos[0] : null;
+    if (!file) { return fallback; }
+    return PHOTOS[file] || ('assets/img/' + file);
+  }
+
   var STATUS_LABEL = {
     'in-stock':   { text: 'In stock',   cls: 'card-flag--stock' },
     'in-transit': { text: 'In transit', cls: 'card-flag--order' },
@@ -51,6 +64,8 @@
     aftermarket: { text: 'Aftermarket', cls: '' },
     used: { text: 'Japan used', cls: '' }
   };
+
+  function start() {
 
   /* -------------------------------------------------------- header/nav -- */
 
@@ -128,7 +143,7 @@
     return '' +
       '<article class="card">' +
         '<div class="card-media">' +
-          '<img src="assets/img/' + esc(v.body) + '.svg" alt="' + esc(title) + ' — ' + esc(v.body) + '" loading="lazy" width="800" height="500">' +
+          '<img src="' + esc(photoSrc(v, 'assets/img/' + v.body + '.svg')) + '" alt="' + esc(title) + ' — ' + esc(v.body) + '" loading="lazy" width="800" height="500">' +
           '<span class="card-flag ' + s.cls + '">' + s.text + '</span>' +
         '</div>' +
         '<div class="card-body">' +
@@ -158,7 +173,7 @@
     return '' +
       '<article class="card part-card">' +
         '<div class="card-media">' +
-          '<img src="assets/img/parts/' + esc(p.category) + '.svg" alt="' + esc(p.name) + '" loading="lazy" width="800" height="500">' +
+          '<img src="' + esc(photoSrc(p, 'assets/img/parts/' + p.category + '.svg')) + '" alt="' + esc(p.name) + '" loading="lazy" width="800" height="500">' +
           '<span class="card-flag ' + s.cls + '">' + s.text + '</span>' +
         '</div>' +
         '<div class="card-body">' +
@@ -458,5 +473,31 @@
         '&body=' + encodeURIComponent(body);
       form.reset();
     });
+  }
+
+  } /* end start() */
+
+  /* ------------------------------------------------------- bootstrap -- */
+  /* Pull in anything the manager has staged locally, then render. Visitors
+     who have never used the manager have nothing staged, so this resolves
+     immediately and they see the published catalogue from data.js. */
+
+  if (window.LymondStore) {
+    Promise.all([
+      window.LymondStore.getCatalogue(),
+      window.LymondStore.allPhotos()
+    ]).then(function (res) {
+      var staged = res[0];
+      PHOTOS = res[1] || {};
+      if (staged) {
+        if (staged.vehicles) { SITE.vehicles = staged.vehicles; }
+        if (staged.parts) { SITE.parts = staged.parts; }
+        if (staged.company) { CO = SITE.company = Object.assign({}, SITE.company, staged.company); }
+      }
+    }).catch(function () {
+      /* A broken or unavailable store must never take the public site down. */
+    }).then(start);
+  } else {
+    start();
   }
 }());
