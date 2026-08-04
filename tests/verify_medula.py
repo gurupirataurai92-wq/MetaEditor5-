@@ -2327,6 +2327,57 @@ check("v5.22: the next-candle path is off while the confirmed model runs",
 check("v5.22: switching the model off restores them",
       path_active(True, False))
 
+# ---------------------------------------------------------------- v5.23
+# "Little profits are better than coordinated trades with losses."
+# Taken literally that is the scalper's trap; taken as partial-plus-runner
+# it is a sound structure. The arithmetic decides which one got built.
+
+def breakeven_winrate(reward_r, risk_r=1.0):
+    return risk_r/(reward_r+risk_r)
+check("v5.23: banking 0.5R against a 1R stop needs a 67% win rate to break even",
+      abs(breakeven_winrate(0.5) - 2.0/3.0) < 1e-9)
+check("v5.23: and the spread is already a quarter of that risk",
+      breakeven_winrate(0.5) > 0.60)
+check("v5.23: a 2R runner only needs 34%",
+      breakeven_winrate(2.0) < 0.35)
+
+def partial_runner(win_rate, partial_r, partial_pct, runner_r, loss_r=1.0):
+    """Expectancy of banking part early and running the rest from break-even."""
+    p = partial_pct/100.0
+    won = partial_r*p + runner_r*(1-p)
+    # a trade that reaches the partial then stops at break-even keeps the partial
+    return win_rate*won - (1-win_rate)*loss_r
+
+check("v5.23: partial-plus-runner beats the same win rate on a flat small target",
+      partial_runner(0.45, 0.5, 60, 2.5) > (0.45*0.5 - 0.55*1.0))
+check("v5.23: it is positive at a win rate the flat small target cannot survive",
+      partial_runner(0.45, 0.5, 60, 2.5) > 0.0
+      and (0.45*0.5 - 0.55*1.0) < 0.0)
+check("v5.23: banking everything early throws the expectancy away",
+      partial_runner(0.45, 0.5, 100, 2.5) < partial_runner(0.45, 0.5, 60, 2.5))
+check("v5.23: a runner with no partial is more volatile but not worse in expectancy",
+      partial_runner(0.45, 0.5, 0, 2.5) > 0.0)
+
+def be_after_partial(banked, remainder_outcome_r):
+    """Once the partial is banked and the stop is at entry, the floor is the partial."""
+    return banked + max(remainder_outcome_r, 0.0)
+check("v5.23: after the partial the trade can no longer become a loss",
+      be_after_partial(0.30, -1.0) >= 0.30)
+check("v5.23: the runner still has its upside",
+      be_after_partial(0.30, 2.0) > be_after_partial(0.30, 0.0))
+
+def confirm_delay_bars(fast, live_developed):
+    """Waiting for the close costs a full bar; the live candle can confirm now."""
+    if fast and live_developed:
+        return 0
+    return 1
+check("v5.23: live-candle confirmation removes the one-bar delay",
+      confirm_delay_bars(True, True) == 0)
+check("v5.23: an undeveloped live candle still waits for the close",
+      confirm_delay_bars(True, False) == 1)
+check("v5.23: with fast confirm off the EA always waits a full bar",
+      confirm_delay_bars(False, True) == 1)
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

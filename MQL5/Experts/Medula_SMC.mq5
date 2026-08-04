@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.22 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.23 — Smart Money Concepts / ICT.  M5 execution.       |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.22"
+#property version   "5.23"
 
 //============================== INPUTS ==============================
 
@@ -265,6 +265,26 @@ input double InpGapSupportBonus = 0.30;    // Grade bonus when a live gap/BAG ba
 //    body size, wick size, engulfing, pin bars, closes near the extreme,
 //    inside bars and outside bars. Used to grade every trigger above and
 //    scored into the size the trade earns.
+//--- SPEED AND THE SMALL WIN.
+//
+//    "If it can open a trade for a short breakaway gap or FVG that generates
+//     even little profits, that is better than coordinated trades with losses."
+//
+//    Taken literally — small fixed target against a full stop — that is the
+//    scalper's trap: banking 0.5R against a 1R stop needs a 67% win rate just
+//    to break even, and the spread is already a quarter of the risk. So the
+//    small win is taken as a PARTIAL, the rest is moved to break-even
+//    immediately and trailed. Most trades then end at a small profit or at
+//    zero, losses are cut early, and the runner carries the expectancy. That
+//    is the version of this that survives its own arithmetic.
+input group "Speed and Quick Profit"
+input bool   InpFastConfirm     = true;    // Confirm from the LIVE candle, don't wait for close
+input double InpFastMinRange    = 0.35;    // Live candle must have developed this x avg range
+input bool   InpQuickProfit     = true;    // Bank a partial early, then run the rest free
+input double InpQuickPartialR   = 0.50;    // Take the partial at this R
+input double InpQuickPartialPct = 60.0;    // Percent of the position banked there
+input bool   InpBeAfterPartial  = true;    // Move to break-even the moment the partial is banked
+
 input group "Candle Anatomy (§3f)"
 input double InpAnatStrongClose = 0.70;    // Close this far into the range counts as strong
 input double InpAnatPinWick     = 2.00;    // Pin bar: wick this many times the body
@@ -337,7 +357,7 @@ input bool   InpScalpMode       = true;    // Scalper profile: POI stops, quick 
 input bool   InpStopBeyondPOI   = true;    // Stop just past the FVG/OB, not past the sweep
 input double InpPoiStopBuffer   = 0.30;    // Stop beyond the POI by this x average range
 input double InpScalpTargetR    = 1.6;     // Scalp target in R
-input int    InpMaxHoldBars     = 24;      // Close a scalp after this many M5 bars
+input int    InpMaxHoldBars     = 12;      // Close a scalp after this many M5 bars
 
 //--- TAKE EVERY POI.  The single switch that states the mandate: every live
 //    fair value gap, breakaway gap and order block is executed, small or
@@ -389,8 +409,8 @@ input double InpMaxBasketRiskPct= 4.0;     // Max combined basket risk (% equity
 input bool   InpBasketBreakEven = true;    // Move basket to break-even in profit
 input double InpBasketBeAtR     = 0.5;     // Break-even trigger (R)
 input bool   InpBasketPartial   = true;    // Partial close at the first target
-input double InpBasketPartialR  = 0.6;     // Partial trigger (R)
-input double InpBasketPartialPct= 50.0;    // Percent of volume closed
+input double InpBasketPartialR  = 0.5;     // Partial trigger (R)
+input double InpBasketPartialPct= 60.0;    // Percent of volume closed
 input bool   InpAllowScaleIn    = true;    // Add on a fresh confirmation
 input double InpScaleDecay      = 0.6;     // Lot decay per add
 input double InpScaleMinSpacing = 0.25;    // Min spacing between adds (x avg range)
@@ -406,7 +426,7 @@ input bool   InpCloseOnFlip     = true;    // Close basket when HTF bias flips
 //    entry — is what pays for the spread.
 input group "Exit Management"
 input bool   InpTrailStructure  = true;    // Trail the stop behind swing structure
-input double InpTrailStartR     = 1.00;    // Start trailing at this R
+input double InpTrailStartR     = 0.70;    // Start trailing at this R
 input double InpTrailBufferPct  = 0.35;    // Trail this far beyond the swing (x avg range)
 input bool   InpRunWinners      = true;    // Past target, hand the trade to the trail
 input bool   InpExitOnInvalid   = true;    // Exit when price closes back through the POI
@@ -579,7 +599,7 @@ int      g_bars=0;
 SOB      g_obs[];
 SFVG     g_fvgs[];
 SLIQ     g_liqs[];
-SCandle  g_candle;
+SCandle  g_candle,g_candleLive;
 SView    g_view;
 
 double   g_basketRisk=0.0;          // R unit for the whole basket
@@ -1036,13 +1056,17 @@ void BuildFVGs(void)
 //--- Everything the last closed candle says about itself, and about the one
 //    before it. No indicator, no zone — the shape of the bars, which is what
 //    a person actually reads off the chart.
-void BuildCandleAnatomy(void)
+//--- SPEED. Confirmation read only from the last CLOSED candle costs a whole
+//    M5 bar between the signal and the fill — on a scalp that is most of the
+//    move. The live candle is read as well, and once it has developed enough
+//    body to mean something it can confirm on its own. Same test, up to five
+//    minutes earlier.
+void BuildCandleAnatomyAt(const int idx,SCandle &c)
   {
-   SCandle c; ZeroMemory(c);
-   g_candle=c;
-   if(g_bars<4 || g_view.avgRange<=0.0) return;
+   ZeroMemory(c);
+   if(g_bars<idx+3 || g_view.avgRange<=0.0) return;
 
-   double o=g_o[1],h=g_h[1],l=g_l[1],cl=g_c[1];
+   double o=g_o[idx],h=g_h[idx],l=g_l[idx],cl=g_c[idx];
    double rng=h-l;
    if(rng<=0.0) return;
 
@@ -1062,7 +1086,7 @@ void BuildCandleAnatomy(void)
    c.pinBear=(c.upperWick*rng>=InpAnatPinWick*body && c.upperWick>=InpAnatPinShare);
 
    // engulfing, inside and outside are all relative to the candle before
-   double o2=g_o[2],h2=g_h[2],l2=g_l[2],c2=g_c[2];
+   double o2=g_o[idx+1],h2=g_h[idx+1],l2=g_l[idx+1],c2=g_c[idx+1];
    double topB =MathMax(o,cl),  botB =MathMin(o,cl);
    double topB2=MathMax(o2,c2), botB2=MathMin(o2,c2);
    bool prevBear=(c2<o2), prevBull=(c2>o2);
@@ -1071,24 +1095,34 @@ void BuildCandleAnatomy(void)
    c.engulfBear=(c.dir< 0 && prevBull && botB<=botB2 && topB>=topB2);
    c.insideBar =(h< h2 && l> l2);
    c.outsideBar=(h> h2 && l< l2);
+  }
 
-   g_candle=c;
+void BuildCandleAnatomy(void)
+  {
+   BuildCandleAnatomyAt(1,g_candle);       // the last closed candle
+   BuildCandleAnatomyAt(0,g_candleLive);   // the one forming right now
   }
 
 //--- How strongly the anatomy backs a trade in this direction, 0..1.
+double AnatomyScoreOf(const SCandle &k,const int dir)
+  {
+   if(k.dir==0 && k.rangeX<=0.0) return 0.0;
+   double s=0.0;
+   s+=0.28*MClamp(k.bodyPct,0.0,1.0);
+   s+=0.22*(dir>0 ? MClamp(k.closePos,0.0,1.0) : MClamp(1.0-k.closePos,0.0,1.0));
+   s+=0.20*((dir>0 && k.engulfBull)||(dir<0 && k.engulfBear) ? 1.0 : 0.0);
+   s+=0.14*((dir>0 && k.pinBull)   ||(dir<0 && k.pinBear)    ? 1.0 : 0.0);
+   s+=0.10*MClamp(k.rangeX,0.0,1.0);
+   s+=0.06*(k.outsideBar ? 1.0 : 0.0);
+   if(k.dir!=0 && k.dir!=dir) s*=0.70;                 // the candle points the other way
+   return MClamp(s,0.0,1.0);
+  }
 double AnatomyScore(const int dir)
   {
-   if(g_candle.dir==0 && g_candle.rangeX<=0.0) return 0.0;
-   double s=0.0;
-   s+=0.28*MClamp(g_candle.bodyPct,0.0,1.0);
-   s+=0.22*(dir>0 ? MClamp(g_candle.closePos,0.0,1.0)
-                  : MClamp(1.0-g_candle.closePos,0.0,1.0));
-   s+=0.20*((dir>0 && g_candle.engulfBull)||(dir<0 && g_candle.engulfBear) ? 1.0 : 0.0);
-   s+=0.14*((dir>0 && g_candle.pinBull)   ||(dir<0 && g_candle.pinBear)    ? 1.0 : 0.0);
-   s+=0.10*MClamp(g_candle.rangeX,0.0,1.0);
-   s+=0.06*(g_candle.outsideBar ? 1.0 : 0.0);
-   if(g_candle.dir!=0 && g_candle.dir!=dir) s*=0.70;   // the candle points the other way
-   return MClamp(s,0.0,1.0);
+   double best=AnatomyScoreOf(g_candle,dir);
+   if(InpFastConfirm && g_candleLive.rangeX>=InpFastMinRange)
+      best=MathMax(best,AnatomyScoreOf(g_candleLive,dir));
+   return best;
   }
 
 //--- what to call it in the journal
@@ -1112,24 +1146,35 @@ string AnatomyName(const int dir)
 //--- STEP 4. Price has come back into the gap; has it shown a reason to go?
 //    Rejection candle, engulfing candle, a break of the minor structure
 //    against the move, or a strong close in our direction.
+bool ConfirmFrom(const SCandle &k,const int dir,const int idx,string &why);
+
 bool HasConfirmation(const int dir,string &why)
+  {
+   if(ConfirmFrom(g_candle,dir,1,why)) return true;
+   if(InpFastConfirm && g_candleLive.rangeX>=InpFastMinRange &&
+      ConfirmFrom(g_candleLive,dir,0,why))
+     { why=why+" (live candle)"; return true; }
+   return false;
+  }
+
+bool ConfirmFrom(const SCandle &k,const int dir,const int idx,string &why)
   {
    why="";
    if(dir>0)
      {
-      if(g_candle.engulfBull)                      { why="bullish engulfing";      return true; }
-      if(g_candle.pinBull)                         { why="bullish rejection";      return true; }
-      if(g_candle.strongCloseUp && g_candle.dir>0) { why="strong bullish close";   return true; }
-      if(g_bars>3 && g_c[1]>g_h[2])                { why="minor structure break";  return true; }
+      if(k.engulfBull)                      { why="bullish engulfing";      return true; }
+      if(k.pinBull)                         { why="bullish rejection";      return true; }
+      if(k.strongCloseUp && k.dir>0)        { why="strong bullish close";   return true; }
+      if(g_bars>idx+2 && g_c[idx]>g_h[idx+1]){ why="minor structure break";  return true; }
      }
    else
      {
-      if(g_candle.engulfBear)                      { why="bearish engulfing";      return true; }
-      if(g_candle.pinBear)                         { why="bearish rejection";      return true; }
-      if(g_candle.strongCloseDn && g_candle.dir<0) { why="strong bearish close";   return true; }
-      if(g_bars>3 && g_c[1]<g_l[2])                { why="minor structure break";  return true; }
+      if(k.engulfBear)                      { why="bearish engulfing";      return true; }
+      if(k.pinBear)                         { why="bearish rejection";      return true; }
+      if(k.strongCloseDn && k.dir<0)        { why="strong bearish close";   return true; }
+      if(g_bars>idx+2 && g_c[idx]<g_l[idx+1]){ why="minor structure break";  return true; }
      }
-   if(AnatomyScore(dir)>=InpConfirmMinAnat){ why="candle anatomy"; return true; }
+   if(AnatomyScoreOf(k,dir)>=InpConfirmMinAnat){ why="candle anatomy"; return true; }
    return false;
   }
 
@@ -2283,15 +2328,28 @@ void ManageBasket(const SBasket &b)
       double tp =PositionGetDouble(POSITION_TP);
       int pd=(PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY?1:-1);
 
-      if(InpBasketPartial && R>=InpBasketPartialR && !TicketSeen(g_partialDone,tk))
+      double partialAt=(InpQuickProfit ? InpQuickPartialR : InpBasketPartialR);
+      double partialPct=(InpQuickProfit ? InpQuickPartialPct : InpBasketPartialPct);
+      if(InpBasketPartial && R>=partialAt && !TicketSeen(g_partialDone,tk))
         {
          double step=LotStep();
-         double part=MathFloor(vol*InpBasketPartialPct/100.0/step+1e-9)*step;
+         double part=MathFloor(vol*partialPct/100.0/step+1e-9)*step;
          if(part>=MinLot() && (vol-part)>=MinLot())
            {
             if(ClosePartial(tk,part))
-              { TicketMark(g_partialDone,tk);
-                LogEvent(StringFormat("basket partial: closed %.2f at %.2fR",part,R)); }
+              {
+               TicketMark(g_partialDone,tk);
+               LogEvent(StringFormat("quick profit: banked %.2f of %.2f at %.2fR",part,vol,R));
+               // the small win is in the account; the remainder must never
+               // become a loss, so break-even goes on immediately
+               if(InpBeAfterPartial) TicketMark(g_beDone,tk);
+               if(InpBeAfterPartial)
+                 {
+                  double be=NormalizeDouble(b.avgEntry+pd*0.1*g_view.avgRange,digits);
+                  bool legal=(pd>0 ? be<g_view.bid-stops : be>g_view.ask+stops);
+                  if(legal) ModifySL(tk,be,tp);
+                 }
+              }
            }
          else TicketMark(g_partialDone,tk);
         }
@@ -2583,6 +2641,11 @@ int AuditB(const string name,const bool have,const bool want)
 void ParamAudit(void)
   {
    int d=0;
+   d+=AuditB("InpFastConfirm"    ,InpFastConfirm    ,true);
+   d+=AuditB("InpQuickProfit"    ,InpQuickProfit    ,true);
+   d+=AuditD("InpQuickPartialR"  ,InpQuickPartialR  ,0.50);
+   d+=AuditD("InpTrailStartR"    ,InpTrailStartR    ,0.70);
+   d+=AuditI("InpMaxHoldBars"    ,InpMaxHoldBars    ,12);
    d+=AuditB("InpConfirmModel"   ,InpConfirmModel   ,true);
    d+=AuditB("InpRequireRetrace" ,InpRequireRetrace ,true);
    d+=AuditB("InpRequireConfirm" ,InpRequireConfirm ,true);
@@ -2644,7 +2707,7 @@ void SelfTest(void)
   {
    if(!InpSelfTest) return;
    LogEvent("────────── SMC / ICT SELF-TEST ──────────");
-   LogEvent("build: Medula_SMC v5.22  —  if the panel does not read v5.22, MT5 is "
+   LogEvent("build: Medula_SMC v5.23  —  if the panel does not read v5.23, MT5 is "
             "running an older .ex5 and the source was never recompiled.");
    ParamAudit();
    LogEvent(StringFormat("symbol %s  execution timeframe M5  bars loaded %d  (NO INDICATORS)",
@@ -2767,7 +2830,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.22  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.23  SMC / ICT SCALPER  |  %s  M5\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"
@@ -2857,8 +2920,24 @@ void Report(void)
 
    int    tot=0,wins=0,losses=0;
    double gross=0.0,grossWin=0.0,grossLoss=0.0;
+   double holdSum=0.0; int holdN=0;
 
    int deals=HistoryDealsTotal();
+
+   // first pass: when each position was opened, so holding time can be measured
+   ulong    posId[]; datetime posIn[];
+   ArrayResize(posId,0); ArrayResize(posIn,0);
+   for(int i=0;i<deals;i++)
+     {
+      ulong tk=HistoryDealGetTicket(i);
+      if(tk==0) continue;
+      if(HistoryDealGetInteger(tk,DEAL_MAGIC)!=InpMagic) continue;
+      if(HistoryDealGetInteger(tk,DEAL_ENTRY)!=DEAL_ENTRY_IN) continue;
+      int m=ArraySize(posId);
+      ArrayResize(posId,m+1); ArrayResize(posIn,m+1);
+      posId[m]=(ulong)HistoryDealGetInteger(tk,DEAL_POSITION_ID);
+      posIn[m]=(datetime)HistoryDealGetInteger(tk,DEAL_TIME);
+     }
    for(int i=0;i<deals;i++)
      {
       ulong tk=HistoryDealGetTicket(i);
@@ -2871,6 +2950,12 @@ void Report(void)
                 +HistoryDealGetDouble(tk,DEAL_COMMISSION);
       string code=HistoryDealGetString(tk,DEAL_COMMENT);
       if(code=="") code="(untagged)";
+
+      ulong pid=(ulong)HistoryDealGetInteger(tk,DEAL_POSITION_ID);
+      datetime outT=(datetime)HistoryDealGetInteger(tk,DEAL_TIME);
+      for(int m=0;m<ArraySize(posId);m++)
+         if(posId[m]==pid)
+           { holdSum+=(double)(outT-posIn[m]); holdN++; break; }
 
       tot++; gross+=net;
       if(net>=0.0){ wins++;   grossWin +=net; }
@@ -2937,6 +3022,9 @@ void Report(void)
                   "InpMinStopSpreads, or trade a symbol/account with a tighter spread. ***");
      }
 
+   if(holdN>0)
+      LogEvent(StringFormat("SPEED: average time in a trade %.1f minutes (%.1f M5 bars)",
+                            holdSum/holdN/60.0,holdSum/holdN/300.0));
    LogEvent("───────── by entry model ─────────");
    for(int z=0;z<n;z++)
      {

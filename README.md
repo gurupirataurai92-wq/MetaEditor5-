@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.22, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.23, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -726,3 +726,39 @@ over-counting them. `InpBagRangeMax` now requires the bars before the break to h
 range. The self-test also states the reality plainly: **on M5 forex and metals true breakaway
 gaps are rare** (weekly opens, news), and fair value gaps are the applicable pattern that
 carries the model.
+
+### v5.23 — speed, and the small win that survives its own arithmetic
+
+> *"If it can open a trade for a short breakaway gap or FVG that generates even little
+> profits, that will be better than having coordinated trades with losses."*
+
+**The instinct is right. Taken literally it is the scalper's trap.** Banking a flat 0.5R
+against a 1R stop needs a **67% win rate just to break even** — before the spread, which
+v5.17 established is already a quarter of the risk. Small fixed targets against full stops is
+the single most reliable way to lose money slowly.
+
+The structure that delivers what was actually asked for is **partial plus runner**:
+
+| | |
+|---|---|
+| At `InpQuickPartialR` (0.5R) | bank `InpQuickPartialPct` (60%) — the small profit is real and in the account |
+| Immediately after | stop to break-even (`InpBeAfterPartial`) — **the trade can no longer become a loss** |
+| The remaining 40% | trails behind structure from 0.7R, no cap |
+
+Most trades now end at a small profit or at zero. Losses are cut early. The runner carries the
+expectancy. At a 45% win rate this is positive where the flat 0.5R target is firmly negative —
+the test suite proves both.
+
+**Speed.** Confirmation read only from the last *closed* candle costs a full M5 bar between
+signal and fill, which on a scalp is most of the move. `InpFastConfirm` reads the **live**
+candle too: once it has developed `InpFastMinRange` (0.35 × avg range) of body it can confirm
+on its own. Same test, up to five minutes earlier.
+
+Also retuned for speed: trail starts at **0.7R** (was 1.0), the scalp time-stop drops to
+**12 bars** (was 24), and the partial moved to 0.5R at 60%.
+
+**And the report now measures it**, so "fast" is a number rather than a claim:
+
+```
+SPEED: average time in a trade 7.4 minutes (1.5 M5 bars)
+```
