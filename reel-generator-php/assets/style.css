@@ -170,4 +170,51 @@ footer.wrap { display: flex; justify-content: space-between; gap: 14px; flex-wra
 .audio-note { margin: 6px 0 0; }
 .scene-speaker { font-family: var(--mono); font-size: 11px; color: var(--violet); background: var(--violet-soft); padding: 1px 6px; border-radius: 5px; margin-right: 6px; }
 
+/* ---------- operator console ---------- */
+.admin-nav { display: flex; gap: 16px; align-items: center; font-size: 14px; flex-wrap: wrap; }
+.admin-nav a { color: var(--muted); text-decoration: none; }
+.admin-nav a:hover { color: var(--text); }
+.admin-nav .danger-link { color: var(--yellow); }
+main.admin h1 { display: flex; align-items: baseline; gap: 10px; }
+main.admin h1 .count { font-family: var(--mono); font-size: 14px; color: var(--faint); }
+
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 20px 0; }
+@media (max-width: 620px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+.stat-box { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; }
+.stat-box .n { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; }
+.stat-box .l { font-family: var(--mono); font-size: 12px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; margin-top: 4px; }
+
+.admin-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 6px 0 20px; }
+@media (max-width: 720px) { .admin-cards { grid-template-columns: 1fr; } }
+.admin-card { display: block; text-decoration: none; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px; color: var(--text); transition: border-color .15s, transform .15s; }
+.admin-card:hover { border-color: var(--violet); transform: translateY(-2px); }
+.admin-card h3 { margin: 0 0 6px; font-size: 16px; }
+.admin-card p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+.admin-two { display: grid; grid-template-columns: 300px 1fr; gap: 20px; align-items: start; }
+@media (max-width: 760px) { .admin-two { grid-template-columns: 1fr; } }
+
+/* data tables */
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: 14px; }
+th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+thead th { font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); background: var(--panel-2); }
+tbody tr:last-child td { border-bottom: 0; }
+td a { color: var(--text); }
+
+button.danger { background: rgba(255,107,107,0.12); border: 1px solid rgba(255,107,107,0.4); color: #ff9d9d; border-radius: 8px; padding: 7px 12px; font: inherit; cursor: pointer; }
+button.danger:hover { background: rgba(255,107,107,0.2); }
+.inline-form { display: flex; gap: 6px; }
+.inline-form input { width: 130px; padding: 7px 9px; }
+.inline-form button { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+.op-role { font-family: var(--mono); font-size: 11px; color: var(--violet); background: var(--violet-soft); padding: 2px 8px; border-radius: 999px; }
+.you { font-family: var(--mono); font-size: 10px; color: var(--green); }
+.admin-two .panel button { margin-top: 16px; width: 100%; background: linear-gradient(96deg, var(--yellow), #ffb638); color: #201800; border: 0; border-radius: 10px; padding: 12px; font-weight: 700; cursor: pointer; }
+
+.login-box { max-width: 380px; margin: 40px auto; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 28px; }
+.login-box h1 { font-size: 22px; margin: 0 0 4px; }
+.login-box label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+.login-box button { margin-top: 20px; width: 100%; background: linear-gradient(96deg, var(--yellow), #ffb638); color: #201800; border: 0; border-radius: 10px; padding: 12px; font-weight: 700; cursor: pointer; }
+.login-box .default-hint { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

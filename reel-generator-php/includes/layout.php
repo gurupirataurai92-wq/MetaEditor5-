@@ -31,7 +31,7 @@ function layout_footer(): void
     ?></main>
     <footer class="wrap">
         <span>Reel Generator — runs on XAMPP (Apache + MySQL + PHP).</span>
-        <span>Drop this folder in <code>htdocs/</code> and open it in your browser.</span>
+        <span><a href="<?= h(url('admin/login.php')) ?>">Operator console →</a></span>
     </footer>
 </body>
 </html><?php

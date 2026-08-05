@@ -74,6 +74,18 @@ CREATE TABLE IF NOT EXISTS `caption_words` (
   CONSTRAINT `fk_words_scene` FOREIGN KEY (`scene_id`) REFERENCES `scenes` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Operators: staff who sign in to manage the system's SQL data.
+CREATE TABLE IF NOT EXISTS `operators` (
+  `id`            INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `username`      VARCHAR(64)  NOT NULL,
+  `password_hash` VARCHAR(255) NOT NULL,
+  `role`          VARCHAR(24)  NOT NULL DEFAULT 'operator',
+  `created_at`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `last_login`    DATETIME     NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_operators_username` (`username`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- User-uploaded videos (source clips or finished videos to host/play).
 CREATE TABLE IF NOT EXISTS `uploads` (
   `id`            INT UNSIGNED NOT NULL AUTO_INCREMENT,

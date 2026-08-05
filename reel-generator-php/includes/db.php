@@ -99,6 +99,27 @@ function run_migrations(PDO $pdo): void
     }
 
     upgrade_schema($pdo);
+    seed_operators($pdo);
+}
+
+/**
+ * Seeds a default operator on a fresh install so someone can sign in to the
+ * console. Credentials are intentionally well-known — change them immediately
+ * from the Operators page.
+ */
+function seed_operators(PDO $pdo): void
+{
+    $count = (int) $pdo->query('SELECT COUNT(*) FROM operators')->fetchColumn();
+    if ($count === 0) {
+        $stmt = $pdo->prepare(
+            'INSERT INTO operators (username, password_hash, role) VALUES (:u, :p, :r)'
+        );
+        $stmt->execute([
+            ':u' => 'admin',
+            ':p' => password_hash('admin123', PASSWORD_DEFAULT),
+            ':r' => 'admin',
+        ]);
+    }
 }
 
 /**

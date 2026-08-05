@@ -1,10 +1,15 @@
 # Reel Generator — PHP + MySQL (XAMPP)
 
-A **script-to-video generator** you can run locally on **XAMPP** (Apache +
-MySQL + PHP). Enter a topic or full script, choose **realistic** or **cartoon**
-and **short** or **long**, and the pipeline writes/segments the script, times a
-voiceover, and produces a video. You can also **upload your own videos** and
-play them back. Everything is stored in a MySQL database.
+A **dynamic, database-driven** script-to-video generator you run locally on
+**XAMPP** (Apache + MySQL + PHP). Every page is server-rendered PHP backed by
+MySQL — reels, scenes, word timings, uploads, and operator accounts are all
+rows in the database, created and managed at runtime (not a static site).
+
+Enter a topic or full script, choose **realistic** or **cartoon** and **short**
+or **long**, and the pipeline writes/segments the script, times a voiceover
+(spoken in-browser, one voice tone per character), and produces a video. You can
+also **upload your own videos**. A password-protected **operator console** lets
+staff manage all of it.
 
 ## How the video actually gets made (important)
 
@@ -93,19 +98,43 @@ reel-generator-php/
 ├─ upload.php           POST handler → validates & stores an uploaded video
 ├─ reel.php             single reel: rendered <video> or in-browser preview
 ├─ api.php              JSON endpoint (reel + scenes + words)
+├─ admin/               operator console (login-protected)
+│  ├─ login.php  logout.php  index.php (dashboard)
+│  ├─ reels.php  uploads.php  operators.php
 ├─ config/config.php    DB credentials, video-provider key, upload limits
 ├─ sql/schema.sql       database + tables (auto-installed/upgraded or import by hand)
 ├─ includes/
-│  ├─ db.php            PDO connection + self-install + schema upgrades
-│  ├─ pipeline.php      generation pipeline, uploads, data access
+│  ├─ db.php            PDO connection + self-install + schema upgrades + seed
+│  ├─ pipeline.php      generation pipeline, uploads, data access, admin ops
 │  ├─ video.php         video-provider layer (REST adapter + preview fallback)
+│  ├─ auth.php          operator sessions, CSRF, login, operator CRUD
+│  ├─ admin.php         operator-console page chrome
 │  ├─ helpers.php       escaping, URLs, JSON, redirects
-│  └─ layout.php        shared page chrome
+│  └─ layout.php        shared public page chrome
 ├─ uploads/             stored uploads (script execution disabled via .htaccess)
 └─ assets/
    ├─ style.css         UI styling
    └─ player.js         the 9:16 preview player
 ```
+
+## Operator console (SQL managed by operators)
+
+Staff sign in at **`/reel-generator-php/admin/`** (linked from the site footer)
+to manage the data in the database:
+
+- **Dashboard** — live counts of reels, scenes, uploads, and operators.
+- **Reels** — review and delete generated reels (scenes + captions cascade).
+- **Uploads** — review and remove uploaded videos (row **and** file on disk).
+- **Operators** — add operators, set roles (operator/admin), reset passwords,
+  remove accounts.
+
+Security: bcrypt password hashing (`password_hash`), session login with
+`session_regenerate_id`, CSRF tokens on every form, and prepared statements
+throughout.
+
+**Default operator (first run):** `admin` / `admin123` — **change it
+immediately** on the Operators page. It is seeded only when the `operators`
+table is empty.
 
 ## Connecting a real video provider
 

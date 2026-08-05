@@ -419,3 +419,36 @@ function h_safe(string $s): string
 {
     return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
+
+/** Deletes a reel (scenes + caption words cascade via FK). */
+function delete_reel(int $id): void
+{
+    db()->prepare('DELETE FROM reels WHERE id = :id')->execute([':id' => $id]);
+}
+
+/** Deletes an upload row and its file on disk. */
+function delete_upload(int $id): void
+{
+    $stmt = db()->prepare('SELECT stored_path FROM uploads WHERE id = :id');
+    $stmt->execute([':id' => $id]);
+    $path = $stmt->fetchColumn();
+    if (is_string($path) && $path !== '') {
+        $file = dirname(__DIR__) . DIRECTORY_SEPARATOR . $path; // app root + uploads/xxx
+        if (is_file($file)) {
+            @unlink($file);
+        }
+    }
+    db()->prepare('DELETE FROM uploads WHERE id = :id')->execute([':id' => $id]);
+}
+
+/** @return array<string,int> Counts for the operator dashboard. */
+function admin_stats(): array
+{
+    $pdo = db();
+    return [
+        'reels'     => (int) $pdo->query('SELECT COUNT(*) FROM reels')->fetchColumn(),
+        'scenes'    => (int) $pdo->query('SELECT COUNT(*) FROM scenes')->fetchColumn(),
+        'uploads'   => (int) $pdo->query('SELECT COUNT(*) FROM uploads')->fetchColumn(),
+        'operators' => (int) $pdo->query('SELECT COUNT(*) FROM operators')->fetchColumn(),
+    ];
+}
