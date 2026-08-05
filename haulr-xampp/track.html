@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Track delivery · Haulr</title>
+    <link rel="stylesheet" href="css/styles.css" />
+    <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📍</text></svg>"
+    />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap-wide">
+        <a class="brand" href="index.html"><span class="brand-mark">H</span>Haulr</a>
+        <nav class="nav" id="nav"></nav>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <div class="wrap-wide">
+        <div id="alert" class="alert alert-error hidden"></div>
+
+        <div class="row-between" style="margin-bottom: 1rem">
+          <div>
+            <div class="row" style="gap: 0.55rem">
+              <h1 style="font-size: 1.55rem; margin: 0" id="statusHeading">Loading…</h1>
+              <span id="statusBadge"></span>
+            </div>
+            <p class="muted" style="margin: 0.15rem 0 0">
+              <span class="job-ref" id="reference"></span>
+              <span id="subLine"></span>
+            </p>
+          </div>
+          <div class="row">
+            <span class="conn" id="conn"></span>
+            <a href="#" class="btn btn-ghost btn-sm" id="backLink">← Back</a>
+          </div>
+        </div>
+
+        <div class="steps" id="steps"></div>
+
+        <div class="split-wide">
+          <!-- --------------------------------------------------- map side -->
+          <div class="stack">
+            <div class="card card-flush">
+              <div id="map" class="map map-flush map-tall"></div>
+              <div style="padding: 0.9rem 1.15rem">
+                <div class="row-between">
+                  <div class="row" style="gap: 1.5rem">
+                    <div>
+                      <div class="stat-label">ETA</div>
+                      <div class="bold" id="etaValue" style="font-size: 1.2rem">—</div>
+                    </div>
+                    <div>
+                      <div class="stat-label">Distance left</div>
+                      <div class="bold" id="remainingValue" style="font-size: 1.2rem">—</div>
+                    </div>
+                    <div>
+                      <div class="stat-label">Last fix</div>
+                      <div class="bold" id="lastFix" style="font-size: 1.2rem">—</div>
+                    </div>
+                  </div>
+                  <button class="btn btn-quiet btn-sm" id="recentre">Recentre</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Offers, shown to the customer while the job is open -->
+            <div class="card hidden" id="offersCard">
+              <div class="card-head">
+                <h3>Offers</h3>
+                <span class="badge badge-accent" id="offerCount">0</span>
+              </div>
+              <p class="muted small" id="offersIntro">
+                Operators nearby are looking at your job now. Offers appear here the moment they
+                arrive — you choose who does the work.
+              </p>
+              <div class="list" id="offersList"></div>
+            </div>
+
+            <!-- Operator's own controls -->
+            <div class="card hidden" id="operatorCard">
+              <div class="card-head">
+                <h3>Operator controls</h3>
+                <span id="gpsBadge" class="badge">GPS off</span>
+              </div>
+
+              <div class="alert alert-info small" id="gpsNote">
+                Turn on live location so your customer can see you approaching. It stops
+                automatically when the job is delivered.
+              </div>
+
+              <div class="row" style="margin-bottom: 0.9rem">
+                <button class="btn btn-green" id="gpsToggle">▶ Start live location</button>
+                <span class="muted tiny" id="gpsDetail"></span>
+              </div>
+
+              <div class="divider"></div>
+
+              <div class="row">
+                <button class="btn btn-accent" id="advanceBtn">Next step</button>
+                <button class="btn btn-ghost btn-sm" id="releaseBtn">Release job</button>
+              </div>
+              <div class="hint" id="advanceHint"></div>
+            </div>
+
+            <!-- Bidding panel, shown to operators browsing an open job -->
+            <div class="card hidden" id="bidCard">
+              <div class="card-head">
+                <h3>Make an offer</h3>
+                <span class="badge" id="bidGuide"></span>
+              </div>
+              <div class="grid-2">
+                <div class="field">
+                  <label for="bidPrice">Your price</label>
+                  <input type="number" id="bidPrice" min="1" step="10" />
+                </div>
+                <div class="field">
+                  <label for="bidEta">Minutes to pickup</label>
+                  <input type="number" id="bidEta" min="1" max="1440" step="5" />
+                </div>
+              </div>
+              <div class="field">
+                <label for="bidMessage">Message <span class="muted">(optional)</span></label>
+                <input
+                  type="text"
+                  id="bidMessage"
+                  maxlength="300"
+                  placeholder="Blankets and straps on board, can be there shortly."
+                />
+              </div>
+              <div class="row">
+                <button class="btn btn-green" id="acceptJob">Accept the job as posted</button>
+                <button class="btn btn-accent" id="bidSubmit">Counter with my price</button>
+                <button class="btn btn-ghost btn-sm hidden" id="bidWithdraw">Withdraw</button>
+              </div>
+              <div class="hint">
+                Accepting takes the job immediately at the customer's price. A counter-offer
+                goes to the customer to choose from.
+              </div>
+            </div>
+
+            <!-- Rating, once delivered -->
+            <div class="card hidden" id="rateCard">
+              <div class="card-head">
+                <h3 id="rateTitle">How did it go?</h3>
+              </div>
+              <div class="stars" id="stars"></div>
+              <div class="field" style="margin-top: 0.8rem">
+                <textarea id="reviewText" maxlength="600" placeholder="Anything worth mentioning?"></textarea>
+              </div>
+              <button class="btn btn-accent" id="rateSubmit">Submit rating</button>
+            </div>
+          </div>
+
+          <!-- -------------------------------------------------- side panel -->
+          <div class="stack sticky-panel">
+            <div class="card" id="partyCard"></div>
+
+            <div class="card">
+              <div class="section-title">Job details</div>
+              <dl class="kv" id="details"></dl>
+              <div class="divider"></div>
+              <div class="section-title">What's being moved</div>
+              <p class="small" id="itemDescription" style="margin: 0"></p>
+            </div>
+
+            <div class="card hidden" id="chatCard">
+              <div class="card-head">
+                <h3>Messages</h3>
+              </div>
+              <div class="chat-log" id="chatLog"></div>
+              <form class="row" id="chatForm" style="margin-top: 0.7rem; flex-wrap: nowrap">
+                <input type="text" id="chatInput" placeholder="Type a message…" maxlength="1000" />
+                <button class="btn btn-accent btn-sm" type="submit">Send</button>
+              </form>
+            </div>
+
+            <div class="card">
+              <div class="section-title">Timeline</div>
+              <ul class="timeline" id="timeline"></ul>
+            </div>
+
+            <button class="btn btn-ghost btn-block hidden" id="cancelBtn">Cancel this job</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script src="vendor/leaflet/leaflet.js"></script>
+    <script src="js/app.js"></script>
+    <script src="js/map.js"></script>
+    <script src="js/track.js"></script>
+  </body>
+</html>

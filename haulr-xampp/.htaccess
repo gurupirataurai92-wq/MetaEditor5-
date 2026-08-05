@@ -1,0 +1,36 @@
+# ---------------------------------------------------------------------------
+#  Haulr — Apache configuration for XAMPP
+# ---------------------------------------------------------------------------
+
+<IfModule mod_autoindex.c>
+    Options -Indexes
+</IfModule>
+
+DirectoryIndex index.html index.php
+
+# Never serve application source, configuration, SQL dumps or notes. The only
+# PHP the web should reach is api/index.php and the two setup scripts in
+# database/, which check for themselves that the caller is local.
+<FilesMatch "\.(sql|md|log|ini|json|lock)$">
+    Require all denied
+</FilesMatch>
+
+<Files "config.php">
+    Require all denied
+</Files>
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "geolocation=(self), camera=(), microphone=(), payment=()"
+    Header always set Cross-Origin-Opener-Policy "same-origin"
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.tile.openstreetmap.org; connect-src 'self' https://nominatim.openstreetmap.org; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+</IfModule>
+
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 1 hour"
+    ExpiresByType application/javascript "access plus 1 hour"
+    ExpiresByType image/png "access plus 7 days"
+</IfModule>

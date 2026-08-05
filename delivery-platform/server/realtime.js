@@ -1,14 +1,17 @@
 'use strict';
 
 const { WebSocketServer } = require('ws');
-const { userFromToken } = require('./auth');
+const { resolveToken } = require('./auth');
+const { SESSION_COOKIE, parseCookies } = require('./security');
 const { get } = require('./db');
 
 // Channel naming:
 //   trip:<id>   live feed for one job (location, status, chat, offers)
 //   user:<id>   personal feed (new offer on my job, job assigned to me, ...)
 //   dispatch    the open-jobs board every online operator watches
+//   managers    oversight feed, managers only
 const DISPATCH = 'dispatch';
+const MANAGERS = 'managers';
 
 /** clientId -> ws */
 const clients = new Map();
@@ -65,6 +68,7 @@ function publish(channel, payload) {
 const toTrip = (tripId, payload) => publish(`trip:${tripId}`, payload);
 const toUser = (userId, payload) => publish(`user:${userId}`, payload);
 const toDispatch = (payload) => publish(DISPATCH, payload);
+const toManagers = (payload) => publish(MANAGERS, payload);
 
 /**
  * May `user` listen in on `tripId`?
@@ -76,24 +80,55 @@ const toDispatch = (payload) => publish(DISPATCH, payload);
 function canWatchTrip(user, tripId) {
   const trip = get('SELECT customer_id, operator_id, status FROM trips WHERE id = ?', tripId);
   if (!trip) return false;
-  if (user.role === 'admin') return true;
+  if (user.role === 'manager') return true;
   if (trip.customer_id === user.id) return true;
   if (trip.operator_id === user.id) return true;
   if (user.role === 'operator' && trip.status === 'requested') return true;
   return false;
 }
 
+/**
+ * A WebSocket handshake is not covered by the same-origin policy, so a page on
+ * any site can open a socket to us and the browser will attach our cookies.
+ * Checking Origin against our own host is the defence — the equivalent of CSRF
+ * protection for the socket.
+ */
+function originAllowed(req) {
+  const origin = req.headers.origin;
+  // Non-browser clients (scripts, tests) send no Origin at all; they are not
+  // the threat here because nothing attaches a cookie on their behalf.
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 function attach(server) {
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const wss = new WebSocketServer({
+    server,
+    path: '/ws',
+    // Cap frame size: a socket is authenticated, but an authenticated client
+    // should still not be able to push the process into swap.
+    maxPayload: 64 * 1024,
+  });
 
   wss.on('connection', (ws, req) => {
-    // The browser WebSocket API cannot set an Authorization header, so the
-    // token travels as a query parameter over the (TLS-protected) URL.
-    const url = new URL(req.url, 'http://localhost');
-    const user = userFromToken(url.searchParams.get('token'));
+    if (!originAllowed(req)) {
+      ws.close(4003, 'origin not allowed');
+      return;
+    }
+
+    // The session cookie is sent automatically on the handshake, so the token
+    // never appears in a URL where it would land in access logs, proxy logs
+    // and browser history.
+    const cookies = parseCookies(req);
+    const resolved = resolveToken(cookies[SESSION_COOKIE]);
+    const user = resolved?.user;
 
     if (!user) {
-      send(ws, { type: 'error', error: 'Invalid or expired token.' });
+      send(ws, { type: 'error', error: 'Invalid or expired session.' });
       ws.close(4001, 'unauthorised');
       return;
     }
@@ -107,6 +142,12 @@ function attach(server) {
 
     subscribe(clientId, `user:${user.id}`);
     if (user.role === 'operator') subscribe(clientId, DISPATCH);
+    // Managers watch the dispatch board too, so the console reflects jobs
+    // appearing and being taken without polling.
+    if (user.role === 'manager') {
+      subscribe(clientId, DISPATCH);
+      subscribe(clientId, MANAGERS);
+    }
 
     send(ws, {
       type: 'ready',
@@ -175,4 +216,4 @@ function attach(server) {
   return wss;
 }
 
-module.exports = { attach, publish, toTrip, toUser, toDispatch, DISPATCH };
+module.exports = { attach, publish, toTrip, toUser, toDispatch, toManagers, DISPATCH, MANAGERS };

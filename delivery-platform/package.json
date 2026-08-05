@@ -12,7 +12,10 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "seed": "node server/seed.js",
-    "reset": "node -e \"require('fs').rmSync(process.env.DB_FILE || './data/haulr.db', {force:true})\" && npm run seed"
+    "reset": "node -e \"require('fs').rmSync(process.env.DB_FILE || './data/haulr.db', {force:true})\" && npm run seed",
+    "migrate": "node server/migrate.js",
+    "create-manager": "node server/cli/create-manager.js",
+    "totp-code": "node server/cli/totp-code.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

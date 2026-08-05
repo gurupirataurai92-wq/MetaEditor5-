@@ -37,7 +37,7 @@ function loadTrip(req, res, next) {
 
 const isCustomer = (req) => req.trip.customer_id === req.user.id;
 const isOperator = (req) => req.trip.operator_id === req.user.id;
-const isParty = (req) => isCustomer(req) || isOperator(req) || req.user.role === 'admin';
+const isParty = (req) => isCustomer(req) || isOperator(req) || req.user.role === 'manager';
 
 function requireParty(req, res, next) {
   if (!isParty(req)) return res.status(403).json({ error: 'This job is not yours.' });
@@ -338,7 +338,7 @@ router.post('/trips/:id/status', requireRole('operator'), loadTrip, (req, res, n
  */
 router.post('/trips/:id/cancel', requireAuth, loadTrip, requireParty, (req, res, next) => {
   try {
-    if (!isCustomer(req) && req.user.role !== 'admin') {
+    if (!isCustomer(req) && req.user.role !== 'manager') {
       return res
         .status(403)
         .json({ error: 'Operators release a job instead of cancelling it.' });

@@ -1,0 +1,2 @@
+# Application code is never fetched directly — only included by api/index.php.
+Require all denied

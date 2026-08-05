@@ -57,6 +57,10 @@ const config = {
     symbol: process.env.CURRENCY_SYMBOL || 'R',
   },
   dispatchRadiusKm: Number(process.env.DISPATCH_RADIUS_KM || 25),
+  // Manager accounts can read every job and every customer's contact details,
+  // so they carry a second factor by default. A manager who has not enrolled
+  // can sign in, but their session can do nothing except enrol.
+  requireManagerTwoFactor: process.env.REQUIRE_MANAGER_2FA !== 'false',
   // An on-duty operator whose device has not reported a position in this long
   // is hidden from the nearby-vehicle maps. On-duty devices ping every ~30s,
   // so this tolerates a long run of missed fixes (tunnels, backgrounded app)

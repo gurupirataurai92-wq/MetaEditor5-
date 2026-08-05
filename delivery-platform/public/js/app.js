@@ -4,51 +4,105 @@
 (function () {
   'use strict';
 
-  const TOKEN_KEY = 'haulr.token';
-  const USER_KEY = 'haulr.user';
+  const CSRF_COOKIE = 'haulr_csrf';
+
+  /** Read one of our own readable cookies. */
+  function readCookie(name) {
+    for (const part of document.cookie.split(';')) {
+      const eq = part.indexOf('=');
+      if (eq === -1) continue;
+      if (part.slice(0, eq).trim() === name) {
+        try {
+          return decodeURIComponent(part.slice(eq + 1).trim());
+        } catch {
+          return part.slice(eq + 1).trim();
+        }
+      }
+    }
+    return null;
+  }
 
   /* ------------------------------------------------------------------ */
   /* Session                                                             */
   /* ------------------------------------------------------------------ */
 
+  /**
+   * The session token itself lives in an httpOnly cookie this script cannot
+   * read — that is the point. What we keep here is only the profile needed to
+   * render, refreshed from the server; the browser attaches the real
+   * credential automatically on every request.
+   */
   const Session = {
-    get token() {
-      return localStorage.getItem(TOKEN_KEY);
+    user: null,
+    operatorProfile: null,
+    homePath: '/',
+    loaded: false,
+
+    get csrfToken() {
+      return readCookie(CSRF_COOKIE);
     },
-    get user() {
+
+    /** Fetch the signed-in user once per page load. */
+    async load({ force = false } = {}) {
+      if (this.loaded && !force) return this.user;
       try {
-        return JSON.parse(localStorage.getItem(USER_KEY) || 'null');
+        const data = await api.get('/api/auth/me');
+        this.adopt(data);
       } catch {
-        return null;
+        this.user = null;
+        this.operatorProfile = null;
       }
+      this.loaded = true;
+      return this.user;
     },
-    save(token, user) {
-      if (token) localStorage.setItem(TOKEN_KEY, token);
-      if (user) localStorage.setItem(USER_KEY, JSON.stringify(user));
+
+    /** Take the payload returned by login/register/2fa. */
+    adopt(data) {
+      this.user = data.user || null;
+      this.operatorProfile = data.operatorProfile || null;
+      // The server decides where each role belongs, so a new role never needs
+      // a matching change in the client's routing table.
+      this.homePath = data.homePath || '/';
+      this.loaded = true;
+      return this.user;
     },
+
     clear() {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(USER_KEY);
+      this.user = null;
+      this.operatorProfile = null;
+      this.homePath = '/';
+      this.loaded = true;
     },
-    /** Bounce to sign-in unless the visitor holds one of `roles`. */
+
+    /**
+     * Gate a page on a role. Call after `load()`.
+     *
+     * This is a convenience for the person using the site, not a security
+     * boundary — every endpoint enforces the same rule server-side.
+     */
     require(...roles) {
-      const user = this.user;
-      if (!this.token || !user) {
+      if (!this.user) {
         window.location.href = `/auth.html?next=${encodeURIComponent(
           window.location.pathname + window.location.search
         )}`;
         return null;
       }
-      if (roles.length && !roles.includes(user.role)) {
-        window.location.href = user.role === 'operator' ? '/operator.html' : '/customer.html';
+      if (roles.length && !roles.includes(this.user.role)) {
+        window.location.href = this.homePath || '/';
         return null;
       }
-      return user;
+      return this.user;
     },
-    homePath() {
-      const user = this.user;
-      if (!user) return '/auth.html';
-      return user.role === 'operator' ? '/operator.html' : '/customer.html';
+
+    async signOut() {
+      try {
+        await api.post('/api/auth/logout');
+      } catch {
+        /* the cookie is cleared server-side either way */
+      }
+      realtime.disconnect();
+      this.clear();
+      window.location.href = '/';
     },
   };
 
@@ -64,17 +118,27 @@
     }
   }
 
+  const SAFE_METHODS = new Set(['GET', 'HEAD']);
+
   async function request(method, path, body) {
     const headers = {};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
-    const token = Session.token;
-    if (token) headers.Authorization = `Bearer ${token}`;
+
+    // Echo the CSRF token on anything that changes state. The value comes from
+    // a cookie only same-origin script can read, which is what makes it proof
+    // the request did not originate on somebody else's page.
+    if (!SAFE_METHODS.has(method)) {
+      const csrf = readCookie(CSRF_COOKIE);
+      if (csrf) headers['X-CSRF-Token'] = csrf;
+    }
 
     let response;
     try {
       response = await fetch(path, {
         method,
         headers,
+        // Send the session cookie, and never to a different origin.
+        credentials: 'same-origin',
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch {
@@ -85,9 +149,9 @@
     const payload = isJson ? await response.json().catch(() => null) : null;
 
     if (!response.ok) {
-      // An expired or revoked token should drop the stale session rather than
-      // leave the page half-broken.
-      if (response.status === 401 && Session.token) {
+      // An expired, revoked or suspended session should drop the stale state
+      // rather than leave the page half-broken.
+      if (response.status === 401 && Session.user) {
         Session.clear();
         if (!window.location.pathname.startsWith('/auth')) {
           window.location.href = '/auth.html';
@@ -164,13 +228,13 @@
     }
 
     connect() {
-      const token = Session.token;
-      if (!token || this.socket) return;
+      if (this.socket) return;
 
+      // No token in the URL: the httpOnly session cookie is sent on the
+      // handshake automatically, so the credential stays out of browser
+      // history, proxy logs and Referer headers.
       const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const socket = new WebSocket(
-        `${scheme}://${window.location.host}/ws?token=${encodeURIComponent(token)}`
-      );
+      const socket = new WebSocket(`${scheme}://${window.location.host}/ws`);
       this.socket = socket;
       this.closedByUs = false;
 
@@ -196,7 +260,7 @@
       socket.addEventListener('close', () => {
         this.socket = null;
         this.setStatus(this.closedByUs ? 'off' : 'down');
-        if (this.closedByUs || !Session.token) return;
+        if (this.closedByUs || !Session.user) return;
         // Exponential backoff, capped at 15s, so a flaky mobile connection
         // does not hammer the server.
         const delay = Math.min(15000, 800 * 2 ** this.retries++);
@@ -495,22 +559,27 @@
       return;
     }
 
-    const links =
-      user.role === 'operator'
-        ? `<a href="/operator.html">Jobs board</a>`
-        : `<a href="/customer.html">My deliveries</a>
-           <a href="/request.html" class="nav-hide-sm">New delivery</a>`;
+    const links = {
+      operator: '<a href="/operator.html">Jobs board</a>',
+      manager:
+        '<a href="/manager.html">Operations</a><a href="/manager.html#security" class="nav-hide-sm">Security</a>',
+      customer:
+        '<a href="/customer.html">My deliveries</a><a href="/request.html" class="nav-hide-sm">New delivery</a>',
+    }[user.role] || '';
+
+    const roleBadge = {
+      operator: '<span class="badge badge-blue nav-hide-sm">Driver</span>',
+      manager: '<span class="badge badge-accent nav-hide-sm">Manager</span>',
+      customer: '',
+    }[user.role] || '';
 
     nav.innerHTML = `
       ${links}
+      ${roleBadge}
       <span class="badge badge-ink nav-hide-sm">${esc(user.fullName.split(' ')[0])}</span>
       <button class="btn btn-ghost btn-sm" id="signOut">Sign out</button>`;
 
-    $('#signOut')?.addEventListener('click', () => {
-      realtime.disconnect();
-      Session.clear();
-      window.location.href = '/';
-    });
+    $('#signOut')?.addEventListener('click', () => Session.signOut());
 
     // Highlight the current page.
     for (const link of $$('#nav a')) {
@@ -520,6 +589,7 @@
 
   window.Haulr = {
     Session,
+    readCookie,
     api,
     ApiError,
     realtime,
@@ -548,5 +618,15 @@
     renderHeader,
   };
 
-  document.addEventListener('DOMContentLoaded', renderHeader);
+  /**
+   * Every page starts here: resolve who is signed in (from the cookie), then
+   * paint the header. Pages await this before gating on a role.
+   */
+  async function boot() {
+    await Session.load();
+    renderHeader();
+    return Session.user;
+  }
+
+  window.Haulr.boot = boot;
 })();

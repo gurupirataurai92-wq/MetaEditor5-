@@ -34,7 +34,10 @@
   let vehicle = null;
 
   document.addEventListener('DOMContentLoaded', async () => {
-    const user = H.Session.require('customer', 'operator');
+    await H.boot();
+    // Managers open jobs through their own console, but the live map is the
+    // same view, so they are allowed here too.
+    const user = H.Session.require('customer', 'operator', 'manager');
     if (!user) return;
 
     state.role = user.role;
@@ -44,7 +47,7 @@
       return fail('No job was specified.');
     }
 
-    $('#backLink').href = H.Session.homePath();
+    $('#backLink').href = H.Session.homePath;
 
     await H.loadMeta();
     H.bindConnectionPill($('#conn'));
@@ -65,13 +68,43 @@
     H.realtime.on('trip_update', (msg) => {
       if (msg.tripId !== state.tripId) return;
       const previous = state.trip?.status;
+      const wasMine = state.isOperator;
+
       state.trip = msg.trip;
+      // Recompute which side of the job we are on. A manager can reassign a
+      // job out from under a driver, and a page that keeps showing "you have
+      // this job" would send them to a pickup that is no longer theirs.
+      applyViewerRole();
+
+      if (wasMine && !state.isOperator) {
+        stopGps();
+        H.toast('This job has been reassigned and is no longer yours.', 'red');
+      }
+
       render();
       loadOffers();
       loadTimeline();
+
       if (previous && previous !== msg.trip.status) {
         H.toast(msg.trip.statusLabel, 'accent');
       }
+    });
+
+    // A manager took the job away and handed it to someone else.
+    H.realtime.on('job_removed', (msg) => {
+      if (msg.tripId !== state.tripId) return;
+      stopGps();
+      H.toast(
+        msg.reason ? `Job reassigned: ${msg.reason}` : 'This job has been reassigned.',
+        'red'
+      );
+      setTimeout(() => window.location.replace('/operator.html'), 2500);
+    });
+
+    H.realtime.on('job_assigned', (msg) => {
+      if (msg.tripId !== state.tripId) return;
+      H.toast('A manager assigned this job to you.', 'green');
+      load();
     });
 
     for (const type of ['offer_new', 'offer_withdrawn']) {
@@ -92,6 +125,13 @@
     // "Last fix" is a relative time, so it needs a ticker of its own.
     setInterval(updateLastFixLabel, 10000);
   });
+
+  /** Work out which side of this job the viewer is on, from the current trip. */
+  function applyViewerRole() {
+    const me = H.Session.user;
+    state.isCustomer = state.trip.customerId === me.id;
+    state.isOperator = state.trip.operatorId === me.id;
+  }
 
   function fail(message) {
     const box = $('#alert');
@@ -118,9 +158,7 @@
       }
 
       state.trip = data.trip;
-      const me = H.Session.user;
-      state.isCustomer = data.trip.customerId === me.id;
-      state.isOperator = data.trip.operatorId === me.id;
+      applyViewerRole();
 
       render();
       drawRoute();
@@ -481,6 +519,7 @@
 
     const asking = state.trip.customerOfferPrice;
     $('#bidGuide').textContent = `Customer offers ${H.money(asking)}`;
+    $('#acceptJob').textContent = `Accept at ${H.money(asking)}`;
     if (!$('#bidPrice').value) $('#bidPrice').value = String(asking);
 
     const mine = state.trip.myOffer;
@@ -637,6 +676,10 @@
     offer_updated: 'Offer revised',
     offer_withdrawn: 'Offer withdrawn',
     offer_accepted: 'Operator booked',
+    operator_accepted: 'Driver accepted the job',
+    manager_reassigned: 'Manager reassigned the driver',
+    manager_cancelled: 'Manager cancelled the job',
+    manager_flagged: 'Manager flagged the job',
     released: 'Operator released the job',
     cancelled: 'Job cancelled',
     rated: 'Rating submitted',
@@ -777,9 +820,25 @@
 
     $('#bidSubmit').addEventListener('click', (event) => submitBid(event.currentTarget));
 
-    $('#bidAtAsking').addEventListener('click', (event) => {
-      $('#bidPrice').value = String(state.trip.customerOfferPrice);
-      submitBid(event.currentTarget);
+    $('#acceptJob').addEventListener('click', async (event) => {
+      const confirmed = await H.confirmDialog({
+        title: `Accept at ${H.money(state.trip.customerOfferPrice)}?`,
+        body: 'The job becomes yours immediately — the customer does not have to choose between bids.',
+        confirmText: 'Accept the job',
+        tone: 'green',
+      });
+      if (!confirmed) return;
+
+      await H.withBusy(event.currentTarget, async () => {
+        try {
+          await H.api.post(`/api/trips/${state.tripId}/accept`);
+          H.toast('Job accepted. Head to the pickup.', 'green');
+          await load();
+        } catch (err) {
+          H.toast(err.message, 'red');
+          await load();
+        }
+      });
     });
 
     $('#bidWithdraw').addEventListener('click', async (event) => {

@@ -74,7 +74,8 @@
                 required
               />
               <div class="hint hidden" id="passwordHint">
-                At least 8 characters, with a letter and a number.
+                At least 12 characters, mixing at least three of lowercase, uppercase, numbers
+                and symbols. It must not be a common password or contain your name or email.
               </div>
             </div>
 
@@ -139,6 +140,30 @@
             </button>
           </form>
 
+          <!-- Second factor, shown only when the account requires one -->
+          <form id="twoFactorForm" class="hidden">
+            <div id="twoFactorStep">
+              <div class="field">
+                <label for="codeInput">Authentication code</label>
+                <input
+                  type="text"
+                  id="codeInput"
+                  inputmode="numeric"
+                  autocomplete="one-time-code"
+                  placeholder="123456"
+                  maxlength="20"
+                  style="font-size: 1.35rem; letter-spacing: 0.28em; text-align: center"
+                />
+                <div class="hint">
+                  From your authenticator app. A single-use recovery code also works.
+                </div>
+              </div>
+              <button type="submit" class="btn btn-accent btn-block btn-lg" id="codeSubmit">
+                Verify and sign in
+              </button>
+            </div>
+          </form>
+
           <div class="divider"></div>
 
           <p class="center small muted" style="margin: 0">
@@ -148,22 +173,40 @@
         </div>
 
         <div class="card" style="margin-top: 1rem; background: var(--surface-2)">
-          <div class="section-title">Demo accounts</div>
+          <div class="section-title">Demo accounts — three roles</div>
           <p class="small muted" style="margin-bottom: 0.6rem">
             The seeded database ships with these. Password for all of them is
-            <code class="mono bold">haulr1234</code>.
+            <code class="mono bold">Haulr!Demo2026</code>. Each role lands on a different
+            dashboard.
           </p>
           <div class="row">
-            <button class="btn btn-quiet btn-sm" data-demo="thandi@example.com">
-              📦 Customer — Thandi
+            <button
+              class="btn btn-quiet btn-sm"
+              data-demo="thandi@example.com"
+              data-password="Haulr!Demo2026"
+            >
+              📦 Customer — posts jobs
             </button>
-            <button class="btn btn-quiet btn-sm" data-demo="nomsa@example.com">
-              🛻 Operator — Nomsa (bakkie)
+            <button
+              class="btn btn-quiet btn-sm"
+              data-demo="nomsa@example.com"
+              data-password="Haulr!Demo2026"
+            >
+              🛻 Driver — accepts jobs
             </button>
-            <button class="btn btn-quiet btn-sm" data-demo="ahmed@example.com">
-              🚚 Operator — Ahmed (4-ton)
+            <button
+              class="btn btn-quiet btn-sm"
+              data-demo="manager@example.com"
+              data-password="Haulr!Demo2026"
+            >
+              🛡️ Manager — oversees
             </button>
           </div>
+          <p class="tiny muted" style="margin: 0.7rem 0 0">
+            The manager account requires a second factor, so it will ask for a code. Run
+            <code class="mono">npm run totp-code manager@example.com</code> to print a valid one,
+            or use a recovery code from the seed output.
+          </p>
         </div>
       </div>
     </main>

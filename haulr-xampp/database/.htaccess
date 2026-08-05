@@ -1,0 +1,10 @@
+# The schema dump and anything else non-PHP stays private; someone reading
+# schema.sql learns the exact shape of every table.
+Require all denied
+
+# The two setup helpers are allowed through, because a XAMPP user may not have
+# a terminal open. Both refuse to do anything unless the request comes from
+# the machine running the server.
+<FilesMatch "^(seed|totp_code)\.php$">
+    Require all granted
+</FilesMatch>

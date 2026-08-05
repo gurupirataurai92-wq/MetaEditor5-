@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jobs board · Haulr</title>
+    <link rel="stylesheet" href="css/styles.css" />
+    <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚚</text></svg>"
+    />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap-wide">
+        <a class="brand" href="index.html"><span class="brand-mark">H</span>Haulr</a>
+        <nav class="nav" id="nav"></nav>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <div class="wrap-wide">
+        <div class="row-between" style="margin-bottom: 1.2rem">
+          <div>
+            <h1 style="font-size: 1.8rem; margin-bottom: 0.15rem" id="greeting">Jobs board</h1>
+            <p class="muted" style="margin: 0" id="vehicleLine"></p>
+          </div>
+          <div class="row">
+            <span class="conn" id="conn"></span>
+            <span class="badge" id="dutyBadge">Off duty</span>
+            <button class="btn btn-green" id="dutyToggle">Go on duty</button>
+          </div>
+        </div>
+
+        <div id="alert" class="alert alert-error hidden"></div>
+
+        <div class="stat-grid" id="stats" style="margin-bottom: 1.4rem"></div>
+
+        <div class="split-wide">
+          <div class="stack">
+            <div class="tabs">
+              <button class="tab active" data-view="board">Open jobs</button>
+              <button class="tab" data-view="active">My active jobs</button>
+              <button class="tab" data-view="history">History</button>
+            </div>
+
+            <div id="listHeader" class="row-between" style="margin-bottom: 0.2rem">
+              <span class="muted small" id="listSummary"></span>
+              <div class="row" id="boardControls">
+                <label class="small muted" for="radius">Within</label>
+                <select id="radius" style="width: auto">
+                  <option value="10">10 km</option>
+                  <option value="25" selected>25 km</option>
+                  <option value="50">50 km</option>
+                  <option value="200">Anywhere</option>
+                </select>
+                <button class="btn btn-quiet btn-sm" id="refreshBtn">↻ Refresh</button>
+              </div>
+            </div>
+
+            <div id="jobList" class="list">
+              <div class="skeleton" style="height: 130px"></div>
+              <div class="skeleton" style="height: 130px"></div>
+            </div>
+          </div>
+
+          <div class="stack sticky-panel">
+            <div class="card card-flush">
+              <div id="map" class="map map-flush" style="height: 340px"></div>
+              <div style="padding: 0.85rem 1.1rem">
+                <div class="small muted" id="mapCaption">
+                  Open jobs near you. Green pin is a pickup point.
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="section-title">Your vehicle</div>
+              <dl class="kv" id="vehicleDetails"></dl>
+              <div class="divider"></div>
+              <p class="muted tiny" style="margin: 0">
+                Jobs are filtered to what your vehicle can carry. Update your details to see a
+                different set.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script src="vendor/leaflet/leaflet.js"></script>
+    <script src="js/app.js"></script>
+    <script src="js/map.js"></script>
+    <script src="js/operator.js"></script>
+  </body>
+</html>

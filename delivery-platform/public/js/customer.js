@@ -11,6 +11,7 @@
   let trips = [];
 
   document.addEventListener('DOMContentLoaded', async () => {
+    await H.boot();
     const user = H.Session.require('customer');
     if (!user) return;
 

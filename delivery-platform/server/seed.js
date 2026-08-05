@@ -5,11 +5,13 @@
 
 const { db, run, get, all } = require('./db');
 const { hashPassword } = require('./auth');
+const { migrate } = require('./migrate');
+const totp = require('./totp');
 const { roadDistanceKm, priceGuide, makeReference } = require('./domain');
 
 // Centred on Johannesburg — change these to move the demo to your own city.
 const CITY = { lat: -26.2041, lng: 28.0473 };
-const DEMO_PASSWORD = 'haulr1234';
+const DEMO_PASSWORD = 'Haulr!Demo2026';
 
 function jitter(km) {
   // ~111 km per degree of latitude; longitude shrinks with the cosine of lat.
@@ -47,7 +49,11 @@ async function seed() {
   console.log('Seeding demo data…');
 
   // Wipe in FK-safe order.
-  for (const table of ['trip_locations', 'trip_events', 'messages', 'offers', 'trips', 'operator_profiles', 'users']) {
+  migrate({ quiet: true });
+
+  for (const table of ['sessions', 'audit_log', 'login_attempts', 'trip_locations',
+                       'trip_events', 'messages', 'offers', 'trips',
+                       'operator_profiles', 'users']) {
     run(`DELETE FROM ${table}`);
   }
   run("DELETE FROM sqlite_sequence WHERE name IN ('users','trips','offers','trip_events','trip_locations','messages')");
@@ -75,6 +81,22 @@ async function seed() {
     makeUser('customer', 'Riaan de Villiers', 'riaan@example.com', '+27 83 555 0122', 18, 4),
     makeUser('customer', 'Aisha Patel', 'aisha@example.com', '+27 84 555 0133', 0, 0),
   ];
+
+  // ---- Managers ------------------------------------------------------------
+  // Managers are never created by self-service registration. This seeds the
+  // first one; in a real deployment that is `npm run create-manager`, and
+  // every manager after it is created from inside the console.
+  const managerSecret = totp.generateSecret();
+  const managerRecoveryCodes = totp.generateRecoveryCodes(5);
+  const managerId = makeUser('manager', 'Grace Molefe', 'manager@example.com', '+27 82 555 0100');
+  run(
+    `UPDATE users
+        SET totp_secret = ?, totp_enabled = 1, recovery_codes = ?
+      WHERE id = ?`,
+    managerSecret,
+    JSON.stringify(managerRecoveryCodes.map(totp.hashRecoveryCode)),
+    managerId
+  );
 
   // ---- Operators -----------------------------------------------------------
   const operatorSpecs = [
@@ -295,6 +317,15 @@ async function seed() {
   for (const row of all("SELECT email FROM users WHERE role='customer'")) console.log('   ', row.email);
   console.log('  Operators:');
   for (const row of all("SELECT email FROM users WHERE role='operator'")) console.log('   ', row.email);
+
+  console.log('\n  Manager: manager@example.com');
+  console.log('  Manager accounts require a second factor. Either:');
+  console.log('   a) add this secret to an authenticator app:', managerSecret);
+  console.log('      (or scan:', totp.provisioningUri(managerSecret, { account: 'manager@example.com' }), ')');
+  console.log('   b) sign in with one of these single-use recovery codes:');
+  for (const code of managerRecoveryCodes) console.log('        ', code);
+  console.log('   c) run `npm run totp-code manager@example.com` to print a valid code.');
+
   console.log(`\nLive job to watch: /track.html?trip=${live.id}`);
 }
 

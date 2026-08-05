@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Operations · Haulr</title>
+    <link rel="stylesheet" href="css/styles.css" />
+    <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>"
+    />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap-wide">
+        <a class="brand" href="index.html"><span class="brand-mark">H</span>Haulr</a>
+        <nav class="nav" id="nav"></nav>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <div class="wrap-wide">
+        <!-- Shown when a manager has not yet enrolled a second factor -->
+        <div id="enrolGate" class="hidden">
+          <div class="card" style="max-width: 620px; margin: 2rem auto; padding: 1.75rem">
+            <div class="row" style="gap: 0.6rem; margin-bottom: 0.4rem">
+              <span style="font-size: 1.8rem">🛡️</span>
+              <h1 style="font-size: 1.5rem; margin: 0">Set up two-factor authentication</h1>
+            </div>
+            <p class="muted">
+              Manager accounts can see every job, every driver and every customer's contact
+              details. That access requires a second factor — the console will not open until
+              this is done.
+            </p>
+
+            <div id="enrolStep1">
+              <button class="btn btn-accent btn-lg" id="enrolStart">Begin setup</button>
+            </div>
+
+            <div id="enrolStep2" class="hidden">
+              <div class="divider"></div>
+              <div class="section-title">1 · Add this to your authenticator app</div>
+              <p class="small muted" style="margin-bottom: 0.5rem">
+                Google Authenticator, Aegis, 1Password — any TOTP app works. Enter this key
+                manually:
+              </p>
+              <div
+                class="mono bold"
+                id="enrolSecret"
+                style="
+                  background: var(--bg);
+                  border: 1px solid var(--line);
+                  border-radius: 10px;
+                  padding: 0.8rem;
+                  word-break: break-all;
+                  font-size: 1.05rem;
+                  letter-spacing: 0.06em;
+                "
+              ></div>
+
+              <div class="divider"></div>
+              <div class="section-title">2 · Confirm a code</div>
+              <div class="field">
+                <label for="enrolCode">Code from the app</label>
+                <input
+                  type="text"
+                  id="enrolCode"
+                  inputmode="numeric"
+                  maxlength="10"
+                  placeholder="123456"
+                  style="font-size: 1.25rem; letter-spacing: 0.25em; text-align: center"
+                />
+              </div>
+              <button class="btn btn-accent btn-block" id="enrolConfirm">
+                Turn on two-factor
+              </button>
+            </div>
+
+            <div id="enrolStep3" class="hidden">
+              <div class="divider"></div>
+              <div class="alert alert-ok">
+                Two-factor is on. Save these recovery codes somewhere safe — each works once,
+                and this is the only time they are shown.
+              </div>
+              <div class="mono" id="recoveryCodes" style="line-height: 2"></div>
+              <button class="btn btn-accent btn-block" id="enrolDone" style="margin-top: 1rem">
+                Open the console
+              </button>
+            </div>
+
+            <div id="enrolAlert" class="alert alert-error hidden" style="margin-top: 1rem"></div>
+          </div>
+        </div>
+
+        <!-- The console proper -->
+        <div id="console" class="hidden">
+          <div class="row-between" style="margin-bottom: 1.2rem">
+            <div>
+              <h1 style="font-size: 1.8rem; margin-bottom: 0.15rem" id="greeting">Operations</h1>
+              <p class="muted" style="margin: 0">
+                Every job, driver and customer on the platform. All actions here are logged.
+              </p>
+            </div>
+            <div class="row">
+              <span class="conn" id="conn"></span>
+              <button class="btn btn-quiet btn-sm" id="refreshBtn">↻ Refresh</button>
+            </div>
+          </div>
+
+          <div id="alert" class="alert alert-error hidden"></div>
+
+          <div class="stat-grid" id="stats" style="margin-bottom: 1.4rem"></div>
+
+          <div class="tabs">
+            <button class="tab active" data-view="live">Live map</button>
+            <button class="tab" data-view="jobs">Jobs</button>
+            <button class="tab" data-view="people">People</button>
+            <button class="tab" data-view="audit">Audit log</button>
+            <button class="tab" data-view="security">Security</button>
+          </div>
+
+          <!-- ------------------------------------------------ live map -->
+          <section id="viewLive">
+            <div class="split-wide">
+              <div class="card card-flush">
+                <div id="map" class="map map-flush map-tall"></div>
+                <div style="padding: 0.9rem 1.15rem">
+                  <span class="small muted" id="mapCaption">Loading fleet…</span>
+                </div>
+              </div>
+              <div class="stack sticky-panel">
+                <div class="card">
+                  <div class="card-head">
+                    <h3>Needs attention</h3>
+                    <span class="badge badge-amber" id="stalledCount">0</span>
+                  </div>
+                  <p class="muted small" style="margin-bottom: 0.7rem">
+                    Jobs that have been waiting for a driver for more than 20 minutes.
+                  </p>
+                  <div class="list" id="stalledList"></div>
+                </div>
+                <div class="card">
+                  <div class="card-head"><h3>On duty</h3></div>
+                  <div class="list scroll-y max-h-lg" id="fleetList"></div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ---------------------------------------------------- jobs -->
+          <section id="viewJobs" class="hidden">
+            <div class="row" style="margin-bottom: 0.9rem">
+              <select id="jobStatus" style="width: auto">
+                <option value="">All statuses</option>
+                <option value="live">Live now</option>
+                <option value="requested">Waiting for a driver</option>
+                <option value="flagged">Flagged</option>
+                <option value="delivered">Delivered</option>
+                <option value="completed">Completed</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <input
+                type="search"
+                id="jobSearch"
+                placeholder="Search reference or address…"
+                style="max-width: 320px"
+              />
+            </div>
+            <div class="list" id="jobList"></div>
+          </section>
+
+          <!-- -------------------------------------------------- people -->
+          <section id="viewPeople" class="hidden">
+            <div class="row-between" style="margin-bottom: 0.9rem">
+              <div class="row">
+                <select id="peopleRole" style="width: auto">
+                  <option value="">Everyone</option>
+                  <option value="customer">Customers</option>
+                  <option value="operator">Drivers</option>
+                  <option value="manager">Managers</option>
+                </select>
+                <input
+                  type="search"
+                  id="peopleSearch"
+                  placeholder="Search name or email…"
+                  style="max-width: 300px"
+                />
+              </div>
+              <button class="btn btn-ghost btn-sm" id="addManagerBtn">+ Add a manager</button>
+            </div>
+            <div class="list" id="peopleList"></div>
+          </section>
+
+          <!-- ----------------------------------------------- audit log -->
+          <section id="viewAudit" class="hidden">
+            <div class="row" style="margin-bottom: 0.9rem">
+              <select id="auditAction" style="width: auto">
+                <option value="">All activity</option>
+                <option value="auth.">Sign-ins and passwords</option>
+                <option value="manager.">Manager actions</option>
+                <option value="auth.login.failed">Failed sign-ins</option>
+              </select>
+              <span class="muted small" id="auditTotal"></span>
+            </div>
+            <div class="card card-flush">
+              <div class="scroll-y" style="max-height: 70vh">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.86rem">
+                  <thead>
+                    <tr style="text-align: left; border-bottom: 1px solid var(--line)">
+                      <th style="padding: 0.6rem 0.9rem">When</th>
+                      <th style="padding: 0.6rem 0.9rem">Who</th>
+                      <th style="padding: 0.6rem 0.9rem">Action</th>
+                      <th style="padding: 0.6rem 0.9rem">Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody id="auditRows"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <!-- ------------------------------------------------ security -->
+          <section id="viewSecurity" class="hidden">
+            <div class="stat-grid" id="securityStats" style="margin-bottom: 1.2rem"></div>
+            <div class="split">
+              <div class="card">
+                <div class="card-head"><h3>Most-targeted accounts</h3></div>
+                <p class="muted small">
+                  Accounts with the most failed sign-ins in the last 24 hours. Repeated
+                  failures trigger progressive lockout automatically.
+                </p>
+                <div class="list" id="targetedList"></div>
+              </div>
+              <div class="card">
+                <div class="card-head"><h3>Your account</h3></div>
+                <dl class="kv" id="myAccount"></dl>
+                <div class="divider"></div>
+                <div class="section-title">Active sessions</div>
+                <div class="list" id="sessionList"></div>
+                <button class="btn btn-ghost btn-sm btn-block" id="revokeOthers" style="margin-top: 0.7rem">
+                  Sign out everywhere else
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <script src="vendor/leaflet/leaflet.js"></script>
+    <script src="js/app.js"></script>
+    <script src="js/map.js"></script>
+    <script src="js/manager.js"></script>
+  </body>
+</html>

@@ -118,7 +118,7 @@ router.post('/trips/:id/location', requireRole('operator'), loadTrip, (req, res,
 router.get('/trips/:id/track', requireAuth, loadTrip, (req, res) => {
   const trip = req.trip;
   const isParty =
-    trip.customer_id === req.user.id || trip.operator_id === req.user.id || req.user.role === 'admin';
+    trip.customer_id === req.user.id || trip.operator_id === req.user.id || req.user.role === 'manager';
   if (!isParty) return res.status(403).json({ error: 'This job is not yours.' });
 
   const trail = all(

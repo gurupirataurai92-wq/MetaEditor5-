@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>New delivery · Haulr</title>
+    <link rel="stylesheet" href="css/styles.css" />
+    <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📦</text></svg>"
+    />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap-wide">
+        <a class="brand" href="index.html"><span class="brand-mark">H</span>Haulr</a>
+        <nav class="nav" id="nav"></nav>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <div class="wrap-wide">
+        <div class="row-between" style="margin-bottom: 1rem">
+          <div>
+            <h1 style="font-size: 1.8rem; margin-bottom: 0.2rem">What are we moving?</h1>
+            <p class="muted" style="margin: 0">
+              Set your two points, describe the load, then name your price.
+            </p>
+          </div>
+          <a href="customer.html" class="btn btn-ghost btn-sm">← My deliveries</a>
+        </div>
+
+        <div class="split">
+          <!-- ------------------------------------------------ form column -->
+          <div class="stack">
+            <div id="alert" class="alert alert-error hidden"></div>
+
+            <div class="card">
+              <div class="section-title">1 · Route</div>
+
+              <div class="field ac-wrap">
+                <label for="pickupSearch">Pickup</label>
+                <input
+                  type="text"
+                  id="pickupSearch"
+                  placeholder="Search an address, or drop the A pin on the map"
+                  autocomplete="off"
+                />
+                <div class="hint" id="pickupHint">No pickup point set yet.</div>
+              </div>
+
+              <div class="row" style="margin: -0.35rem 0 0.9rem">
+                <button class="btn btn-quiet btn-sm" id="useMyLocation">📍 Use my location</button>
+                <button class="btn btn-quiet btn-sm" id="setPickupMode">Drop pin A</button>
+              </div>
+
+              <div class="field ac-wrap">
+                <label for="dropoffSearch">Drop-off</label>
+                <input
+                  type="text"
+                  id="dropoffSearch"
+                  placeholder="Search an address, or drop the B pin on the map"
+                  autocomplete="off"
+                />
+                <div class="hint" id="dropoffHint">No drop-off point set yet.</div>
+              </div>
+
+              <div class="row" style="margin: -0.35rem 0 0">
+                <button class="btn btn-quiet btn-sm" id="setDropoffMode">Drop pin B</button>
+                <button class="btn btn-quiet btn-sm" id="swapPoints">⇅ Swap</button>
+                <span class="badge badge-blue right" id="distanceBadge">— km</span>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="section-title">2 · The load</div>
+
+              <div class="field">
+                <label for="category">Type of job</label>
+                <select id="category"></select>
+              </div>
+
+              <div class="field">
+                <span class="label">Vehicle</span>
+                <div class="choice-grid" id="vehicleChoices"></div>
+                <div class="hint" id="vehicleHint"></div>
+              </div>
+
+              <div class="field">
+                <label for="itemDescription">What exactly are we moving?</label>
+                <textarea
+                  id="itemDescription"
+                  maxlength="1000"
+                  placeholder="Three-seater couch, a coffee table and four boxes. Couch is heavy — two people needed."
+                ></textarea>
+                <div class="hint">
+                  Be specific. Operators price on what they can see, and a surprise piano ends
+                  badly for everyone.
+                </div>
+              </div>
+
+              <div class="grid-2">
+                <div class="field">
+                  <label for="weightEstimateKg">Rough weight (kg)</label>
+                  <input type="number" id="weightEstimateKg" min="0" step="1" placeholder="120" />
+                </div>
+                <div class="field">
+                  <label for="helpersRequired">Helpers needed</label>
+                  <select id="helpersRequired"></select>
+                </div>
+              </div>
+
+              <div class="grid-2">
+                <div class="field">
+                  <label for="pickupFloor">Pickup floor</label>
+                  <input type="number" id="pickupFloor" min="0" max="60" step="1" value="0" />
+                  <label class="checkline" style="margin-top: 0.4rem">
+                    <input type="checkbox" id="pickupHasLift" />
+                    <span>Lift available</span>
+                  </label>
+                </div>
+                <div class="field">
+                  <label for="dropoffFloor">Drop-off floor</label>
+                  <input type="number" id="dropoffFloor" min="0" max="60" step="1" value="0" />
+                  <label class="checkline" style="margin-top: 0.4rem">
+                    <input type="checkbox" id="dropoffHasLift" />
+                    <span>Lift available</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="grid-2">
+                <div class="field">
+                  <label for="pickupContact">Pickup contact <span class="muted">(optional)</span></label>
+                  <input type="text" id="pickupContact" placeholder="Gate code 4471, ask for Sam" />
+                </div>
+                <div class="field">
+                  <label for="dropoffContact">Drop-off contact <span class="muted">(optional)</span></label>
+                  <input type="text" id="dropoffContact" placeholder="Ring the buzzer for unit 12" />
+                </div>
+              </div>
+
+              <div class="field" style="margin-bottom: 0">
+                <label for="scheduledAt">Schedule for later <span class="muted">(optional)</span></label>
+                <input type="datetime-local" id="scheduledAt" />
+                <div class="hint">Leave empty to post it as an as-soon-as-possible job.</div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="section-title">3 · Your price</div>
+              <div id="priceGuide" class="stack"></div>
+
+              <div class="field" style="margin-top: 1rem">
+                <label for="offerPrice">Your offer</label>
+                <div class="row" style="flex-wrap: nowrap">
+                  <span class="price" id="currencySymbol">R</span>
+                  <input type="number" id="offerPrice" min="1" step="10" style="font-size: 1.15rem; font-weight: 700" />
+                </div>
+                <input type="range" id="offerSlider" min="0" max="100" value="50" style="margin-top: 0.6rem" />
+                <div class="row-between tiny muted">
+                  <span id="rangeLow">—</span>
+                  <span id="rangeMid">Suggested</span>
+                  <span id="rangeHigh">—</span>
+                </div>
+                <div class="hint" id="offerFeedback"></div>
+              </div>
+
+              <div class="field">
+                <label for="paymentMethod">Payment</label>
+                <select id="paymentMethod"></select>
+              </div>
+
+              <button class="btn btn-accent btn-block btn-lg" id="submitBtn">
+                Post job and collect offers
+              </button>
+              <p class="muted tiny center" style="margin: 0.7rem 0 0">
+                Nothing is charged now. You only pay the operator you choose, at the price you both
+                agree.
+              </p>
+            </div>
+          </div>
+
+          <!-- ------------------------------------------------- map column -->
+          <div class="sticky-panel stack">
+            <div class="card card-flush">
+              <div id="map" class="map map-flush map-tall"></div>
+              <div style="padding: 0.85rem 1.1rem">
+                <div class="row-between">
+                  <span class="small muted" id="mapMode">Click the map to place your pickup pin.</span>
+                  <span class="badge badge-green" id="nearbyBadge">
+                    <span class="dot dot-pulse"></span><span id="nearbyText">—</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="section-title">Summary</div>
+              <dl class="kv" id="summary"></dl>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script src="vendor/leaflet/leaflet.js"></script>
+    <script src="js/app.js"></script>
+    <script src="js/map.js"></script>
+    <script src="js/request.js"></script>
+  </body>
+</html>

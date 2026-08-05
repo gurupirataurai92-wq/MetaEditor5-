@@ -1,0 +1,16 @@
+# Send every api/... request to the front controller.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # Anything that is not a real file goes to index.php, with the remainder
+    # of the path handed over as ?_route=
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(.*)$ index.php?_route=$1 [QSA,L]
+</IfModule>
+
+# Do not let the directory be browsed if rewriting is unavailable.
+<IfModule mod_autoindex.c>
+    Options -Indexes
+</IfModule>

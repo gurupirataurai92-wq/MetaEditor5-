@@ -110,17 +110,123 @@ router.post('/trips/:id/offers', requireRole('operator'), loadTrip, (req, res, n
 });
 
 /**
+ * POST /api/trips/:id/accept
+ *
+ * The driver takes the job outright at the price the customer already named.
+ *
+ * No second confirmation is asked of the customer, and that is deliberate:
+ * posting a job at a stated price *is* the offer, so a driver agreeing to it
+ * forms the deal there and then. Counter-offers at a different price still go
+ * through the bidding route, because that changes the terms the customer set.
+ */
+router.post('/trips/:id/accept', requireRole('operator'), loadTrip, (req, res, next) => {
+  try {
+    const trip = req.trip;
+
+    if (trip.status !== 'requested') {
+      return res.status(409).json({ error: 'This job has already been taken.' });
+    }
+    if (trip.customer_id === req.user.id) {
+      return res.status(400).json({ error: 'You cannot take your own job.' });
+    }
+
+    const profile = get('SELECT * FROM operator_profiles WHERE user_id = ?', req.user.id);
+    if (!profile) {
+      return res.status(400).json({ error: 'Add your vehicle details before taking jobs.' });
+    }
+
+    const required = vehicleById.get(trip.vehicle_class);
+    const mine = vehicleById.get(profile.vehicle_class);
+    if (!mine || mine.capacityKg < required.capacityKg) {
+      return res.status(400).json({
+        error: `This job needs a ${required.name.toLowerCase()} or bigger. Your ${
+          mine ? mine.name.toLowerCase() : 'vehicle'
+        } is too small.`,
+      });
+    }
+    if (trip.helpers_required > mine.maxHelpers) {
+      return res.status(400).json({
+        error: `This job needs ${trip.helpers_required} helper(s); your vehicle class cannot bring that many.`,
+      });
+    }
+
+    const etaMins =
+      profile.last_lat != null && profile.last_lng != null
+        ? etaMinutes(
+            haversineKm(profile.last_lat, profile.last_lng, trip.pickup_lat, trip.pickup_lng) * 1.35
+          )
+        : 20;
+
+    const claim = transaction(() => {
+      // Guarded UPDATE — the race between two drivers tapping "accept" at the
+      // same instant is settled here, by the database, not by who asked first.
+      const result = run(
+        `UPDATE trips
+            SET status = 'accepted', operator_id = ?, agreed_price = customer_offer_price,
+                assigned_by = 'operator', accepted_at = datetime('now')
+          WHERE id = ? AND status = 'requested' AND operator_id IS NULL`,
+        req.user.id,
+        trip.id
+      );
+      if (result.changes !== 1) return false;
+
+      // Record the acceptance as an offer so the job's paper trail matches the
+      // negotiated path exactly.
+      run(
+        `INSERT INTO offers (trip_id, operator_id, price, eta_minutes, message, status)
+         VALUES (?, ?, ?, ?, ?, 'accepted')
+         ON CONFLICT (trip_id, operator_id)
+         DO UPDATE SET price = excluded.price, eta_minutes = excluded.eta_minutes,
+                       status = 'accepted', created_at = datetime('now')`,
+        trip.id,
+        req.user.id,
+        trip.customer_offer_price,
+        etaMins,
+        'Accepted at your asking price'
+      );
+      run(
+        "UPDATE offers SET status = 'rejected' WHERE trip_id = ? AND operator_id != ? AND status = 'pending'",
+        trip.id,
+        req.user.id
+      );
+      return true;
+    });
+
+    if (!claim()) {
+      return res.status(409).json({ error: 'Another operator just took this job.' });
+    }
+
+    logEvent(trip.id, req.user.id, 'operator_accepted', `${trip.customer_offer_price}`);
+    broadcastTrip(trip.id, { reason: 'accepted' });
+
+    for (const lost of all(
+      "SELECT operator_id FROM offers WHERE trip_id = ? AND status = 'rejected'",
+      trip.id
+    )) {
+      rt.toUser(lost.operator_id, { type: 'offer_rejected', tripId: trip.id });
+    }
+    rt.toDispatch({ type: 'job_closed', tripId: trip.id });
+
+    res.json({
+      trip: S.trip(get('SELECT * FROM trips WHERE id = ?', trip.id), { viewerId: req.user.id }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * GET /api/trips/:id/offers
  * The customer sees every bid; an operator only ever sees their own.
  */
 router.get('/trips/:id/offers', requireAuth, loadTrip, (req, res) => {
   const isCustomer = req.trip.customer_id === req.user.id;
 
-  if (!isCustomer && req.user.role !== 'operator' && req.user.role !== 'admin') {
+  if (!isCustomer && req.user.role !== 'operator' && req.user.role !== 'manager') {
     return res.status(403).json({ error: 'This job is not yours.' });
   }
 
-  const rows = isCustomer || req.user.role === 'admin'
+  const rows = isCustomer || req.user.role === 'manager'
     ? all(
         `SELECT o.* FROM offers o
           WHERE o.trip_id = ? AND o.status IN ('pending','accepted')

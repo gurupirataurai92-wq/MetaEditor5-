@@ -20,6 +20,7 @@
   let pins = [];
 
   document.addEventListener('DOMContentLoaded', async () => {
+    await H.boot();
     const user = H.Session.require('operator');
     if (!user) return;
 
@@ -335,8 +336,8 @@
             ${verdict}
           </div>
           <div class="row" style="gap:.4rem">
-            <button class="btn btn-quiet btn-sm" data-quick="${job.id}" data-price="${asking}">
-              Take at ${H.money(asking)}
+            <button class="btn btn-green btn-sm" data-quick="${job.id}" data-price="${asking}">
+              Accept at ${H.money(asking)}
             </button>
             <a class="btn btn-accent btn-sm" href="/track.html?trip=${job.id}">
               ${job.myOfferId ? 'Update offer' : 'Bid'} →
@@ -416,20 +417,21 @@
         const price = Number(button.dataset.price);
 
         const confirmed = await H.confirmDialog({
-          title: `Offer ${H.money(price)}?`,
-          body: "This sends the customer an offer at exactly their asking price. They still choose who gets the job.",
-          confirmText: 'Send the offer',
-          tone: 'accent',
+          title: `Accept this job at ${H.money(price)}?`,
+          body: "The job is yours straight away at the customer's asking price — there is no waiting for them to choose. Bid a different price instead if you want to negotiate.",
+          confirmText: 'Accept the job',
+          tone: 'green',
         });
         if (!confirmed) return;
 
         await H.withBusy(button, async () => {
           try {
-            await H.api.post(`/api/trips/${tripId}/offers`, { price });
-            H.toast('Offer sent.', 'green');
-            loadBoard({ quiet: true });
+            await H.api.post(`/api/trips/${tripId}/accept`);
+            H.toast('Job accepted. Head to the pickup.', 'green');
+            window.location.href = `/track.html?trip=${tripId}`;
           } catch (err) {
             H.toast(err.message, 'red');
+            loadBoard({ quiet: true });
           }
         });
       });

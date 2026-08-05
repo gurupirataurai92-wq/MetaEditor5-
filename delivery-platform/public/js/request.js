@@ -24,6 +24,7 @@
   let quoteTimer = null;
 
   document.addEventListener('DOMContentLoaded', async () => {
+    await H.boot();
     if (!H.Session.require('customer')) return;
 
     await H.loadMeta();
