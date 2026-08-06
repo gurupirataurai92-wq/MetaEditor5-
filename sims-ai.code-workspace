@@ -1,0 +1,21 @@
+{
+  "folders": [
+    { "name": "SIMS AI (root)", "path": "." },
+    { "name": "backend", "path": "backend" },
+    { "name": "web", "path": "web" },
+    { "name": "mobile", "path": "mobile" },
+    { "name": "ml", "path": "ml" },
+    { "name": "docs", "path": "docs" }
+  ],
+  "settings": {
+    "python.defaultInterpreterPath": "${workspaceFolder:backend}/.venv/bin/python"
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-python.python",
+      "charliermarsh.ruff",
+      "bradlc.vscode-tailwindcss",
+      "dart-code.flutter"
+    ]
+  }
+}

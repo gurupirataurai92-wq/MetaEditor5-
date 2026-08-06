@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Node / web
+node_modules/
+web/dist/
+*.local
+
+# Flutter
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins*
+
+# Databases & env
+*.db
+*.sqlite3
+.env
+.env.*
+
+# OS / editor
+.DS_Store
+.idea/
+*.tsbuildinfo
+
+# Keep the shared VS Code workspace config, ignore per-user overrides
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/tasks.json

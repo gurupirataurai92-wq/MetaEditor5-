@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Chart + UI tokens (dataviz reference palette) — read by role so light/dark
+   swap in one place. The 8-hue categorical order is the validated sequence
+   from the dataviz skill: blue, green, magenta, yellow, aqua, orange, violet,
+   red. */
+:root {
+  color-scheme: light;
+  --surface-1: #fcfcfb;
+  --surface-2: #f3f3f0;      /* subtle raised panels */
+  --page: #f6f6f3;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --muted: #898781;
+  --grid: #e1e0d9;
+  --baseline: #c3c2b7;
+  --series-1: #2a78d6;  --series-1-soft: #9ec5f4;
+  --series-2: #008300;
+  --series-3: #e87ba4;
+  --series-4: #eda100;
+  --series-5: #1baf7a;
+  --series-6: #eb6834;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --delta-good: #006300;
+  --status-critical: #d03b3b;
+  --status-warning: #fab219;
+  --brand-grad: linear-gradient(135deg, #1c5cab 0%, #2a78d6 55%, #1baf7a 130%);
+}
+:root.dark {
+  color-scheme: dark;
+  --surface-1: #1a1a19;
+  --surface-2: #232321;
+  --page: #0d0d0d;
+  --text-primary: #ffffff;
+  --text-secondary: #c3c2b7;
+  --muted: #898781;
+  --grid: #2c2c2a;
+  --baseline: #383835;
+  --series-1: #3987e5;  --series-1-soft: #1c5cab;
+  --series-2: #008300;
+  --series-3: #d55181;
+  --series-4: #c98500;
+  --series-5: #199e70;
+  --series-6: #d95926;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --delta-good: #0ca30c;
+  --status-critical: #e05656;
+  --status-warning: #fab219;
+  --brand-grad: linear-gradient(135deg, #123b6e 0%, #1c5cab 55%, #14795a 130%);
+}
+
+body {
+  background: var(--page);
+  color: var(--text-primary);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.card {
+  @apply rounded-xl border border-black/10 dark:border-white/10;
+  background: var(--surface-1);
+  box-shadow: 0 1px 2px rgba(11, 11, 11, 0.04), 0 1px 3px rgba(11, 11, 11, 0.03);
+}
+
+/* A stat tile with a coloured top accent — gives the dashboard more life. */
+.stat-accent {
+  position: relative;
+  overflow: hidden;
+}
+.stat-accent::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--accent, var(--series-1));
+}
+
+.fade-in { animation: fade-in 0.25s ease-out; }
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.skeleton {
+  @apply rounded-lg animate-pulse;
+  background: var(--grid);
+}
+
+/* Sidebar active item gets a soft brand wash + left accent bar. */
+.nav-active {
+  background: color-mix(in srgb, var(--series-1) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--series-1);
+}

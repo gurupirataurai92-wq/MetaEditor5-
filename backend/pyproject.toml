@@ -1,0 +1,11 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # SQLAlchemy converts Decimal <-> float on SQLite; exactness is preserved
+    # by quantisation in app.core.money and PostgreSQL NUMERIC in production.
+    "ignore:Dialect sqlite.*Decimal:sqlalchemy.exc.SAWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
