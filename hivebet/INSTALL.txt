@@ -1,0 +1,29 @@
+HiveBet — quick install on XAMPP (dynamic PHP + MySQL site)
+===========================================================
+
+1. Install XAMPP, open the XAMPP Control Panel, and Start "Apache" and "MySQL".
+
+2. Copy this whole "hivebet" folder into XAMPP's web root:
+      Windows : C:\xampp\htdocs\hivebet
+      macOS   : /Applications/XAMPP/htdocs/hivebet
+      Linux   : /opt/lampp/htdocs/hivebet
+
+3. Create the database:
+      Open  http://localhost/phpmyadmin
+      Click "Import"  ->  choose  sql/hivebet.sql  ->  "Go"
+   This builds the "hivebet" database (users, wallet ledger, bets, events...).
+
+4. Open the site:
+      http://localhost/hivebet/
+
+5. Operators manage the system two ways:
+      - In-app: log in as owner (Owner console) or staff (Staff dashboard)
+        to manage players, roles, fixtures, odds and see revenue.
+      - Database: phpMyAdmin is your full SQL admin for the "hivebet" database.
+
+Seed logins are delivered to you privately (passwords are bcrypt-hashed in the
+database) — CHANGE THEM before any real use. See README.md for full details,
+including how to change a password.
+
+NOTE: This is a PLAY-MONEY demo. Real-money operation requires a gambling
+licence, KYC/AML and approved payment credentials. See README.md.
