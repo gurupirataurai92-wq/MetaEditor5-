@@ -15,6 +15,9 @@ CREATE DATABASE IF NOT EXISTS godmode_consultant
 USE godmode_consultant;
 
 SET FOREIGN_KEY_CHECKS = 0;
+DROP TABLE IF EXISTS usage_log;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS businesses;
 DROP TABLE IF EXISTS payments;
 DROP TABLE IF EXISTS inventory_moves;
 DROP TABLE IF EXISTS inventory_items;
@@ -232,6 +235,39 @@ CREATE TABLE payments (
   FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
+-- ---------- SaaS: tenants, users, usage ----------
+CREATE TABLE businesses (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  name          VARCHAR(160) NOT NULL,
+  contact_email VARCHAR(160) DEFAULT '',
+  plan          VARCHAR(20) DEFAULT 'Trial',      -- Trial | Starter | Professional | Enterprise
+  status        VARCHAR(12) DEFAULT 'active',      -- active | suspended
+  trial_ends    DATE NULL,
+  created_at    DATE,
+  last_active   DATETIME NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE users (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  business_id   INT NULL,                          -- NULL for the distributor
+  name          VARCHAR(120) NOT NULL,
+  email         VARCHAR(160) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  role          VARCHAR(16) NOT NULL DEFAULT 'business',  -- distributor | business
+  created_at    DATE,
+  last_seen     DATETIME NULL,
+  FOREIGN KEY (business_id) REFERENCES businesses(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE usage_log (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  user_id     INT NULL,
+  business_id INT NULL,
+  action      VARCHAR(40) DEFAULT 'visit',
+  page        VARCHAR(60) DEFAULT '',
+  at          DATETIME
+) ENGINE=InnoDB;
+
 -- ---------- Settings ----------
 CREATE TABLE settings (
   id       INT PRIMARY KEY DEFAULT 1,
@@ -242,6 +278,17 @@ CREATE TABLE settings (
 --  Seed data
 -- ============================================================
 INSERT INTO settings (id, currency) VALUES (1, 'USD');
+
+-- Default tenant + accounts.  CHANGE THESE PASSWORDS after first login.
+INSERT INTO businesses (id, name, contact_email, plan, status, trial_ends, created_at)
+  VALUES (1, 'Demo Consulting Co', 'owner@demo.co', 'Professional', 'active', NULL, '2026-01-01');
+
+-- Passwords: distributor = "admin123", business owner = "business123"
+INSERT INTO users (business_id, name, email, password_hash, role, created_at) VALUES
+  (NULL, 'Platform Distributor', 'distributor@godmode.co',
+   '$2y$12$LIyvQtrEXZrC.4FIFYh1Z.Je3kJ4SU2myZHij33s1q/Huj/RmVwca', 'distributor', '2026-01-01'),
+  (1,    'Business Owner',        'owner@demo.co',
+   '$2y$12$V5mDHPK4KAFuOdEli87q8Og1XI5iLYuqCXXDMcxS5dvgqK7H2JmoS', 'business', '2026-01-01');
 
 INSERT INTO accounts (name, type) VALUES
   ('Cash & Bank',         'Asset'),

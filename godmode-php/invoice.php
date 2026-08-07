@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/includes/functions.php';
+require_once __DIR__ . '/includes/guard.php';
 $id = (int) getp('id');
 $inv = one('SELECT * FROM invoices WHERE id = ?', [$id]);
 if (!$inv) { http_response_code(404); echo 'Invoice not found.'; exit; }

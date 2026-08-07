@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/includes/functions.php';
+require_once __DIR__ . '/includes/guard.php';
 if (is_post()) {
     $cur = post('currency', 'USD');
     $allowed = ['USD','EUR','GBP','KES','NGN','ZAR','GHS','UGX','TZS','RWF','ZMW','INR','PHP','IDR','BRL','MXN'];

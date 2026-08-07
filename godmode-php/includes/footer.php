@@ -1,6 +1,38 @@
   </main>
 </div>
 
+<?php $role = $GLOBALS['__layout_role'] ?? 'business'; ?>
+<?php if ($role !== 'distributor'): ?>
+<?php
+  $curPage = basename($_SERVER['PHP_SELF'] ?? 'index.php');
+  $suggestions = advisor_suggestions();
+  $lvl = ['critical' => ['b-red', '●'], 'warn' => ['b-amber', '▲'], 'info' => ['b-blue', 'ℹ'], 'good' => ['b-green', '✓']];
+?>
+<aside class="advisor" id="advisor">
+  <div class="advisor-head">
+    <div><span class="advisor-spark">✦</span> <strong>AI Advisor</strong></div>
+    <button class="btn btn-icon" onclick="document.getElementById('advisor').classList.remove('open')">✕</button>
+  </div>
+  <div class="advisor-tip">💡 <?= e(page_tip($curPage)) ?></div>
+  <div class="advisor-list">
+    <?php foreach ($suggestions as $sug): [$cls, $ic] = $lvl[$sug['level']]; ?>
+      <div class="advisor-item">
+        <span class="badge <?= $cls ?>"><?= $ic ?></span>
+        <div>
+          <div><?= e($sug['text']) ?></div>
+          <?php if (!empty($sug['action'])): ?>
+            <a class="advisor-action" href="<?= e($sug['action'][1]) ?>"><?= e($sug['action'][0]) ?> →</a>
+          <?php endif; ?>
+        </div>
+      </div>
+    <?php endforeach; ?>
+  </div>
+  <div class="advisor-foot">
+    Suggestions are generated from your live data and the Zimbabwe compliance rules.
+    <a href="legal.php">Open the law library →</a>
+  </div>
+</aside>
+
 <div class="cmdk-backdrop" id="cmdk" hidden>
   <div class="cmdk">
     <input id="cmdk-input" placeholder="Search clients, invoices, loans, risks… or jump to a page" autocomplete="off">
@@ -17,7 +49,7 @@ $pages = [
     ['Auditing', 'auditing.php'], ['Accounting', 'accounting.php'], ['Invoicing', 'invoicing.php'],
     ['Payments', 'payments.php'], ['Inventory', 'inventory.php'],
     ['Microfinance', 'microfinance.php'], ['Tax & Compliance', 'tax.php'], ['HR & Payroll', 'hr.php'],
-    ['Risk Register', 'risk.php'], ['Financial Analysis', 'analysis.php'],
+    ['Risk Register', 'risk.php'], ['Financial Analysis', 'analysis.php'], ['Zimbabwe Law', 'legal.php'],
 ];
 foreach ($pages as $p) { $cmdIndex[] = ['tag' => 'go to', 'label' => $p[0], 'sub' => '', 'href' => $p[1]]; }
 foreach (rows('SELECT id, name, industry FROM clients ORDER BY name') as $c) {
@@ -45,15 +77,14 @@ foreach (rows('SELECT id, title, likelihood, impact FROM risks') as $r) {
 foreach (rows('SELECT id, name, due_date FROM obligations') as $o) {
     $cmdIndex[] = ['tag' => 'deadline', 'label' => $o['name'], 'sub' => 'due ' . $o['due_date'], 'href' => 'tax.php'];
 }
-foreach (rows('SELECT id, title, status, stage FROM ooda') as $o) {
-    $stages = ['Observe', 'Orient', 'Decide', 'Act'];
-    $cmdIndex[] = ['tag' => 'ooda', 'label' => $o['title'],
-                   'sub' => $o['status'] === 'active' ? 'stage: ' . $stages[(int) $o['stage']] : 'done', 'href' => 'ooda.php'];
+foreach (zim_legal_kb() as $t) {
+    $cmdIndex[] = ['tag' => 'law', 'label' => $t['title'], 'sub' => $t['authority'], 'href' => 'legal.php#' . $t['key']];
 }
 ?>
 <script>
 window.CMD_INDEX = <?= json_encode($cmdIndex, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>;
 </script>
+<?php endif; ?>
 <script src="assets/app.js"></script>
 </body>
 </html>

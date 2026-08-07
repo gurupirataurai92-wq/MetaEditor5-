@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/includes/functions.php';
+require_once __DIR__ . '/includes/guard.php';
 $id = (int) getp('id');
 $c = one('SELECT * FROM clients WHERE id = ?', [$id]);
 if (!$c) { http_response_code(404); echo 'Client not found.'; exit; }

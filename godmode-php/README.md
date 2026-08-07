@@ -28,10 +28,47 @@ PHP and every record lives in a MySQL database — nothing is faked in the brows
    XAMPP install (host `127.0.0.1`, user `root`, empty password). Edit them
    only if your MySQL is different.
 
-5. **Open the app:** <http://localhost/godmode-php/>
+5. **Open the app:** <http://localhost/godmode-php/> (you'll be sent to the
+   login page).
 
 If the database isn't running or hasn't been imported yet, the app shows a
 clear message telling you exactly what to do — it won't white-screen.
+
+## Logging in — one form, two dashboards
+
+Everyone signs in on the **same login page**; the role on the account decides
+where you land.
+
+| Role | Demo login | Lands on |
+|---|---|---|
+| **Software distributor** | `distributor@godmode.co` / `admin123` | Distributor Console — every subscriber, their plan/status, and live "who's using the system" activity |
+| **Business** | `owner@demo.co` / `business123` | The full business consultant app |
+
+> **Change these passwords after first login** (they're seeded for the demo).
+> Passwords are stored as bcrypt hashes; every page is behind a session guard.
+
+- **Distributor** can provision a new business — it creates the tenant *and*
+  its owner login in one step — plus suspend/reactivate, change plans, and see
+  recent per-user activity.
+- **Business** users get the consultant app, the AI Advisor, and the Zimbabwe
+  law library.
+
+## AI Advisor (decision support)
+
+A slide-out **✦ Advisor** panel (button above the Ctrl+K hint) reads your live
+data and gives prioritized, actionable suggestions — overdue filings, ageing
+receivables, portfolio-at-risk, low stock, payments awaiting sign-off, severe
+risks — plus Zimbabwe-specific payroll/tax reminders and a per-page tip. It's a
+transparent rules engine over your own numbers (no data leaves the machine),
+and it's structured so a real LLM can be plugged in later.
+
+## Zimbabwe law library
+
+`legal.php` is a structured compliance reference (ZIMRA taxes & QPDs, VAT, PAYE,
+NSSA, ZIMDEF, Labour Act, COBE company law, IMTT, data protection) with the
+governing statute and authority for each. The Advisor draws on it. Rates and
+thresholds change often, so each entry carries a **"verify with the authority"**
+note — treat it as guidance, not legal advice.
 
 ## Pages (all functional, all backed by SQL)
 
@@ -51,6 +88,9 @@ clear message telling you exactly what to do — it won't white-screen.
 | Risk Register | `risk.php` | Likelihood × impact scoring |
 | Financial Analysis | `analysis.php` | Ratios, break-even, NPV, DCF valuation, EBITDA multiples |
 | Client 360° | `client.php` | Health score (0–100 / A–E) combining findings, receivables, compliance, risk |
+| Distributor Console | `distributor.php` | (distributor role) subscribers, plans, suspend/reactivate, provisioning, and live usage |
+| Zimbabwe Law | `legal.php` | Compliance reference feeding the AI Advisor |
+| Login / Logout | `login.php` / `logout.php` | One login form for both roles; session-based auth |
 
 ## Power features
 
@@ -70,8 +110,14 @@ godmode-php/
   *.php                  one file per page
 ```
 
-## Security note
+## Security & scope notes
 
-This is a single-user back-office tool intended to run on localhost via XAMPP.
-All queries use PDO prepared statements. Before exposing it on a network, add
-authentication and put it behind HTTPS.
+- Login is session-based with bcrypt password hashing, and every page is behind
+  a role guard. All queries use PDO prepared statements.
+- **Shared workspace, for now:** the distributor registry (businesses, users,
+  usage) is fully multi-tenant, but the *operational* data (clients, ledger,
+  invoices, etc.) is a single shared workspace rather than being partitioned per
+  business. Full per-tenant data isolation (a `business_id` on every record) is
+  the recommended next step before onboarding real, separate clients.
+- Change the seeded passwords, and put the app behind HTTPS before exposing it
+  beyond localhost.

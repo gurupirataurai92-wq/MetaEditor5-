@@ -339,6 +339,234 @@ function client_health(int $cid): array
     return ['score' => $score, 'grade' => $grade, 'notes' => $notes, 'findings' => $findings, 'invs' => $invs];
 }
 
+/* ============================================================
+   ZIMBABWE LEGAL & COMPLIANCE KNOWLEDGE BASE
+   Structural reference (statutes + authorities + obligations).
+   Rates/thresholds change frequently — always verify the current
+   figure with the named authority before acting.
+   ============================================================ */
+function zim_legal_kb(): array
+{
+    return [
+        [
+            'key' => 'income-tax', 'title' => 'Corporate Income Tax & Provisional Tax (QPDs)',
+            'authority' => 'ZIMRA', 'act' => 'Income Tax Act [Chapter 23:06] & Finance Act',
+            'summary' => 'Registered companies are taxed on taxable income and pay provisional tax on Quarterly Payment Dates (QPDs), not in one lump sum.',
+            'obligations' => [
+                'Provisional tax (QPDs), cumulative: 10% by 25 March, 25% by 25 June, 30% by 25 September, 35% by 20 December.',
+                'Annual income tax return (ITF12C) after year-end.',
+                'Keep records for at least 6 years.',
+            ],
+            'verify' => 'Confirm the current corporate rate and AIDS levy with ZIMRA — they are set each year in the Finance Act.',
+        ],
+        [
+            'key' => 'vat', 'title' => 'Value Added Tax (VAT)',
+            'authority' => 'ZIMRA', 'act' => 'Value Added Tax Act [Chapter 23:12]',
+            'summary' => 'Businesses whose taxable turnover exceeds the prescribed registration threshold must register for VAT, charge output VAT, and file returns.',
+            'obligations' => [
+                'Register once taxable turnover exceeds the ZIMRA threshold (voluntary registration is possible below it).',
+                'Standard rate is 15% (some goods are zero-rated or exempt).',
+                'File VAT returns and remit by the due date for your category (commonly the 25th of the following month).',
+                'Issue compliant fiscal tax invoices (fiscalisation applies to many taxpayers).',
+            ],
+            'verify' => 'Confirm the current registration threshold, rate and your filing category with ZIMRA.',
+        ],
+        [
+            'key' => 'paye', 'title' => 'PAYE / Employees Tax (FDS)',
+            'authority' => 'ZIMRA', 'act' => 'Income Tax Act [Chapter 23:06], 13th Schedule',
+            'summary' => 'Employers must deduct employees tax (PAYE) under the Final Deduction System and remit it monthly.',
+            'obligations' => [
+                'Withhold PAYE per the current tax tables each pay run.',
+                'Remit to ZIMRA by the 10th of the following month.',
+                'File annual PAYE reconciliation (ITF16) and issue employee tax certificates.',
+            ],
+            'verify' => 'Use the current year PAYE tax tables from ZIMRA (they change annually and by currency, USD vs ZiG).',
+        ],
+        [
+            'key' => 'nssa', 'title' => 'NSSA Social Security Contributions',
+            'authority' => 'NSSA', 'act' => 'NSSA Act [Chapter 17:04] (POBS & APWCS schemes)',
+            'summary' => 'Employers register with NSSA and remit monthly contributions for the pension (POBS) and accident (APWCS) schemes.',
+            'obligations' => [
+                'Register the business and each employee with NSSA.',
+                'Deduct the employee share and add the employer share of insurable earnings, monthly.',
+                'Remit by the NSSA due date each month.',
+            ],
+            'verify' => 'Confirm the current contribution rate and insurable-earnings ceiling with NSSA.',
+        ],
+        [
+            'key' => 'zimdef', 'title' => 'ZIMDEF Skills Development Levy',
+            'authority' => 'Ministry of Higher & Tertiary Education / ZIMDEF',
+            'act' => 'Manpower Planning and Development Act [Chapter 28:02]',
+            'summary' => 'Employers pay a manpower development (skills) levy on their wage bill.',
+            'obligations' => [
+                'Levy is 1% of the gross monthly wage bill.',
+                'Remit to ZIMDEF monthly.',
+            ],
+            'verify' => 'Confirm the current levy rate and remittance channel with ZIMDEF.',
+        ],
+        [
+            'key' => 'labour', 'title' => 'Labour & Employment',
+            'authority' => 'Ministry of Labour / NEC for your sector',
+            'act' => 'Labour Act [Chapter 28:01]',
+            'summary' => 'Governs contracts, wages, working hours, leave, discipline and retrenchment. Many sectors have a National Employment Council (NEC) setting minimum wages and conditions.',
+            'obligations' => [
+                'Issue written particulars of employment.',
+                'Pay at least the applicable sector minimum wage (set by NEC / statutory instrument).',
+                'Follow the Act and your NEC code for discipline and retrenchment.',
+            ],
+            'verify' => 'Check your sector NEC for the current minimum wage and conditions of service.',
+        ],
+        [
+            'key' => 'company', 'title' => 'Company Registration & Annual Returns',
+            'authority' => 'Registrar of Companies (Deeds, Companies & Intellectual Property)',
+            'act' => 'Companies and Other Business Entities Act [Chapter 24:31] (COBE)',
+            'summary' => 'Entities must be registered and keep their filings current, including annual returns and beneficial ownership information.',
+            'obligations' => [
+                'File annual returns and keep statutory registers.',
+                'Maintain and update beneficial ownership records.',
+                'Notify changes of directors, address and share capital.',
+            ],
+            'verify' => 'Confirm annual return fees and deadlines with the Registrar.',
+        ],
+        [
+            'key' => 'imtt', 'title' => 'Intermediated Money Transfer Tax (IMTT)',
+            'authority' => 'ZIMRA', 'act' => 'Finance Act (IMTT provisions)',
+            'summary' => 'A tax applies to electronic money transfers. Budget for it as a real transaction cost.',
+            'obligations' => ['Account for IMTT on qualifying electronic transactions.'],
+            'verify' => 'Confirm the current IMTT rate and exemptions with ZIMRA.',
+        ],
+        [
+            'key' => 'data', 'title' => 'Data Protection',
+            'authority' => 'POTRAZ (Data Protection Authority)',
+            'act' => 'Cyber and Data Protection Act [Chapter 12:07]',
+            'summary' => 'Businesses that process personal data must handle it lawfully and securely.',
+            'obligations' => [
+                'Process personal data lawfully and keep it secure.',
+                'Register with / appoint a Data Protection Officer where required.',
+            ],
+            'verify' => 'Check current registration and DPO requirements with POTRAZ.',
+        ],
+    ];
+}
+function zim_legal_find(string $key): ?array
+{
+    foreach (zim_legal_kb() as $t) { if ($t['key'] === $key) return $t; }
+    return null;
+}
+
+/* ============================================================
+   ADVISOR — data-driven decision support ("AI") side panel.
+   Reads live figures + the Zimbabwe KB and emits prioritized,
+   actionable suggestions. Designed to be swappable for an LLM.
+   ============================================================ */
+function advisor_suggestions(): array
+{
+    $s = [];
+    $add = function ($level, $text, $action = null) use (&$s) {
+        $s[] = ['level' => $level, 'text' => $text, 'action' => $action];
+    };
+
+    $fin = financials();
+    $inv = invoice_stats();
+    $pf  = portfolio_stats();
+    $pay = payment_stats();
+    $invy = inventory_stats();
+
+    // Books integrity
+    $equityTotal = $fin['totalEquity'] + $fin['netIncome'];
+    if (abs($fin['totalAssets'] - ($fin['totalLiabs'] + $equityTotal)) > 0.005) {
+        $add('critical', 'Your books do not balance. Review recent journal entries before you rely on any report.', ['Open Accounting', 'accounting.php']);
+    }
+
+    // Compliance deadlines
+    $overdueObl = (int) scalar("SELECT COUNT(*) FROM obligations WHERE status = 'pending' AND due_date < ?", [today()]);
+    $soonObl = (int) scalar("SELECT COUNT(*) FROM obligations WHERE status = 'pending' AND due_date >= ? AND due_date <= ?", [today(), date('Y-m-d', strtotime('+14 days'))]);
+    if ($overdueObl > 0) {
+        $add('critical', $overdueObl . ' statutory filing(s) are overdue. In Zimbabwe, late ZIMRA/NSSA filings attract penalties and interest — file immediately.', ['Tax & Compliance', 'tax.php']);
+    } elseif ($soonObl > 0) {
+        $add('warn', $soonObl . ' compliance deadline(s) fall within 14 days. Prepare filings now to avoid penalties.', ['Tax & Compliance', 'tax.php']);
+    }
+
+    // Receivables
+    if ($inv['overdueCount'] > 0) {
+        $add('warn', $inv['overdueCount'] . ' invoice(s) overdue (' . money($inv['overdue']) . '). Chase collection — ageing receivables strangle cash flow.', ['Invoicing', 'invoicing.php']);
+    }
+
+    // Payments awaiting authorization
+    if ($pay['pendCount'] > 0) {
+        $add('info', $pay['pendCount'] . ' payment(s) await authorized sign-off (' . money($pay['pendAmt']) . '). Review before releasing funds.', ['Payments', 'payments.php']);
+    }
+
+    // Microfinance risk
+    if ($pf['parPct'] > 5) {
+        $add('warn', 'Portfolio-at-risk (>30d) is ' . fnum($pf['parPct']) . '% vs a <5% target. Tighten collections and re-score overdue borrowers.', ['Microfinance', 'microfinance.php']);
+    }
+
+    // Inventory
+    if ($invy['out'] > 0) {
+        $add('warn', $invy['out'] . ' item(s) are out of stock. Reorder to protect sales and service levels.', ['Inventory', 'inventory.php']);
+    } elseif ($invy['low'] > 0) {
+        $add('info', $invy['low'] . ' item(s) are at/below reorder level. Plan a purchase.', ['Inventory', 'inventory.php']);
+    }
+
+    // Risk register
+    $sevRisks = (int) scalar("SELECT COUNT(*) FROM risks WHERE status = 'open' AND likelihood * impact >= 15");
+    if ($sevRisks > 0) {
+        $add('warn', $sevRisks . ' severe risk(s) (score ≥ 15) are unmitigated. Assign owners and mitigation actions.', ['Risk Register', 'risk.php']);
+    }
+
+    // Zimbabwe payroll obligations
+    $emp = (int) scalar('SELECT COUNT(*) FROM employees');
+    if ($emp > 0) {
+        $add('info', 'Payroll is active (' . $emp . ' staff). Remit PAYE by the 10th, and NSSA + ZIMDEF (1% of the wage bill) monthly. Verify current rates.', ['Zim compliance', 'legal.php#paye']);
+    }
+
+    // Income tax provisional payments
+    if (array_sum(array_column($fin['income'], 'amt')) > 0) {
+        $add('info', 'You are earning income — set provisional tax aside for the QPDs (25 Mar / Jun / Sep / Dec) so quarterly payments do not squeeze cash.', ['Zim compliance', 'legal.php#income-tax']);
+    }
+
+    // Decision hygiene
+    $activeLoops = (int) scalar("SELECT COUNT(*) FROM ooda WHERE status = 'active'");
+    if ($activeLoops === 0) {
+        $add('info', 'Facing a big call (pricing, hiring, expansion)? Run it through an OODA loop instead of deciding on instinct.', ['OODA Engine', 'ooda.php']);
+    }
+
+    // Onboarding
+    if ((int) scalar('SELECT COUNT(*) FROM clients') === 0) {
+        $add('info', 'Start by adding your first client in Consulting / CRM — most other modules build on it.', ['Add a client', 'consulting.php']);
+    }
+
+    if (!$s) {
+        $add('good', 'No red flags right now. Keep filings current and log major decisions in the OODA engine.');
+    }
+
+    $rank = ['critical' => 0, 'warn' => 1, 'info' => 2, 'good' => 3];
+    usort($s, fn($a, $b) => $rank[$a['level']] <=> $rank[$b['level']]);
+    return $s;
+}
+
+function page_tip(string $page): string
+{
+    $tips = [
+        'index.php'        => 'Scan the alert tiles top-to-bottom: red first, then amber. The Advisor panel turns them into a to-do list.',
+        'ooda.php'         => 'Cycle faster than the problem changes: write what you Observe before you Orient, and always close with a measured Act.',
+        'consulting.php'   => 'A SWOT per client sharpens your advice — strengths and threats often reveal the next engagement.',
+        'auditing.php'     => 'Rank findings by severity; a critical control gap is worth more attention than ten cosmetic ones.',
+        'accounting.php'   => 'Every transaction is two entries. If the balance sheet stops balancing, your last entry is the suspect.',
+        'invoicing.php'    => 'Invoice the day work is delivered, not month-end — days saved here are cash in the bank.',
+        'payments.php'     => 'Never release funds without a signatory. The signature is your audit trail if anything is queried.',
+        'inventory.php'    => 'Set realistic reorder levels — the system will warn you before you run out, not after.',
+        'microfinance.php' => 'Watch PAR>30 like a hawk; in microfinance, portfolio quality matters more than portfolio size.',
+        'tax.php'          => 'In Zimbabwe, ZIMRA penalties compound. A filed-on-time nil return beats a late one every time.',
+        'hr.php'           => 'Budget the full cost of an employee: gross pay plus PAYE, NSSA and ZIMDEF on top.',
+        'risk.php'         => 'Likelihood × impact focuses the eye. Anything scoring 15+ deserves a named owner today.',
+        'analysis.php'     => 'A current ratio below 1 is a liquidity warning even when the P&L looks healthy.',
+        'legal.php'        => 'This is structural guidance — always confirm the current rate or threshold with the named authority.',
+    ];
+    return $tips[$page] ?? 'Use Ctrl+K to jump anywhere, and check the Advisor panel for what needs attention.';
+}
+
 /* ---------- small view helpers ---------- */
 function client_name(?int $id): string
 {

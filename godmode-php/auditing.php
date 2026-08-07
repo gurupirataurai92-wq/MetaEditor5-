@@ -1,5 +1,5 @@
 <?php
-require_once __DIR__ . '/includes/functions.php';
+require_once __DIR__ . '/includes/guard.php';
 
 $AUDIT_STAGES = ['planning', 'fieldwork', 'reporting', 'closed'];
 
