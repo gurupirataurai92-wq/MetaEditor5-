@@ -21,6 +21,7 @@
 enum ENUM_BIAS      { BIAS_NONE = 0, BIAS_BULL = 1, BIAS_BEAR = -1 };
 enum ENUM_TRAIL     { TRAIL_OFF, TRAIL_STRUCTURE, TRAIL_CANDLE };
 enum ENUM_RISK_BASE { RISK_ON_BALANCE, RISK_ON_EQUITY };
+enum ENUM_CENT_MODE { CENT_AUTO, CENT_FORCE_ON, CENT_FORCE_OFF };
 
 //======================================================================
 // INPUT PARAMETERS
@@ -63,7 +64,9 @@ input ENUM_RISK_BASE  InpRiskBase         = RISK_ON_BALANCE; // Risk reference
 input double          InpRiskPercent      = 1.0;    // Risk per trade (%)
 input bool            InpUseFixedLot      = false;  // Use a fixed lot instead of % risk
 input double          InpFixedLot         = 0.01;   // Fixed lot size
-input double          InpMinAccountUSD    = 5.0;    // Do not trade below this balance
+input double          InpMinAccountUSD    = 5.0;    // Do not trade below this balance (real USD, cent-adjusted)
+input ENUM_CENT_MODE  InpCentAccount      = CENT_AUTO; // Cent account detection
+input double          InpCentFactor       = 100.0;  // Account units per 1 real USD on a cent account
 input double          InpMaxRiskPercentCap = 0.0;   // Hard risk ceiling %: skip trade if min lot exceeds it (0 = off)
 input double          InpSLBufferFactor   = 0.15;   // SL buffer as a factor of average range
 input double          InpMinStopRangeFactor = 0.35; // Stop must be >= factor x average range (blocks noise-width stops)
@@ -139,6 +142,12 @@ double      g_sizeNeedMin    = 0.0;
 double      g_sizeNeedMax    = 0.0;
 bool        g_sizeExplained  = false;   // CalculateLot already logged the reason
 
+// Cent accounts denominate the balance in 1/100 USD. Percentages are
+// unaffected, but every absolute figure the EA prints or compares against a
+// USD threshold has to be divided by this.
+double      g_centFactor  = 1.0;
+bool        g_isCent      = false;
+
 //======================================================================
 // SMALL UTILITIES
 //======================================================================
@@ -150,6 +159,55 @@ double PriceNorm(const double price)
 double PointSize()
 {
    return SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+}
+
+//======================================================================
+// CENT ACCOUNT DETECTION
+//======================================================================
+// MT5 exposes no cent-account flag, so this reads the account currency and
+// the broker naming. Brokers label these accounts with a currency code such
+// as USC / USDC / EUC, or put "cent" in the server or company name.
+bool LooksLikeCentAccount()
+{
+   string cur = AccountInfoString(ACCOUNT_CURRENCY);
+   StringToUpper(cur);
+
+   if(cur == "USC" || cur == "USDC" || cur == "EUC" || cur == "EURC" ||
+      cur == "GBC" || cur == "JPC"  || cur == "RUC" || cur == "AUC") return true;
+   if(StringFind(cur, "CENT") >= 0) return true;
+
+   // USDC / EURC style: a standard three-letter code with a trailing C.
+   if(StringLen(cur) == 4 && StringSubstr(cur, 3, 1) == "C") return true;
+
+   string server = AccountInfoString(ACCOUNT_SERVER);
+   StringToUpper(server);
+   if(StringFind(server, "CENT") >= 0) return true;
+
+   string company = AccountInfoString(ACCOUNT_COMPANY);
+   StringToUpper(company);
+   if(StringFind(company, "CENT") >= 0) return true;
+
+   return false;
+}
+
+void ResolveCentAccount()
+{
+   if(InpCentAccount == CENT_FORCE_ON)       g_isCent = true;
+   else if(InpCentAccount == CENT_FORCE_OFF) g_isCent = false;
+   else                                      g_isCent = LooksLikeCentAccount();
+
+   g_centFactor = (g_isCent && InpCentFactor > 0.0) ? InpCentFactor : 1.0;
+
+   if(g_isCent)
+      Print("Cent account detected (currency ", AccountInfoString(ACCOUNT_CURRENCY),
+            "). Balance figures are divided by ", DoubleToString(g_centFactor, 0),
+            " when reported in real USD. Risk percentages are unchanged.");
+}
+
+// Account balance expressed in real USD, whatever the account denomination.
+double RealBalance()
+{
+   return AccountInfoDouble(ACCOUNT_BALANCE) / g_centFactor;
 }
 
 double StopsDistance()
@@ -568,7 +626,7 @@ bool TradingAllowed()
    if(!MQLInfoInteger(MQL_TESTER) && !TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return false;
    if(!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) || !AccountInfoInteger(ACCOUNT_TRADE_EXPERT)) return false;
    if(SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE) != SYMBOL_TRADE_MODE_FULL) return false;
-   if(AccountInfoDouble(ACCOUNT_BALANCE) < InpMinAccountUSD) return false;
+   if(RealBalance() < InpMinAccountUSD) return false;
    if(g_dayBlocked) return false;
 
    int    entries  = 0;
@@ -1058,7 +1116,8 @@ void ReportAccountViability()
          " costs ", DoubleToString(perUnit, 2), " ", AccountInfoString(ACCOUNT_CURRENCY),
          " per 1.00 price move | margin ",
          (haveMargin ? DoubleToString(margin, 2) : "unavailable"),
-         " | balance ", DoubleToString(balance, 2));
+         " | balance ", DoubleToString(balance, 2),
+         (g_isCent ? " (" + DoubleToString(balance / g_centFactor, 2) + " real USD)" : ""));
 
    if(haveMargin && margin > 0.0 && balance < margin * 2.0)
       Print("WARNING: balance ", DoubleToString(balance, 2), " is below 2x the margin of one minimum lot (",
@@ -1070,14 +1129,20 @@ void ReportAccountViability()
    if(typicalStop <= 0.0) return;
 
    double costPerTrade = perUnit * typicalStop;
+   string realCost = g_isCent
+                     ? " (" + DoubleToString(costPerTrade / g_centFactor, 2) + " real USD)"
+                     : "";
    Print("Typical ", EnumToString(InpTimeframe), " stop is ", DoubleToString(typicalStop, _Digits),
          " wide = ", DoubleToString(costPerTrade, 2), " ", AccountInfoString(ACCOUNT_CURRENCY),
-         " at the minimum lot.");
+         realCost, " at the minimum lot.");
 
    if(!InpUseFixedLot && InpRiskPercent > 0.0)
+   {
+      double needed = costPerTrade / (InpRiskPercent / PCT);
       Print("Balance that makes that stop cost ", DoubleToString(InpRiskPercent, 2), "%: ",
-            DoubleToString(costPerTrade / (InpRiskPercent / PCT), 2), " ",
-            AccountInfoString(ACCOUNT_CURRENCY), ".");
+            DoubleToString(needed, 2), " ", AccountInfoString(ACCOUNT_CURRENCY),
+            (g_isCent ? " = " + DoubleToString(needed / g_centFactor, 2) + " real USD" : ""), ".");
+   }
 
    if(balance > 0.0)
    {
@@ -1132,6 +1197,8 @@ int OnInit()
    if(StringFind(symbol, "XAU") < 0 && StringFind(symbol, "GOLD") < 0)
       Print("Warning: this EA is tuned for Gold; current symbol is ", _Symbol, ".");
 
+   ResolveCentAccount();
+
    ResetDayIfNeeded();
    PruneState();
 
@@ -1156,11 +1223,15 @@ void OnDeinit(const int reason)
       Print(g_sizeSkips, " valid signals were skipped because the smallest tradable lot ",
             "exceeded the ", DoubleToString(InpMaxRiskPercentCap, 1), "% risk cap.");
       if(g_sizeNeedSum > 0.0)
+      {
+         double avgNeed = g_sizeNeedSum / (double)g_sizeSkips;
          Print("Balance required to take these at ", DoubleToString(InpRiskPercent, 2), "% risk: ",
-               "average ", DoubleToString(g_sizeNeedSum / (double)g_sizeSkips, 2),
+               "average ", DoubleToString(avgNeed, 2),
                ", tightest stop ", DoubleToString(g_sizeNeedMin, 2),
                ", widest stop ", DoubleToString(g_sizeNeedMax, 2),
-               " ", AccountInfoString(ACCOUNT_CURRENCY), ".");
+               " ", AccountInfoString(ACCOUNT_CURRENCY),
+               (g_isCent ? " (average " + DoubleToString(avgNeed / g_centFactor, 2) + " real USD)" : ""), ".");
+      }
       Print("Fund the account to at least the average figure, or raise InpRiskPercent ",
             "and InpMaxRiskPercentCap if you accept the larger drawdown.");
    }
