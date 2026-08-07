@@ -1,0 +1,5 @@
+# Photographs uploaded by operators belong to the installation, not the source.
+*
+!.gitignore
+!.htaccess
+!index.html

@@ -1,58 +1,19 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>How importing works — Lymond Services</title>
-<meta name="description" content="How we import Japanese vehicles: auction bidding, inspection grades, shipping, clearing and duty — plus answers to the questions buyers ask most.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e63946'/%3E%3Ctext x='32' y='44' font-size='34' font-family='Trebuchet MS,sans-serif' font-weight='bold' fill='%23fff' text-anchor='middle'%3EL%3C/text%3E%3C/svg%3E">
-<link rel="stylesheet" href="assets/css/styles.css">
-</head>
-<body>
-<a class="skip-link" href="#main">Skip to content</a>
+<?php
+/** How importing works: process, landed-cost example, auction grades, FAQ. */
+require __DIR__ . '/includes/bootstrap.php';
 
-<header class="site-header">
-  <div class="topbar">
-    <div class="wrap">
-      <div class="topbar-contact">
-        <span>📞 <a data-co="phone" href="#">+255 754 000 111</a></span>
-        <span>✉ <a data-co="email" href="#">sales@example.com</a></span>
-      </div>
-      <span data-co="hours">Mon–Fri 08:00–18:00 · Sat 09:00–15:00</span>
-    </div>
-  </div>
+$name = setting('company_name');
+$page_title = 'How importing works — ' . $name;
+$page_desc  = 'How we import Japanese vehicles: auction bidding, inspection grades, shipping, '
+            . 'clearing and duty — plus answers to the questions buyers ask most.';
+$nav = 'about';
+require __DIR__ . '/includes/header.php';
+?>
 
-  <div class="wrap nav">
-    <a class="logo" href="index.html">
-      <span class="logo-mark" aria-hidden="true">LS</span>
-      <span class="logo-text">
-        <span class="logo-name">Lymond Services</span>
-        <span class="logo-tag">Imports &amp; Parts</span>
-      </span>
-    </a>
-
-    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav-menu" aria-label="Toggle navigation">☰</button>
-
-    <div class="nav-menu" id="nav-menu">
-      <ul class="nav-links">
-        <li><a href="index.html">Home</a></li>
-        <li><a href="vehicles.html">Vehicles</a></li>
-        <li><a href="parts.html">Spare parts</a></li>
-        <li><a href="about.html">How it works</a></li>
-        <li><a href="contact.html">Contact</a></li>
-      </ul>
-      <div class="nav-cta">
-        <a class="btn btn--accent btn--sm" data-wa="Hello Lymond Services, I would like a quote." href="#">WhatsApp us</a>
-      </div>
-    </div>
-  </div>
-</header>
-
-<main id="main">
 
   <section class="page-hero">
     <div class="wrap">
-      <p class="crumbs"><a href="index.html">Home</a> / How it works</p>
+      <p class="crumbs"><a href="<?= e(url('index.php')) ?>">Home</a> / How it works</p>
       <h1>How importing works</h1>
       <p>Buying a vehicle from eight thousand kilometres away only works if the process is boring
          and predictable. Here is exactly how ours runs, what it costs, and where the risks sit.</p>
@@ -66,7 +27,7 @@
         <div>
           <span class="eyebrow">Who we are</span>
           <h2>Twelve years of moving cars and parts</h2>
-          <p>Lymond Services started as a two-person parts counter and grew into a full import
+          <p><?= e($name) ?> started as a two-person parts counter and grew into a full import
              desk. We buy from Japanese auction houses and established exporters — BE&nbsp;FORWARD
              among them — because their inspection sheets and export paperwork are consistent, which
              is what keeps a shipment from stalling at the port.</p>
@@ -80,7 +41,7 @@
             <li>Services: auction bidding, shipping, clearing, registration and trade accounts</li>
           </ul>
           <div class="btn-row" style="margin-top:20px">
-            <a class="btn btn--primary" href="contact.html">Talk to the import desk</a>
+            <a class="btn btn--primary" href="<?= e(url('contact.php')) ?>">Talk to the import desk</a>
           </div>
         </div>
 
@@ -281,81 +242,10 @@
              — including when importing is the wrong answer.</p>
         </div>
         <div class="btn-row">
-          <a class="btn btn--accent" href="contact.html">Get honest advice</a>
+          <a class="btn btn--accent" href="<?= e(url('contact.php')) ?>">Get honest advice</a>
         </div>
       </div>
     </div>
   </section>
 
-</main>
-
-<footer class="site-footer">
-  <div class="wrap footer-grid">
-    <div>
-      <a class="logo" href="index.html">
-        <span class="logo-mark" aria-hidden="true">LS</span>
-        <span class="logo-text">
-          <span class="logo-name">Lymond Services</span>
-          <span class="logo-tag">Imports &amp; Parts</span>
-        </span>
-      </a>
-      <p style="margin-top:14px">Importers of inspected Japanese vehicles and suppliers of genuine,
-         OEM and aftermarket spare parts — from a single clip to a complete engine.</p>
-      <p><a class="btn btn--accent btn--sm" data-wa="Hello Lymond Services, I would like a quote." href="#">Chat on WhatsApp</a></p>
-    </div>
-
-    <div>
-      <h4>Vehicles</h4>
-      <ul>
-        <li><a href="vehicles.html">All stock</a></li>
-        <li><a href="vehicles.html?body=suv">SUVs &amp; 4WD</a></li>
-        <li><a href="vehicles.html?body=pickup">Pickups</a></li>
-        <li><a href="vehicles.html?body=van">Vans &amp; MPVs</a></li>
-        <li><a href="vehicles.html?body=truck">Trucks</a></li>
-      </ul>
-    </div>
-
-    <div>
-      <h4>Spare parts</h4>
-      <ul>
-        <li><a href="parts.html?category=engine">Engine &amp; cooling</a></li>
-        <li><a href="parts.html?category=brakes">Brakes &amp; clutch</a></li>
-        <li><a href="parts.html?category=suspension">Suspension</a></li>
-        <li><a href="parts.html?category=filters">Service kits</a></li>
-        <li><a href="parts.html">Full catalogue</a></li>
-      </ul>
-    </div>
-
-    <div>
-      <h4>Company</h4>
-      <ul>
-        <li><a href="about.html">How importing works</a></li>
-        <li><a href="about.html#faq">FAQ</a></li>
-        <li><a href="contact.html">Contact &amp; location</a></li>
-        <li><a data-co="phone" href="#">+255 754 000 111</a></li>
-        <li><a data-co="email" href="#">sales@example.com</a></li>
-      </ul>
-    </div>
-  </div>
-
-  <div class="wrap footer-bottom">
-    <span>© <span data-year>2026</span> Lymond Services. All rights reserved.</span>
-    <span data-co="address">Dar es Salaam, Tanzania</span>
-  </div>
-
-  <div class="disclaimer">
-    <div class="wrap">
-      <p>Lymond Services is an independent importer and parts supplier. We source vehicles from
-         Japanese exporters and auction houses, including BE&nbsp;FORWARD, but we are not owned by,
-         affiliated with or an official agent of any of them. All product names and trademarks belong
-         to their respective owners. Prices are indicative, exclude import duty and taxes, and are
-         subject to confirmation at the time of order.</p>
-    </div>
-  </div>
-</footer>
-
-<script src="assets/js/data.js"></script>
-<script src="assets/js/store.js"></script>
-<script src="assets/js/main.js"></script>
-</body>
-</html>
+<?php require __DIR__ . '/includes/footer.php'; ?>

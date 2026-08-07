@@ -1,0 +1,14 @@
+# Lymond Services — Apache settings (XAMPP reads this automatically)
+
+# Send visitors to the PHP home page.
+DirectoryIndex index.php index.html
+
+# Never list a folder's contents.
+Options -Indexes
+
+# Keep the source of the includes and the SQL dump private.
+RedirectMatch 404 ^/.*/(includes|sql)/.*$
+
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+</IfModule>

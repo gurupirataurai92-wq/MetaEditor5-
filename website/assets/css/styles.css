@@ -788,3 +788,65 @@ details.faq p { margin: 12px 0 0; color: var(--text-soft); font-size: .93rem; }
   body { background: #fff; }
   .card { break-inside: avoid; }
 }
+
+/* ---------------------------------------------------- detail pages (PHP) -- */
+.page-hero--slim { padding: clamp(28px, 4vw, 44px) 0; }
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, .85fr);
+  gap: clamp(20px, 3vw, 34px);
+  align-items: start;
+}
+@media (max-width: 880px) { .detail-grid { grid-template-columns: 1fr; } }
+
+.gallery-main {
+  position: relative;
+  border-radius: var(--r);
+  overflow: hidden;
+  background: linear-gradient(160deg, #e9edf3, #d8dfe9);
+  aspect-ratio: 16 / 10;
+}
+.gallery-main img { width: 100%; height: 100%; object-fit: cover; }
+
+.gallery-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+.gallery-thumb {
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: #e6eaf0;
+  cursor: pointer;
+  line-height: 0;
+}
+.gallery-thumb img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+.gallery-thumb.is-active { border-color: var(--brand); }
+.gallery-thumb:hover { border-color: var(--accent); }
+
+.buy-panel { position: sticky; top: 96px; }
+.price--lg { font-size: 1.9rem; }
+.price--lg small { font-weight: 600; margin-top: 4px; }
+
+.contact-mini { list-style: none; margin: 18px 0 0; padding: 16px 0 0; border-top: 1px solid #edf0f4; display: grid; gap: 8px; font-size: .92rem; }
+
+.card-media { display: block; }
+.card-title a { color: inherit; text-decoration: none; }
+.card-title a:hover { color: var(--brand); }
+.card-count {
+  position: absolute; bottom: 10px; right: 10px;
+  background: rgba(13, 21, 33, .78); color: #fff;
+  font-size: .72rem; font-weight: 700; border-radius: 999px; padding: 4px 10px;
+}
+
+.pager {
+  display: flex; align-items: center; justify-content: center; gap: 16px;
+  margin-top: 32px; font-size: .92rem; color: var(--text-soft);
+}
+
+a.chip { text-decoration: none; }
+a.chip:hover { text-decoration: none; }
