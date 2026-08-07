@@ -1048,14 +1048,19 @@ void ReportAccountViability()
 
    double perUnit = minLot * tickValue / tickSize;   // account currency per 1.00 of price move
    double margin  = 0.0;
-   OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, minLot, SymbolInfoDouble(_Symbol, SYMBOL_ASK), margin);
+   // A failed margin query is not fatal here - this routine only reports - so
+   // fall back to "unknown" rather than abandoning the whole check.
+   bool haveMargin = OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, minLot,
+                                     SymbolInfoDouble(_Symbol, SYMBOL_ASK), margin);
+   if(!haveMargin) margin = 0.0;
 
    Print("Sizing check | min lot ", DoubleToString(minLot, 2),
          " costs ", DoubleToString(perUnit, 2), " ", AccountInfoString(ACCOUNT_CURRENCY),
-         " per 1.00 price move | margin ", DoubleToString(margin, 2),
+         " per 1.00 price move | margin ",
+         (haveMargin ? DoubleToString(margin, 2) : "unavailable"),
          " | balance ", DoubleToString(balance, 2));
 
-   if(margin > 0.0 && balance < margin * 2.0)
+   if(haveMargin && margin > 0.0 && balance < margin * 2.0)
       Print("WARNING: balance ", DoubleToString(balance, 2), " is below 2x the margin of one minimum lot (",
             DoubleToString(margin, 2), "). A single position can trigger a stop out.");
 
