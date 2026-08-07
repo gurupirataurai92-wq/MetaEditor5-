@@ -131,6 +131,13 @@ datetime    g_currentDay  = 0;
 double      g_dayStartEquity = 0.0;
 bool        g_dayBlocked  = false;
 
+// Sizing-refusal telemetry: what balance this symbol would actually need.
+long        g_sizeSkips      = 0;
+double      g_sizeNeedSum    = 0.0;
+double      g_sizeNeedMin    = 0.0;
+double      g_sizeNeedMax    = 0.0;
+bool        g_sizeExplained  = false;   // CalculateLot already logged the reason
+
 //======================================================================
 // SMALL UTILITIES
 //======================================================================
@@ -624,18 +631,25 @@ double CalculateLot(const double stopDistance, const ENUM_ORDER_TYPE type, const
       double riskPct = lot * lossPerLot / base * PCT;
       if(riskPct > InpMaxRiskPercentCap)
       {
-         static datetime lastWarn = 0;
-         if(g_rates[0].time != lastWarn)
+         // Record what this signal would have needed, then stay quiet. A run on
+         // an undersized account otherwise buries the journal in identical
+         // lines; the totals are printed once in OnDeinit.
+         if(!InpUseFixedLot && InpRiskPercent > 0.0)
          {
-            lastWarn = g_rates[0].time;
-            string need = "";
-            if(!InpUseFixedLot && InpRiskPercent > 0.0)
-               need = " Balance needed at " + DoubleToString(InpRiskPercent, 2) + "%: "
-                      + DoubleToString(lot * lossPerLot / (InpRiskPercent / PCT), 2) + ".";
+            double need = lot * lossPerLot / (InpRiskPercent / PCT);
+            g_sizeNeedSum += need;
+            if(g_sizeSkips == 0 || need < g_sizeNeedMin) g_sizeNeedMin = need;
+            if(need > g_sizeNeedMax)                     g_sizeNeedMax = need;
+         }
+         g_sizeSkips++;
+
+         if(g_sizeSkips == 1)
             Print("Entry skipped: ", DoubleToString(lot, 2), " lots risk ",
                   DoubleToString(riskPct, 1), "% of ", DoubleToString(base, 2),
-                  " (cap ", DoubleToString(InpMaxRiskPercentCap, 1), "%).", need);
-         }
+                  " (cap ", DoubleToString(InpMaxRiskPercentCap, 1),
+                  "%). Further sizing refusals are summarised at the end of the run.");
+
+         g_sizeExplained = true;
          return 0.0;
       }
    }
@@ -766,10 +780,12 @@ void TryEntry()
    if(stopDistance <= 0.0) return;
 
    ENUM_ORDER_TYPE type = (direction > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   g_sizeExplained = false;
    double lot = CalculateLot(stopDistance, type, entry);
    if(lot <= 0.0)
    {
-      Print("Entry skipped: lot size resolved to zero (balance or margin too small).");
+      if(!g_sizeExplained)
+         Print("Entry skipped: lot size resolved to zero (balance or margin too small).");
       return;
    }
 
@@ -1083,6 +1099,21 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    if(reason == REASON_REMOVE) PruneState();
+
+   if(g_sizeSkips > 0)
+   {
+      Print("=== Sizing summary ===");
+      Print(g_sizeSkips, " valid signals were skipped because the smallest tradable lot ",
+            "exceeded the ", DoubleToString(InpMaxRiskPercentCap, 1), "% risk cap.");
+      if(g_sizeNeedSum > 0.0)
+         Print("Balance required to take these at ", DoubleToString(InpRiskPercent, 2), "% risk: ",
+               "average ", DoubleToString(g_sizeNeedSum / (double)g_sizeSkips, 2),
+               ", tightest stop ", DoubleToString(g_sizeNeedMin, 2),
+               ", widest stop ", DoubleToString(g_sizeNeedMax, 2),
+               " ", AccountInfoString(ACCOUNT_CURRENCY), ".");
+      Print("Fund the account to at least the average figure, or raise InpRiskPercent ",
+            "and InpMaxRiskPercentCap if you accept the larger drawdown.");
+   }
 }
 
 void OnTick()
