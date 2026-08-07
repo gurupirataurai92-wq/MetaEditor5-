@@ -64,6 +64,7 @@ input double          InpRiskPercent      = 1.0;    // Risk per trade (%)
 input bool            InpUseFixedLot      = false;  // Use a fixed lot instead of % risk
 input double          InpFixedLot         = 0.01;   // Fixed lot size
 input double          InpMinAccountUSD    = 2.0;    // Do not trade below this balance
+input double          InpMaxRiskPercentCap = 3.0;   // Hard risk ceiling %: skip trade if min lot exceeds it (0 = off)
 input double          InpSLBufferFactor   = 0.15;   // SL buffer as a factor of average range
 
 input group "=== Trade management (price action exits) ==="
@@ -597,7 +598,6 @@ double NormalizeLot(double lot)
 
 double CalculateLot(const double stopDistance, const ENUM_ORDER_TYPE type, const double price)
 {
-   if(InpUseFixedLot) return NormalizeLot(InpFixedLot);
    if(stopDistance <= 0.0) return 0.0;
 
    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
@@ -607,11 +607,38 @@ double CalculateLot(const double stopDistance, const ENUM_ORDER_TYPE type, const
    double base = (InpRiskBase == RISK_ON_EQUITY)
                  ? AccountInfoDouble(ACCOUNT_EQUITY)
                  : AccountInfoDouble(ACCOUNT_BALANCE);
-   double riskMoney   = base * InpRiskPercent / PCT;
    double lossPerLot  = (stopDistance / tickSize) * tickValue;
    if(lossPerLot <= 0.0) return 0.0;
 
-   double lot = NormalizeLot(riskMoney / lossPerLot);
+   double lot;
+   if(InpUseFixedLot)
+      lot = NormalizeLot(InpFixedLot);
+   else
+      lot = NormalizeLot(base * InpRiskPercent / PCT / lossPerLot);
+
+   // NormalizeLot raises anything below the broker minimum up to that minimum,
+   // so on an undersized account a single stop can cost many times
+   // InpRiskPercent. Refuse the trade rather than take it at that size.
+   if(InpMaxRiskPercentCap > 0.0 && base > 0.0)
+   {
+      double riskPct = lot * lossPerLot / base * PCT;
+      if(riskPct > InpMaxRiskPercentCap)
+      {
+         static datetime lastWarn = 0;
+         if(g_rates[0].time != lastWarn)
+         {
+            lastWarn = g_rates[0].time;
+            string need = "";
+            if(!InpUseFixedLot && InpRiskPercent > 0.0)
+               need = " Balance needed at " + DoubleToString(InpRiskPercent, 2) + "%: "
+                      + DoubleToString(lot * lossPerLot / (InpRiskPercent / PCT), 2) + ".";
+            Print("Entry skipped: ", DoubleToString(lot, 2), " lots risk ",
+                  DoubleToString(riskPct, 1), "% of ", DoubleToString(base, 2),
+                  " (cap ", DoubleToString(InpMaxRiskPercentCap, 1), "%).", need);
+         }
+         return 0.0;
+      }
+   }
 
    // Never let the sized position exceed the free margin available.
    double margin = 0.0;
@@ -965,6 +992,45 @@ void ManagePosition(const bool barClosed)
 }
 
 //======================================================================
+// ACCOUNT VIABILITY REPORT
+//======================================================================
+// The broker minimum lot sets a floor on how little can be risked. On Gold
+// that floor is large relative to a small account, so state the real numbers
+// at startup instead of letting the first stop reveal them.
+void ReportAccountViability()
+{
+   double minLot    = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(minLot <= 0.0 || tickValue <= 0.0 || tickSize <= 0.0) return;
+
+   double perUnit = minLot * tickValue / tickSize;   // account currency per 1.00 of price move
+   double margin  = 0.0;
+   OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, minLot, SymbolInfoDouble(_Symbol, SYMBOL_ASK), margin);
+
+   Print("Sizing check | min lot ", DoubleToString(minLot, 2),
+         " costs ", DoubleToString(perUnit, 2), " ", AccountInfoString(ACCOUNT_CURRENCY),
+         " per 1.00 price move | margin ", DoubleToString(margin, 2),
+         " | balance ", DoubleToString(balance, 2));
+
+   if(margin > 0.0 && balance < margin * 2.0)
+      Print("WARNING: balance ", DoubleToString(balance, 2), " is below 2x the margin of one minimum lot (",
+            DoubleToString(margin, 2), "). A single position can trigger a stop out.");
+
+   if(!InpUseFixedLot && InpRiskPercent > 0.0)
+   {
+      // A typical Gold stop on this timeframe is a few price units wide; report
+      // the balance that would make a 5.00 stop cost exactly InpRiskPercent.
+      double needed = perUnit * 5.0 / (InpRiskPercent / PCT);
+      Print("At ", DoubleToString(InpRiskPercent, 2), "% risk, a 5.00 wide stop needs a balance of ",
+            DoubleToString(needed, 2), " ", AccountInfoString(ACCOUNT_CURRENCY),
+            ". Below that the minimum lot over-risks and trades are skipped (cap ",
+            DoubleToString(InpMaxRiskPercentCap, 1), "%).");
+   }
+}
+
+//======================================================================
 // LIFECYCLE
 //======================================================================
 int OnInit()
@@ -999,6 +1065,8 @@ int OnInit()
    StringToUpper(symbol);
    if(StringFind(symbol, "XAU") < 0 && StringFind(symbol, "GOLD") < 0)
       Print("Warning: this EA is tuned for Gold; current symbol is ", _Symbol, ".");
+
+   ReportAccountViability();
 
    ResetDayIfNeeded();
    PruneState();
