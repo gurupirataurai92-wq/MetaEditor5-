@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.23, SMC / ICT scalper.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.24, price action engine, H1.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
@@ -762,3 +762,40 @@ Also retuned for speed: trail starts at **0.7R** (was 1.0), the scalp time-stop 
 ```
 SPEED: average time in a trade 7.4 minutes (1.5 M5 bars)
 ```
+
+### v5.24 — full price action engine, H1 execution
+
+**The timeframe is now an input, defaulting to `PERIOD_H1`.** Every engine in this EA is
+expressed in *bars* and in *average-range units*, so the logic travels between timeframes
+unchanged. What does not travel is the cost of trading — and that is the whole argument:
+
+| | avg range | min stop | spread 0.30 as % of risk |
+|---|---|---|---|
+| XAUUSD **M5** | ~1.20 | 1.20 | **25%** |
+| XAUUSD **H1** | ~8.00 | 2.00 | **15%**, and structural stops make it far less |
+
+v5.17 established that the spread being a quarter of the risk was destroying the edge before
+any entry logic mattered. Moving to H1 is the single largest improvement available to that
+ratio, because the structural stops grow while the spread does not.
+
+Consequential changes: the **HTF ladder moves up** — H4 and D1 (W1 optional) replace M15/H1/H4,
+since bias frames must sit above the execution frame. Gap and order-block memory shortens to
+120/180 bars (still ~1–2 weeks on H1), the time stop becomes 18 bars, and targets widen to 2R.
+`PERIOD_CURRENT` makes the EA follow whatever chart it is attached to.
+
+**The price-action vocabulary is now complete.** Every read comes from raw OHLC — no indicator
+handle and no `CopyBuffer` call exists in the file:
+
+| Candle reads | Structure reads |
+|---|---|
+| body share, upper/lower wick, close position | fractal swings, BOS, CHoCH, MSS |
+| **marubozu**, **doji** | displacement legs |
+| engulfing, **harami** | imbalance (fair value gaps), inversions |
+| pin bar, **tweezer** | order blocks, breaker blocks |
+| **morning / evening star** | liquidity pools and sweeps |
+| inside bar, outside bar, **directional run** | dealing range, premium/discount, OTE |
+
+The bold entries are new. They feed the same three places as the rest: they grade the setup,
+they enter the confluence score, and they name it in the journal. A **doji discounts its own
+score to 55%** — indecision is not a signal — and a harami against the trade discounts it to
+80%. Morning/evening stars and tweezers now count as valid confirmation in the §3g model.

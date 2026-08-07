@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                                   Medula_SMC.mq5 |
-//|  Medula v5.23 — Smart Money Concepts / ICT.  M5 execution.       |
+//|  Medula v5.24 — Price action engine.  H1 execution by default.   |
 //|  Single file, zero includes, ZERO INDICATORS.                    |
 //|                                                                  |
 //|  Every decision comes from raw OHLC. There is no iRSI / iMACD /  |
@@ -147,7 +147,7 @@
 //|  accordingly, but a scalper is supposed to see them.             |
 //+------------------------------------------------------------------+
 #property copyright "Medula Project"
-#property version   "5.23"
+#property version   "5.24"
 
 //============================== INPUTS ==============================
 
@@ -162,8 +162,18 @@ input bool   InpDiagnostics     = true;    // Log why an entry was skipped
 input int    InpDiagThrottleSec = 900;     // Seconds between repeats of a reason
 input bool   InpSelfTest        = true;    // Readiness report on attach
 
+//--- EXECUTION TIMEFRAME.
+//    Everything downstream is expressed in BARS and in average-range units, so
+//    the engines travel between timeframes unchanged. What does not travel is
+//    the cost of trading: on M5 gold the average range is ~1.0-1.5 against a
+//    ~0.30 spread, so the spread is a quarter of a minimum stop. On H1 the
+//    average range is five to ten times larger and the same spread becomes a
+//    rounding error. That single ratio is the strongest argument for H1.
+input group "Execution Timeframe"
+input ENUM_TIMEFRAMES InpTimeframe = PERIOD_H1;  // Timeframe the EA trades
+
 input group "Market Structure (§1)"
-input int    InpBars            = 500;     // Bars of M5 history analysed
+input int    InpBars            = 500;     // Bars of history analysed
 input int    InpSwingK          = 2;       // Fractal wing size
 input double InpBosBufferPct    = 0.05;    // Break must clear by this share of avg range
 input int    InpStructureLookback = 60;    // Bars searched for the structure shift
@@ -171,14 +181,14 @@ input int    InpStructureLookback = 60;    // Bars searched for the structure sh
 input group "Order Blocks (§2)"
 input bool   InpUseOrderBlocks  = true;    // Trade order-block returns
 input int    InpMaxOrderBlocks  = 20;      // Order blocks tracked per side
-input int    InpObMaxAgeBars    = 300;     // Forget order blocks older than this
+input int    InpObMaxAgeBars    = 180;     // Forget order blocks older than this
 input double InpObMitigatedPct  = 50.0;    // Mitigated once price fills this % of it
 input bool   InpUseBreakers     = true;    // Trade breaker blocks (failed OB that flips)
 
 input group "Fair Value Gaps (§3)"
 input bool   InpUseFVG          = true;    // Trade FVG returns
 input int    InpMaxFVGs         = 40;      // FVGs tracked
-input int    InpFvgMaxAgeBars   = 200;     // Forget FVGs older than this
+input int    InpFvgMaxAgeBars   = 120;     // Forget FVGs older than this
 input double InpFvgMinPct       = 0.02;    // Gap must be >= this share of avg range
 input bool   InpUseVolumeImb    = true;    // Also track 2-candle body gaps (volume imbalance)
 input double InpFvgFillPct      = 50.0;    // Reported as consumed past this % (CE)
@@ -323,10 +333,12 @@ input int    InpNyEnd           = 15;      // New York open killzone end hour
 input int    InpLnCloseStart    = 15;      // London close killzone start hour
 input int    InpLnCloseEnd      = 17;      // London close killzone end hour
 
+//--- The bias frames must sit ABOVE the execution frame. With H1 trading, H4,
+//    D1 and W1 are the context; M15 is noise below it and was dropped.
 input group "Higher Timeframe Bias (§7)"
-input bool   InpHtfM15          = true;    // Include M15 structure
-input bool   InpHtfH1           = true;    // Include H1 structure
 input bool   InpHtfH4           = true;    // Include H4 structure
+input bool   InpHtfD1           = true;    // Include D1 structure
+input bool   InpHtfW1           = false;   // Include W1 structure
 
 input group "Displacement (§8)"
 input double InpDisplacementMult = 1.5;    // Leg range >= this x average range
@@ -356,8 +368,8 @@ input group "Scalp Mode"
 input bool   InpScalpMode       = true;    // Scalper profile: POI stops, quick targets
 input bool   InpStopBeyondPOI   = true;    // Stop just past the FVG/OB, not past the sweep
 input double InpPoiStopBuffer   = 0.30;    // Stop beyond the POI by this x average range
-input double InpScalpTargetR    = 1.6;     // Scalp target in R
-input int    InpMaxHoldBars     = 12;      // Close a scalp after this many M5 bars
+input double InpScalpTargetR    = 2.0;     // Target in R
+input int    InpMaxHoldBars     = 18;      // Close the trade after this many bars
 
 //--- TAKE EVERY POI.  The single switch that states the mandate: every live
 //    fair value gap, breakaway gap and order block is executed, small or
@@ -403,7 +415,7 @@ input bool   InpAutoFitStop     = true;    // Tighten stop so min lot fits the c
 input group "Basket Manager (§9)"
 input bool   InpUseBasket       = true;    // Manage positions as one basket
 input int    InpMaxBasketTrades = 6;       // Max positions in a basket
-input double InpBasketTargetR   = 1.6;     // Close the basket at this R
+input double InpBasketTargetR   = 2.0;     // Close the basket at this R
 input double InpBasketStopR     = 1.5;     // Close the basket at this loss in R
 input double InpMaxBasketRiskPct= 4.0;     // Max combined basket risk (% equity)
 input bool   InpBasketBreakEven = true;    // Move basket to break-even in profit
@@ -513,6 +525,11 @@ struct SCandle
    bool              pinBull,pinBear;
    bool              engulfBull,engulfBear;
    bool              insideBar,outsideBar;
+   bool              marubozu,doji;
+   bool              haramiBull,haramiBear;
+   bool              starBull,starBear;      // three-bar reversal
+   bool              tweezerBull,tweezerBear;
+   int               run;                    // consecutive closes the same way
   };
 
 //--- a resting liquidity pool (§4)
@@ -595,6 +612,8 @@ double   g_h[],g_l[],g_o[],g_c[];
 datetime g_t[];
 long     g_v[];
 int      g_bars=0;
+ENUM_TIMEFRAMES g_tf=PERIOD_H1;      // resolved execution timeframe
+string   TfName(void){ return EnumToString(g_tf); }
 
 SOB      g_obs[];
 SFVG     g_fvgs[];
@@ -694,13 +713,13 @@ bool LoadBars(void)
    ArraySetAsSeries(g_h,true); ArraySetAsSeries(g_l,true);
    ArraySetAsSeries(g_o,true); ArraySetAsSeries(g_c,true);
    ArraySetAsSeries(g_t,true); ArraySetAsSeries(g_v,true);
-   int got=CopyHigh(_Symbol,PERIOD_M5,0,InpBars,g_h);
-   if(got<120){ Block(StringFormat("only %d M5 bars loaded, need 120+",got)); return false; }
-   if(CopyLow(_Symbol,PERIOD_M5,0,got,g_l)<got)   return false;
-   if(CopyOpen(_Symbol,PERIOD_M5,0,got,g_o)<got)  return false;
-   if(CopyClose(_Symbol,PERIOD_M5,0,got,g_c)<got) return false;
-   if(CopyTime(_Symbol,PERIOD_M5,0,got,g_t)<got)  return false;
-   if(CopyTickVolume(_Symbol,PERIOD_M5,0,got,g_v)<got) ArrayInitialize(g_v,1);
+   int got=CopyHigh(_Symbol,g_tf,0,InpBars,g_h);
+   if(got<120){ Block(StringFormat("only %d %s bars loaded, need 120+",got,TfName())); return false; }
+   if(CopyLow(_Symbol,g_tf,0,got,g_l)<got)   return false;
+   if(CopyOpen(_Symbol,g_tf,0,got,g_o)<got)  return false;
+   if(CopyClose(_Symbol,g_tf,0,got,g_c)<got) return false;
+   if(CopyTime(_Symbol,g_tf,0,got,g_t)<got)  return false;
+   if(CopyTickVolume(_Symbol,g_tf,0,got,g_v)<got) ArrayInitialize(g_v,1);
    g_bars=got;
    return true;
   }
@@ -1095,6 +1114,38 @@ void BuildCandleAnatomyAt(const int idx,SCandle &c)
    c.engulfBear=(c.dir< 0 && prevBull && botB<=botB2 && topB>=topB2);
    c.insideBar =(h< h2 && l> l2);
    c.outsideBar=(h> h2 && l< l2);
+
+   // conviction and indecision, at the two extremes of body share
+   c.marubozu=(c.bodyPct>=0.80);
+   c.doji    =(c.bodyPct<=0.12);
+
+   // harami: this body sits entirely inside the previous body — the move paused
+   c.haramiBull=(c.dir> 0 && prevBear && topB<=topB2 && botB>=botB2);
+   c.haramiBear=(c.dir< 0 && prevBull && topB<=topB2 && botB>=botB2);
+
+   // tweezers: two candles rejecting from the same level
+   double tol=0.10*g_view.avgRange;
+   c.tweezerBull=(MathAbs(l-l2)<=tol && c.dir>0 && prevBear);
+   c.tweezerBear=(MathAbs(h-h2)<=tol && c.dir<0 && prevBull);
+
+   // three-bar reversal: drive, pause, drive back
+   if(g_bars>idx+3)
+     {
+      double o3=g_o[idx+2],c3=g_c[idx+2];
+      bool small2=(MathAbs(c2-o2)<=0.45*MathAbs(c3-o3));
+      c.starBull=(c3<o3 && small2 && c.dir>0 && cl>(o3+c3)*0.5);
+      c.starBear=(c3>o3 && small2 && c.dir<0 && cl<(o3+c3)*0.5);
+     }
+
+   // how long price has been closing the same way
+   int run=0;
+   for(int b2=idx;b2<idx+8 && b2<g_bars;b2++)
+     {
+      int d=(g_c[b2]>g_o[b2] ? 1 : (g_c[b2]<g_o[b2] ? -1 : 0));
+      if(d==0 || (run!=0 && d!=(run>0?1:-1))) break;
+      run+=(d>0?1:-1);
+     }
+   c.run=run;
   }
 
 void BuildCandleAnatomy(void)
@@ -1112,8 +1163,15 @@ double AnatomyScoreOf(const SCandle &k,const int dir)
    s+=0.22*(dir>0 ? MClamp(k.closePos,0.0,1.0) : MClamp(1.0-k.closePos,0.0,1.0));
    s+=0.20*((dir>0 && k.engulfBull)||(dir<0 && k.engulfBear) ? 1.0 : 0.0);
    s+=0.14*((dir>0 && k.pinBull)   ||(dir<0 && k.pinBear)    ? 1.0 : 0.0);
-   s+=0.10*MClamp(k.rangeX,0.0,1.0);
-   s+=0.06*(k.outsideBar ? 1.0 : 0.0);
+   s+=0.08*MClamp(k.rangeX,0.0,1.0);
+   s+=0.05*(k.outsideBar ? 1.0 : 0.0);
+   s+=0.05*(k.marubozu   ? 1.0 : 0.0);
+   s+=0.08*((dir>0 && k.starBull)   ||(dir<0 && k.starBear)    ? 1.0 : 0.0);
+   s+=0.05*((dir>0 && k.tweezerBull)||(dir<0 && k.tweezerBear) ? 1.0 : 0.0);
+   s+=0.05*MClamp(MathAbs((double)k.run)/4.0,0.0,1.0)*(MSign((double)k.run)==dir?1.0:0.0);
+
+   if(k.doji) s*=0.55;                                 // indecision is not a signal
+   if((dir>0 && k.haramiBear)||(dir<0 && k.haramiBull)) s*=0.80;
    if(k.dir!=0 && k.dir!=dir) s*=0.70;                 // the candle points the other way
    return MClamp(s,0.0,1.0);
   }
@@ -1135,8 +1193,14 @@ string AnatomyName(const int dir)
    if(dir<0 && g_candle.pinBear)    t+="bearish pin ";
    if(dir>0 && g_candle.strongCloseUp) t+="strong close ";
    if(dir<0 && g_candle.strongCloseDn) t+="strong close ";
+   if(dir>0 && g_candle.starBull)    t+="morning star ";
+   if(dir<0 && g_candle.starBear)    t+="evening star ";
+   if(dir>0 && g_candle.tweezerBull) t+="tweezer bottom ";
+   if(dir<0 && g_candle.tweezerBear) t+="tweezer top ";
+   if(g_candle.marubozu)   t+="marubozu ";
    if(g_candle.insideBar)  t+="inside-bar break ";
    if(g_candle.outsideBar) t+="outside bar ";
+   if(g_candle.doji)       t+="doji ";
    if(t=="") t="plain candle ";
    return t;
   }
@@ -1164,6 +1228,8 @@ bool ConfirmFrom(const SCandle &k,const int dir,const int idx,string &why)
      {
       if(k.engulfBull)                      { why="bullish engulfing";      return true; }
       if(k.pinBull)                         { why="bullish rejection";      return true; }
+      if(k.starBull)                        { why="morning star";          return true; }
+      if(k.tweezerBull)                     { why="tweezer bottom";        return true; }
       if(k.strongCloseUp && k.dir>0)        { why="strong bullish close";   return true; }
       if(g_bars>idx+2 && g_c[idx]>g_h[idx+1]){ why="minor structure break";  return true; }
      }
@@ -1171,6 +1237,8 @@ bool ConfirmFrom(const SCandle &k,const int dir,const int idx,string &why)
      {
       if(k.engulfBear)                      { why="bearish engulfing";      return true; }
       if(k.pinBear)                         { why="bearish rejection";      return true; }
+      if(k.starBear)                        { why="evening star";          return true; }
+      if(k.tweezerBear)                     { why="tweezer top";           return true; }
       if(k.strongCloseDn && k.dir<0)        { why="strong bearish close";   return true; }
       if(g_bars>idx+2 && g_c[idx]<g_l[idx+1]){ why="minor structure break";  return true; }
      }
@@ -1447,9 +1515,9 @@ double HtfStructure(const ENUM_TIMEFRAMES tf)
 void BuildHtfBias(void)
   {
    double sum=0.0,w=0.0;
-   if(InpHtfM15){ sum+=0.25*HtfStructure(PERIOD_M15); w+=0.25; }
-   if(InpHtfH1) { sum+=0.35*HtfStructure(PERIOD_H1);  w+=0.35; }
-   if(InpHtfH4) { sum+=0.40*HtfStructure(PERIOD_H4);  w+=0.40; }
+   if(InpHtfH4){ sum+=0.40*HtfStructure(PERIOD_H4); w+=0.40; }
+   if(InpHtfD1){ sum+=0.40*HtfStructure(PERIOD_D1); w+=0.40; }
+   if(InpHtfW1){ sum+=0.20*HtfStructure(PERIOD_W1); w+=0.20; }
    g_view.htfBias=(w>0.0 ? MClamp(sum/w,-1.0,1.0) : 0.0);
   }
 
@@ -2274,9 +2342,9 @@ void ManageBasket(const SBasket &b)
    // a scalp that has not resolved is dead money — release the risk
    if(InpScalpMode && b.firstTime>0)
      {
-      int held=(int)((TimeCurrent()-b.firstTime)/MathMax(PeriodSeconds(PERIOD_M5),1));
+      int held=(int)((TimeCurrent()-b.firstTime)/MathMax(PeriodSeconds(g_tf),1));
       if(held>InpMaxHoldBars && R<0.3)
-        { CloseBasket(StringFormat("scalp timed out after %d M5 bars at %.2fR",held,R)); return; }
+        { CloseBasket(StringFormat("trade timed out after %d %s bars at %.2fR",held,TfName(),R)); return; }
      }
    if(R<=-InpBasketStopR) { CloseBasket(StringFormat("basket stop %.2fR",R));  return; }
 
@@ -2554,7 +2622,7 @@ void DrawZones(void)
    if(!InpDrawObjects) return;
    ClearObjects();
    datetime now=(g_bars>0 ? g_t[0] : TimeCurrent());
-   datetime fwd=now+PeriodSeconds(PERIOD_M5)*20;
+   datetime fwd=now+PeriodSeconds(g_tf)*20;
    int drawn=0;
    for(int z=0;z<ArraySize(g_obs) && drawn<10;z++)
      {
@@ -2641,11 +2709,17 @@ int AuditB(const string name,const bool have,const bool want)
 void ParamAudit(void)
   {
    int d=0;
+   if(InpTimeframe!=PERIOD_H1)
+      { LogEvent(StringFormat("  *** %-20s = %-10s  build ships PERIOD_H1",
+                              "InpTimeframe",EnumToString(InpTimeframe))); d++; }
+   d+=AuditI("InpMaxHoldBars"    ,InpMaxHoldBars    ,18);
+   d+=AuditD("InpScalpTargetR"   ,InpScalpTargetR   ,2.0);
+   d+=AuditB("InpHtfH4"          ,InpHtfH4          ,true);
+   d+=AuditB("InpHtfD1"          ,InpHtfD1          ,true);
    d+=AuditB("InpFastConfirm"    ,InpFastConfirm    ,true);
    d+=AuditB("InpQuickProfit"    ,InpQuickProfit    ,true);
    d+=AuditD("InpQuickPartialR"  ,InpQuickPartialR  ,0.50);
    d+=AuditD("InpTrailStartR"    ,InpTrailStartR    ,0.70);
-   d+=AuditI("InpMaxHoldBars"    ,InpMaxHoldBars    ,12);
    d+=AuditB("InpConfirmModel"   ,InpConfirmModel   ,true);
    d+=AuditB("InpRequireRetrace" ,InpRequireRetrace ,true);
    d+=AuditB("InpRequireConfirm" ,InpRequireConfirm ,true);
@@ -2706,12 +2780,21 @@ void ParamAudit(void)
 void SelfTest(void)
   {
    if(!InpSelfTest) return;
-   LogEvent("────────── SMC / ICT SELF-TEST ──────────");
-   LogEvent("build: Medula_SMC v5.23  —  if the panel does not read v5.23, MT5 is "
+   LogEvent("────────── PRICE ACTION SELF-TEST ──────────");
+   LogEvent(StringFormat("PRICE ACTION ENGINE — every read comes from raw OHLC on %s. No "
+                         "indicator handle and no CopyBuffer call exists in this file.",
+                         TfName()));
+   LogEvent("candle reads: body share, upper/lower wick, close position, marubozu, doji, "
+            "engulfing, harami, pin bar, tweezer, morning/evening star, inside bar, "
+            "outside bar, directional run.");
+   LogEvent("structure reads: fractal swings, BOS, CHoCH, MSS, displacement, imbalance "
+            "(fair value gaps), order blocks, breakers, liquidity pools and sweeps, "
+            "dealing range and OTE.");
+   LogEvent("build: Medula_SMC v5.24  —  if the panel does not read v5.24, MT5 is "
             "running an older .ex5 and the source was never recompiled.");
    ParamAudit();
-   LogEvent(StringFormat("symbol %s  execution timeframe M5  bars loaded %d  (NO INDICATORS)",
-                         _Symbol,g_bars));
+   LogEvent(StringFormat("symbol %s  execution timeframe %s  bars loaded %d  (NO INDICATORS)",
+                         _Symbol,TfName(),g_bars));
    LogEvent(StringFormat("average range %.5f  spread %.0f pts",g_view.avgRange,g_view.spreadPts));
    LogEvent(StringFormat("structure dir %d | order blocks %d | FVGs %d (%d breakaway, %d inverted) "
                          "| liquidity pools %d",
@@ -2736,7 +2819,7 @@ void SelfTest(void)
       LogEvent("§3b fresh gaps, §3c displacement candles, §3d next candle and §3e the "
                "two-candle trigger are all OFF while this model is on — they enter the "
                "moment the imbalance appears, which this model forbids.");
-      LogEvent("note: on M5 forex and metals, TRUE breakaway gaps are rare (weekly opens, "
+      LogEvent("note: on intraday forex and metals, TRUE breakaway gaps are rare (weekly opens, "
                "news). Fair value gaps are the applicable pattern and carry the model.");
      }
    if(InpTakeEveryPOI)
@@ -2830,7 +2913,7 @@ void Panel(const SBasket &b)
    else if(g_view.bearBos) mss="bearish BOS";
 
    Comment(StringFormat(
-      "MEDULA v5.23  SMC / ICT SCALPER  |  %s  M5\n"
+      "MEDULA v5.24  PRICE ACTION  |  %s  %s\n"
       "no indicators — filters SIZE the trade, they never block it\n"
       "──────────────────────────────────────────\n"
       "HTF bias      %+5.2f  (scored, not required)\n"
@@ -2852,7 +2935,7 @@ void Panel(const SBasket &b)
       "        float %.2f   R %.2f   risk unit %.2f\n"
       "entries %d   spread %.0f pts\n"
       "status  %s",
-      _Symbol,
+      _Symbol,TfName(),
       g_view.htfBias,
       g_view.structDir,mss,
       sweep,
@@ -2886,11 +2969,15 @@ int OnInit(void)
    g_lifetimePeak=0.0; g_lastTickTime=0; g_secBlocked=0.0; g_secTotal=0.0;
    g_basketRisk=0.0; g_firstLot=0.0;
    g_block="warming up";
+
+   // PERIOD_CURRENT means "whatever chart it is on"; anything else overrides
+   g_tf=(InpTimeframe==PERIOD_CURRENT ? (ENUM_TIMEFRAMES)_Period : InpTimeframe);
    RiskUpdate();
 
-   if(_Period!=PERIOD_M5)
-      LogEvent(StringFormat("NOTE: attached to %s but this EA reads M5 for execution "
-                            "regardless of the chart timeframe",EnumToString(_Period)));
+   if(_Period!=g_tf)
+      LogEvent(StringFormat("NOTE: attached to a %s chart but this EA reads %s for "
+                            "execution regardless of the chart timeframe",
+                            EnumToString((ENUM_TIMEFRAMES)_Period),TfName()));
 
    if(Analyse()) SelfTest();
    LogEvent("v5.00 SMC/ICT scalper ready — one hard condition (price in a live POI), "
@@ -3023,8 +3110,9 @@ void Report(void)
      }
 
    if(holdN>0)
-      LogEvent(StringFormat("SPEED: average time in a trade %.1f minutes (%.1f M5 bars)",
-                            holdSum/holdN/60.0,holdSum/holdN/300.0));
+      LogEvent(StringFormat("SPEED: average time in a trade %.1f minutes (%.1f %s bars)",
+                            holdSum/holdN/60.0,
+                            holdSum/holdN/MathMax(PeriodSeconds(g_tf),1),TfName()));
    LogEvent("───────── by entry model ─────────");
    for(int z=0;z<n;z++)
      {

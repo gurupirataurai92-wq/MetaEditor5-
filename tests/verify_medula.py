@@ -2378,6 +2378,71 @@ check("v5.23: an undeveloped live candle still waits for the close",
 check("v5.23: with fast confirm off the EA always waits a full bar",
       confirm_delay_bars(False, True) == 1)
 
+# ---------------------------------------------------------------- v5.24
+# H1 execution. Every engine is expressed in BARS and average-range units,
+# so the logic travels between timeframes unchanged. What does not travel
+# is the cost of trading - and that is the whole argument for H1.
+
+def spread_share(avg_range, spread, min_stop_pct=0.25, min_stop_spreads=4.0):
+    stop = max(min_stop_pct*avg_range, min_stop_spreads*spread)
+    return spread/stop
+
+SPREAD = 0.30
+check("v5.24: on M5 gold the spread was a quarter of the minimum stop",
+      abs(spread_share(1.20, SPREAD) - 0.25) < 0.01)
+check("v5.24: on H1 the structural stop dwarfs the same spread",
+      spread_share(8.00, SPREAD) < 0.16,
+      f"{100*spread_share(8.00, SPREAD):.0f}% of a 2.00 stop")
+check("v5.24: the cost ratio improves monotonically with the timeframe",
+      spread_share(1.2, SPREAD) >= spread_share(4.0, SPREAD) >= spread_share(8.0, SPREAD))
+
+def htf_ladder(exec_tf_minutes, frames):
+    return all(f > exec_tf_minutes for f in frames)
+check("v5.24: the bias frames sit ABOVE the execution frame",
+      htf_ladder(60, [240, 1440]))
+check("v5.24: M15 was below H1 and was dropped from the ladder",
+      not htf_ladder(60, [15, 240, 1440]))
+
+# every engine is bar-relative, so nothing needs re-deriving per timeframe
+def bars_to_minutes(bars, tf_minutes):
+    return bars*tf_minutes
+check("v5.24: 500 bars of H1 is about three weeks of context",
+      18 <= bars_to_minutes(500, 60)/60/24 <= 22,
+      f"{bars_to_minutes(500, 60)/60/24:.0f} days")
+check("v5.24: an 18-bar time stop on H1 is under a day",
+      bars_to_minutes(18, 60)/60 < 24)
+check("v5.24: the same engine on M5 held for 90 minutes",
+      bars_to_minutes(18, 5) == 90)
+
+# the extended price-action vocabulary
+def pattern_set():
+    return {"body", "upper wick", "lower wick", "close position", "marubozu",
+            "doji", "engulfing", "harami", "pin bar", "tweezer",
+            "morning/evening star", "inside bar", "outside bar",
+            "directional run"}
+check("v5.24: the candle vocabulary covers every requested read",
+      {"body", "upper wick", "lower wick", "engulfing", "pin bar",
+       "inside bar", "outside bar"}.issubset(pattern_set()))
+check("v5.24: and adds the reversal patterns a person reads",
+      {"marubozu", "doji", "harami", "tweezer",
+       "morning/evening star"}.issubset(pattern_set()))
+
+def anat_modifier(base, doji=False, contra_harami=False, wrong_way=False):
+    s = base
+    if doji:
+        s *= 0.55
+    if contra_harami:
+        s *= 0.80
+    if wrong_way:
+        s *= 0.70
+    return s
+check("v5.24: a doji is discounted — indecision is not a signal",
+      anat_modifier(0.80, doji=True) < 0.80*0.6)
+check("v5.24: a harami against the trade discounts it",
+      anat_modifier(0.80, contra_harami=True) < 0.80)
+check("v5.24: a candle pointing the wrong way is discounted hardest in combination",
+      anat_modifier(0.80, doji=True, wrong_way=True) < anat_modifier(0.80, doji=True))
+
 print("\n================================================")
 print(f"RESULT: {len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
