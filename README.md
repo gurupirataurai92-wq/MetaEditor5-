@@ -7,7 +7,7 @@ Creating a meta editor code for a risk taking bot that is able to executes trade
 - **[MQL5/Experts/Medula/](MQL5/Experts/Medula/)** — modular MQL5 implementation (`Medula.mq5` + `.mqh` engine files) with install and testing instructions.
 - **[MQL5/Experts/Medula_Single.mq5](MQL5/Experts/Medula_Single.mq5)** — **v2.70, the maintained build.** Single file, zero dependencies (no includes at all): copy into `MQL5/Experts/` and compile.
 - **[MQL5/Experts/Medula_PriceAction.mq5](MQL5/Experts/Medula_PriceAction.mq5)** — **v3.00, pure price action.** No indicators at all: supply/demand zones, swing structure and candle anatomy only. Single file, zero includes.
-- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.24, price action engine, H1.** M5 execution, zero indicators, POI-anchored stops, full basket manager, and confluence that **sizes** the trade instead of vetoing it. This is the current build.
+- **[MQL5/Experts/Medula_SMC.mq5](MQL5/Experts/Medula_SMC.mq5)** — **v5.24, price action engine.** H1 execution (timeframe is an input), zero indicators, structure-anchored stops, full basket manager, and a confirmed-retracement FVG model. This is the current build.
 - **[tests/verify_medula.py](tests/verify_medula.py)** — 290-check regression suite covering every engine formula, including an anti-stationary guarantee. Run with `python3 tests/verify_medula.py`.
 
 ### Why v2 exists
