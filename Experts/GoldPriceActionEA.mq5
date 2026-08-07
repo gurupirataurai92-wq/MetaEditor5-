@@ -26,7 +26,7 @@ enum ENUM_RISK_BASE { RISK_ON_BALANCE, RISK_ON_EQUITY };
 // INPUT PARAMETERS
 //======================================================================
 input group "=== General ==="
-input ENUM_TIMEFRAMES InpTimeframe        = PERIOD_M15;  // Working timeframe
+input ENUM_TIMEFRAMES InpTimeframe        = PERIOD_H1;   // Working timeframe
 input long            InpMagic            = 20260807;    // Magic number
 input int             InpSlippagePoints   = 30;          // Max deviation (points)
 input string          InpComment          = "GoldPA";    // Order comment
@@ -63,9 +63,10 @@ input ENUM_RISK_BASE  InpRiskBase         = RISK_ON_BALANCE; // Risk reference
 input double          InpRiskPercent      = 1.0;    // Risk per trade (%)
 input bool            InpUseFixedLot      = false;  // Use a fixed lot instead of % risk
 input double          InpFixedLot         = 0.01;   // Fixed lot size
-input double          InpMinAccountUSD    = 2.0;    // Do not trade below this balance
-input double          InpMaxRiskPercentCap = 3.0;   // Hard risk ceiling %: skip trade if min lot exceeds it (0 = off)
+input double          InpMinAccountUSD    = 5.0;    // Do not trade below this balance
+input double          InpMaxRiskPercentCap = 0.0;   // Hard risk ceiling %: skip trade if min lot exceeds it (0 = off)
 input double          InpSLBufferFactor   = 0.15;   // SL buffer as a factor of average range
+input double          InpMinStopRangeFactor = 0.35; // Stop must be >= factor x average range (blocks noise-width stops)
 
 input group "=== Trade management (price action exits) ==="
 input double          InpRewardR          = 2.0;    // Take profit in R (0 = no fixed TP)
@@ -84,8 +85,8 @@ input group "=== Session & exposure limits ==="
 input bool            InpUseTimeFilter    = false;  // Restrict trading hours (server time)
 input int             InpStartHour        = 7;      // Session start hour
 input int             InpEndHour          = 20;     // Session end hour
-input int             InpMaxTradesPerDay  = 5;      // Max entries per day (0 = unlimited)
-input double          InpMaxDailyLossPct  = 5.0;    // Stop for the day after this loss % (0 = off)
+input int             InpMaxTradesPerDay  = 0;      // Max entries per day (0 = unlimited)
+input double          InpMaxDailyLossPct  = 0.0;    // Stop for the day after this loss % (0 = off)
 input bool            InpAllowLongs       = true;   // Allow long trades
 input bool            InpAllowShorts      = true;   // Allow short trades
 
@@ -541,8 +542,29 @@ bool WithinSession()
    return (dt.hour >= InpStartHour || dt.hour < InpEndHour);   // window crosses midnight
 }
 
+// Retcode 10018 (market closed) fires when a bar closes outside the symbol's
+// trading session - common on Gold's daily break. Check the session table
+// rather than sending an order that is certain to be rejected.
+bool MarketOpen()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeTradeServer(), dt);
+   ENUM_DAY_OF_WEEK day = (ENUM_DAY_OF_WEEK)dt.day_of_week;
+   long secNow = (long)dt.hour * 3600 + (long)dt.min * 60 + (long)dt.sec;
+
+   datetime from = 0, to = 0;
+   bool anySession = false;
+   for(uint i = 0; SymbolInfoSessionTrade(_Symbol, day, i, from, to); i++)
+   {
+      anySession = true;
+      if(secNow >= (long)from && secNow < (long)to) return true;
+   }
+   return !anySession;   // no session table published - let the broker decide
+}
+
 bool TradingAllowed()
 {
+   if(!MarketOpen()) return false;
    if(!MQLInfoInteger(MQL_TESTER) && !TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) return false;
    if(!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) || !AccountInfoInteger(ACCOUNT_TRADE_EXPERT)) return false;
    if(SymbolInfoInteger(_Symbol, SYMBOL_TRADE_MODE) != SYMBOL_TRADE_MODE_FULL) return false;
@@ -771,7 +793,10 @@ void TryEntry()
    double entry = (direction > 0) ? ask : bid;
 
    double stopDistance = (direction > 0) ? (entry - stopLoss) : (stopLoss - entry);
-   double minDistance  = StopsDistance();
+   // The broker floor alone can leave a stop only a few cents wide, which is
+   // inside the noise and gets hit within the entry bar. Hold it to a
+   // fraction of recent range as well.
+   double minDistance  = MathMax(StopsDistance(), g_avgRange * InpMinStopRangeFactor);
    if(stopDistance <= minDistance)
    {
       stopDistance = minDistance + PointSize();
@@ -1034,15 +1059,35 @@ void ReportAccountViability()
       Print("WARNING: balance ", DoubleToString(balance, 2), " is below 2x the margin of one minimum lot (",
             DoubleToString(margin, 2), "). A single position can trigger a stop out.");
 
+   // A structure stop runs roughly one average candle range plus the buffer,
+   // so size the estimate off live range instead of a hard-coded number.
+   double typicalStop = (g_avgRange > 0.0) ? g_avgRange * (1.0 + InpSLBufferFactor) : 0.0;
+   if(typicalStop <= 0.0) return;
+
+   double costPerTrade = perUnit * typicalStop;
+   Print("Typical ", EnumToString(InpTimeframe), " stop is ", DoubleToString(typicalStop, _Digits),
+         " wide = ", DoubleToString(costPerTrade, 2), " ", AccountInfoString(ACCOUNT_CURRENCY),
+         " at the minimum lot.");
+
    if(!InpUseFixedLot && InpRiskPercent > 0.0)
+      Print("Balance that makes that stop cost ", DoubleToString(InpRiskPercent, 2), "%: ",
+            DoubleToString(costPerTrade / (InpRiskPercent / PCT), 2), " ",
+            AccountInfoString(ACCOUNT_CURRENCY), ".");
+
+   if(balance > 0.0)
    {
-      // A typical Gold stop on this timeframe is a few price units wide; report
-      // the balance that would make a 5.00 stop cost exactly InpRiskPercent.
-      double needed = perUnit * 5.0 / (InpRiskPercent / PCT);
-      Print("At ", DoubleToString(InpRiskPercent, 2), "% risk, a 5.00 wide stop needs a balance of ",
-            DoubleToString(needed, 2), " ", AccountInfoString(ACCOUNT_CURRENCY),
-            ". Below that the minimum lot over-risks and trades are skipped (cap ",
-            DoubleToString(InpMaxRiskPercentCap, 1), "%).");
+      double realRisk = costPerTrade / balance * PCT;
+      if(realRisk > InpRiskPercent * 2.0)
+      {
+         Print("WARNING: on a balance of ", DoubleToString(balance, 2),
+               " the minimum lot puts ", DoubleToString(realRisk, 1),
+               "% at risk per trade, not the ", DoubleToString(InpRiskPercent, 2), "% requested.");
+         if(InpMaxRiskPercentCap <= 0.0)
+            Print("WARNING: InpMaxRiskPercentCap is 0 (off), so every signal will be taken at that risk. ",
+                  "At ", DoubleToString(realRisk, 1), "% per trade, ",
+                  (int)MathCeil(PCT / MathMax(realRisk, 0.01)),
+                  " consecutive losses empty the account. Set the cap above 0 to refuse these trades.");
+      }
    }
 }
 
@@ -1082,8 +1127,6 @@ int OnInit()
    if(StringFind(symbol, "XAU") < 0 && StringFind(symbol, "GOLD") < 0)
       Print("Warning: this EA is tuned for Gold; current symbol is ", _Symbol, ".");
 
-   ReportAccountViability();
-
    ResetDayIfNeeded();
    PruneState();
 
@@ -1091,6 +1134,8 @@ int OnInit()
       Print("Waiting for enough history on ", _Symbol, " ", EnumToString(InpTimeframe), ".");
    else
       UpdateStructure();
+
+   ReportAccountViability();   // after RefreshRates, so the range estimate is real
 
    g_lastBarTime = (datetime)SeriesInfoInteger(_Symbol, InpTimeframe, SERIES_LASTBAR_DATE);
    return INIT_SUCCEEDED;
