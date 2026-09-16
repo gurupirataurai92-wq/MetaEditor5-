@@ -1,0 +1,68 @@
+:root {
+  --bg: #0b0d12;
+  --panel: #151922;
+  --border: #262c3a;
+  --text: #e7ebf3;
+  --muted: #9aa4b8;
+  --accent: #ffd84d;
+  --accent-2: #7c5cff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: radial-gradient(1200px 600px at 50% -10%, #1a1f2e, var(--bg));
+  color: var(--text);
+  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  min-height: 100vh;
+}
+
+.wrap { max-width: 720px; margin: 0 auto; padding: 48px 20px 80px; }
+
+h1 { font-size: 28px; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 0 0 28px; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+}
+
+label { display: block; font-size: 13px; color: var(--muted); margin: 14px 0 6px; }
+
+input, textarea, select {
+  width: 100%;
+  background: #0e121a;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  padding: 11px 12px;
+  font: inherit;
+}
+textarea { min-height: 84px; resize: vertical; }
+
+button {
+  margin-top: 20px;
+  width: 100%;
+  background: linear-gradient(90deg, var(--accent), #ffb800);
+  color: #1a1400;
+  border: 0;
+  border-radius: 10px;
+  padding: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.job { margin-top: 24px; }
+.bar { height: 8px; background: #0e121a; border-radius: 999px; overflow: hidden; border: 1px solid var(--border); }
+.bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--accent-2), var(--accent)); transition: width .3s ease; }
+.status { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+
+.scene { border-left: 2px solid var(--accent-2); padding: 4px 0 4px 12px; margin: 12px 0; }
+.scene .t { color: var(--muted); font-size: 12px; }
+.err { color: #ff6b6b; margin-top: 12px; }
+.out { margin-top: 16px; font-size: 13px; color: var(--muted); word-break: break-all; }
+code { background: #0e121a; padding: 2px 6px; border-radius: 6px; }

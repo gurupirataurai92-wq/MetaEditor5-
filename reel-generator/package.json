@@ -1,0 +1,17 @@
+{
+  "name": "reel-generator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Faceless AI reel generator platform (monorepo skeleton)",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev:web": "pnpm --filter @reel/web dev",
+    "dev:worker": "pnpm --filter @reel/worker dev",
+    "poc": "pnpm --filter @reel/core poc",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=20"
+  }
+}
